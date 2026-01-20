@@ -9,6 +9,8 @@ import { findUnusedDependencies } from '../src/analyzer/dependencyAnalyzer.js';
 import { findDeadCode } from '../src/analyzer/deadCodeAnalyzer.js';
 import { removeDeadCode } from '../src/eliminator/codeCleaner.js';
 import { removeUnusedDependencies } from '../src/eliminator/dependencyCleaner.js';
+import { buildProjectGraph } from '../src/analyzer/projectGraph.js';
+import { generateDiff } from '../src/eliminator/diffGenerator.js';
 
 program
     .name('deadkiller')
@@ -27,31 +29,51 @@ program
             process.exit(1);
         }
 
-        console.log(`\n🔍 Scanning project at: ${absolutePath}\n`);
+        console.log(`\n🔍 Scanning project at: ${absolutePath}`);
+        console.log('   (Using Graph Reachability Analysis)\n');
 
-        // 1. Dependency Analysis
+        // A & B: Build Graph
+        let graph;
         try {
-            const unusedDeps = await findUnusedDependencies(absolutePath);
-            if (unusedDeps.length > 0) {
-                console.log('📦 [Unused Dependencies]:');
-                unusedDeps.forEach(d => console.log(`   - ${d}`));
-            } else {
-                console.log('📦 [Dependencies]: Clean');
-            }
+            graph = await buildProjectGraph(absolutePath);
         } catch (err) {
-            console.error('   Error scanning dependencies:', err.message);
+            console.error('❌ Graph Build Failed:', err.message);
+            process.exit(1);
         }
 
-        // 2. Dead Code Analysis
-        console.log('\n💻 [Dead Code Scanning]:');
-        const files = await glob(['**/*.{js,mjs,cjs}'], {
+        // Logic D: Unused Dependencies (Compare graph.usedPackages vs package.json)
+        const pkgPath = path.join(absolutePath, 'package.json');
+        const pkg = await fs.readJson(pkgPath);
+        const allDeps = new Set(Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }));
+        const unusedDeps = [...allDeps].filter(d => !graph.usedPackages.has(d));
+
+        if (unusedDeps.length > 0) {
+            console.log('📦 [Unused Dependencies]:');
+            unusedDeps.forEach(d => console.log(`   - ${d}`));
+        } else {
+            console.log('📦 [Dependencies]: Clean');
+        }
+
+        // Logic B (Dead Files): Files on disk but NOT in graph.liveFiles
+        const allFiles = await glob(['**/*.{js,mjs,cjs}'], {
             cwd: absolutePath,
             ignore: ['node_modules/**', 'dist/**', 'test/**', 'tests/**', 'coverage/**'],
             absolute: true
         });
+        
+        const deadFiles = allFiles.filter(f => !graph.liveFiles.has(f));
+        let totalIssues = 0;
 
-        let totalDead = 0;
-        for (const file of files) {
+        if (deadFiles.length > 0) {
+            console.log('\n📄 [Unreachable / Dead Files]:');
+            deadFiles.forEach(f => console.log(`   - ${path.relative(absolutePath, f)}`));
+            totalIssues += deadFiles.length;
+        }
+
+        // Logic C: Dead Code in LIVE files only
+        console.log('\n💻 [Dead Code Scanning (Live Files Only)]:');
+        
+        for (const file of graph.liveFiles) {
             try {
                 const code = await fs.readFile(file, 'utf-8');
                 const ast = parseCode(code);
@@ -62,17 +84,15 @@ program
                     deadNodes.forEach(item => {
                         console.log(`      Line ${item.line}: ${item.type} '${item.name}'`);
                     });
-                    totalDead += deadNodes.length;
+                    totalIssues += deadNodes.length;
                 }
             } catch (err) {
-                // Ignore parse errors for now
+                // Ignore parse errors
             }
         }
 
-        if (totalDead === 0) {
+        if (totalIssues === 0 && deadFiles.length === 0) {
             console.log('   ✅ No dead code found.');
-        } else {
-            console.log(`\n   Found ${totalDead} dead code issues.`);
         }
     });
 
@@ -88,119 +108,113 @@ program
             process.exit(1);
         }
 
-        console.log(`\n🔍 Analyzing project at: ${absolutePath} ...\n`);
-
-        // 1. Analyze Dependencies
-        let unusedDeps = [];
+        console.log(`\n🔍 Analyzing project at: ${absolutePath}`);
+        
+        // Build Graph
+        let graph;
         try {
-            unusedDeps = await findUnusedDependencies(absolutePath);
+            graph = await buildProjectGraph(absolutePath);
         } catch (err) {
-            console.error('   Error scanning dependencies:', err.message);
+            console.error('❌ Graph Build Failed:', err.message);
+            process.exit(1);
         }
 
-        // 2. Analyze Dead Code
-        const files = await glob(['**/*.{js,mjs,cjs}'], {
+        // 1. Dependencies
+        const pkgPath = path.join(absolutePath, 'package.json');
+        const pkg = await fs.readJson(pkgPath);
+        const allDeps = new Set(Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }));
+        const unusedDeps = [...allDeps].filter(d => !graph.usedPackages.has(d));
+
+        // 2. Dead Files
+        const allFiles = await glob(['**/*.{js,mjs,cjs}'], {
             cwd: absolutePath,
             ignore: ['node_modules/**', 'dist/**', 'test/**', 'tests/**', 'coverage/**'],
             absolute: true
         });
+        const deadFiles = allFiles.filter(f => !graph.liveFiles.has(f));
 
-        const deadCodeReport = []; // { file, deadNodes: [] }
-        for (const file of files) {
+        // 3. Dead Code (Live Files) - PREPARE & DIFF
+        const deadCodeReport = [];
+        const diffs = [];
+
+        for (const file of graph.liveFiles) {
             try {
                 const code = await fs.readFile(file, 'utf-8');
                 const ast = parseCode(code);
                 const deadNodes = findDeadCode(ast);
-
                 if (deadNodes.length > 0) {
-                    deadCodeReport.push({ file, deadNodes, ast });
+                    // DRY RUN: Generate New Code in Memory
+                    const newCode = removeDeadCode(ast, deadNodes);
+                    
+                    // Generate Diff
+                    const diffOutput = generateDiff(code, newCode, path.relative(absolutePath, file));
+                    diffs.push(diffOutput);
+
+                    deadCodeReport.push({ file, deadNodes, ast, newCode });
                 }
-            } catch (err) {
-                // Ignore parse errors
-            }
+            } catch (err) {}
         }
 
-        // --- REPORTING PHASE ---
-        let hasIssues = false;
+        // --- REPORT ---
+        if (unusedDeps.length === 0 && deadFiles.length === 0 && deadCodeReport.length === 0) {
+            console.log('✅ Project is clean.');
+            return;
+        }
 
         if (unusedDeps.length > 0) {
-            hasIssues = true;
-            console.log('📦 [Unused Dependencies to be REMOVED]:');
+            console.log('\n📦 [Unused Dependencies to be REMOVED]:');
             unusedDeps.forEach(d => console.log(`   - ${d}`));
         }
+        if (deadFiles.length > 0) {
+            console.log('\n🗑️  [Dead Files to be DELETED]:');
+            deadFiles.forEach(f => console.log(`   - ${path.relative(absolutePath, f)}`));
+        }
 
-        let totalDead = 0;
-        if (deadCodeReport.length > 0) {
-            hasIssues = true;
-            console.log('\n💻 [Dead Code to be REMOVED]:');
-            deadCodeReport.forEach(report => {
-                totalDead += report.deadNodes.length;
-                console.log(`   📄 ${path.relative(absolutePath, report.file)}`);
-                report.deadNodes.forEach(item => {
-                    console.log(`      Line ${item.line}: ${item.type} '${item.name}'`);
-                });
+        if (diffs.length > 0) {
+            console.log('\n📝 [Code Changes Preview]:');
+            console.log('==================================================');
+            diffs.forEach(diff => {
+                console.log(diff);
+                console.log('--------------------------------------------------');
             });
         }
 
-        if (!hasIssues) {
-            console.log('✅ Project is clean. No changes needed.');
-            return;
-        }
-
-        console.log(`\n⚠️  SUMMARY: ${unusedDeps.length} dependencies and ${totalDead} code segments will be PERMANENTLY deleted.`);
-
-        // --- INTERACTIVE CONFIRMATION ---
-        
-        // Dynamically import inquirer (ESM)
+        // --- CONFIRM ---
         const inquirer = (await import('inquirer')).default;
-
-        const { confirm } = await inquirer.prompt([
-            {
-                type: 'confirm',
-                name: 'confirm',
-                message: 'Are you sure you want to proceed with the deletion? (This cannot be undone)',
-                default: false
-            }
-        ]);
+        const { confirm } = await inquirer.prompt([{
+            type: 'confirm',
+            name: 'confirm',
+            message: 'Are you sure you want to apply these changes?',
+            default: false
+        }]);
 
         if (!confirm) {
-            console.log('❌ Operation cancelled by user.');
+            console.log('❌ Cancelled.');
             return;
         }
 
-        console.log('\n🚀 Proceeding with fixes...\n');
+        console.log('\n🚀 Applying fixes...');
 
-        // --- EXECUTION PHASE ---
-
-        // 1. Fix Dependencies
+        // EXECUTE
+        // 1. Remove Deps
         if (unusedDeps.length > 0) {
-            try {
-                process.stdout.write('   Cleaning dependencies... ');
-                await removeUnusedDependencies(absolutePath, unusedDeps);
-                console.log('Done.');
-            } catch (err) {
-                console.error('\n   Error fixing dependencies:', err.message);
-            }
+            await removeUnusedDependencies(absolutePath, unusedDeps);
+            console.log('   ✅ Dependencies cleaned.');
         }
 
-        // 2. Fix Dead Code
-        if (deadCodeReport.length > 0) {
-            process.stdout.write('   Cleaning dead code... ');
-            for (const report of deadCodeReport) {
-                try {
-                    // Re-clean using the stored AST to ensure consistency, 
-                    // though ideally we should re-read to be safe, but locking state is fine for CLI tool flow
-                    // We need to use 'report.deadNodes' which we found earlier.
-                    const cleanedCode = removeDeadCode(report.ast, report.deadNodes);
-                    await fs.writeFile(report.file, cleanedCode);
-                } catch (err) {
-                    console.warn(`\n   ⚠️  Failed to write ${path.relative(absolutePath, report.file)}: ${err.message}`);
-                }
-            }
-            console.log('Done.');
+        // 2. Remove Dead Files
+        for (const f of deadFiles) {
+            await fs.remove(f);
+            console.log(`   ✅ Deleted file: ${path.relative(absolutePath, f)}`);
         }
 
-        console.log(`\n✨ Cleanup Complete.`);
+        // 3. Clean Dead Code (Write from memory to disk)
+        for (const report of deadCodeReport) {
+            await fs.writeFile(report.file, report.newCode); // Use the code we already generated
+            console.log(`   ✅ Cleaned code: ${path.relative(absolutePath, report.file)}`);
+        }
+
+        console.log('✨ Done.');
     });
 
 program.parse();

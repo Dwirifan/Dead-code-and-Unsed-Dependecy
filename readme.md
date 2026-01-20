@@ -2,120 +2,111 @@
 
 ## 📄 Abstrak
 
-Proyek Tugas Akhir ini bertujuan untuk mengembangkan alat bantu (tool) berbasis _Command Line Interface_ (CLI) yang mampu melakukan _static analysis_ pada kode sumber JavaScript. Alat ini secara otomatis mendeteksi dan menghapus variabel atau fungsi yang tidak digunakan (_dead code_), serta membersihkan dependensi yang tidak terpakai dalam `package.json`, guna meningkatkan efisiensi dan kebersihan kode.
+Proyek Tugas Akhir ini mengembangkan alat bantu (tool) berbasis _Command Line Interface_ (CLI) untuk melakukan _static analysis_ mendalam pada kode sumber JavaScript. Alat ini menggunakan pendekatan **Graph-Based Reachability Analysis** untuk memetakan struktur proyek secara akurat, mendeteksi file yang tidak terjangkau (_unreachable files_), variabel mati (_dead code_), serta dependensi yang tidak terpakai (_unused dependencies_). Dilengkapi dengan fitur **Diff View** untuk memvisualisasikan perubahan sebelum dieksekusi demi keamanan kode.
 
 ## 🚀 Fitur Utama
 
-- **Unused Dependency Detection**: Menganalisis `package.json` dan memindai seluruh file proyek untuk menemukan library yang diinstal tetapi tidak pernah di-import.
-- **Dead Code Elimination**: Menggunakan **Abstract Syntax Tree (AST)** untuk mendeteksi variabel dan fungsi yang dideklarasikan namun tidak memiliki referensi (usage) di dalam scope-nya.
-- **Safe Logic**: Melindungi kode publik (`module.exports`, `export`) agar tidak terhapus.
-- **Interactive Safety**: Konfirmasi interaktif sebelum melakukan penghapusan fisik untuk mencegah kesalahan.
+- **Deep Graph Analysis**: Membangun graf ketergantungan dari _entry point_ (misal `index.js`) untuk membedakan antara file yang _live_ dan file sampah (_dead files_).
+- **Unused Dependency Detection**: Mendeteksi library di `package.json` yang tidak pernah dipanggil di file manapun dalam graf proyek.
+- **Intra-procedural Dead Code Elimination**: Mendeteksi deklarasi variabel/fungsi yang tidak digunakan di dalam file yang aktif (Scope-Aware Analysis).
+- **Interactive Diff Preview**: Menampilkan perbandingan kode **Before vs After** (seperti Github Diff) di terminal sebelum melakukan penghapusan.
+- **Auto-Detection Entry Point**: Otomatis mendeteksi file utama proyek dari `package.json` atau standar umum.
+- **Safe Mode**: Public API (`export`) dilindungi, dan konfirmasi interaktif diwajibkan sebelum perubahan fisik.
 
 ## 🛠️ Teknologi yang Digunakan
 
-- **Runtime**: Node.js
-- **Parser**: `acorn` (Konversi kode ke AST)
-- **Traverser**: `estraverse` (Penelusuran node AST)
-- **Generator**: `escodegen` (Konversi balik AST ke kode)
-- **CLI Framework**: `commander`
-- **Interaction**: `inquirer`
+- **Node.js**: Runtime environment.
+- **Acorn & Estraverse**: Parser AST dan penelusuran kode.
+- **Escodegen**: Code generator untuk menyusun ulang AST.
+- **Commander**: Framework CLI.
+- **Fast-Glob**: Scanning file sistem.
+- **Diff & Chalk**: Visualisasi perbedaan kode berwarna.
+- **Inquirer**: Interaksi antarmuka pengguna CLI.
 
-## 📦 Instalasi & Persiapan
+## 📦 Instalasi
 
-1.  Clone repositori ini atau copy ke direktori lokal.
-2.  Install dependensi proyek:
+1.  Clone repositori ini.
+2.  Install dependensi:
     ```bash
     npm install
     ```
-3.  Link command `dce-cli` (opsional) atau jalankan langsung via Node.js.
 
-## 📖 Panduan Penggunaan
+## 📖 Cara Penggunaan
 
-Tool ini memiliki dua mode utama: **Scan** dan **Fix**.
+### 1. Mode Scan (Analisis & Laporan)
 
-### 1. Mode Scan (Laporan)
-
-Hanya menampilkan laporan _dead code_ dan _unused dependency_ tanpa mengubah file apapun.
+Menampilkan laporan lengkap kesehatan kode tanpa mengubah apapun.
 
 ```bash
 node bin/dce-cli.js scan <path_project>
 ```
 
-**Contoh:**
+**Output mencakup:**
 
-```bash
-node bin/dce-cli.js scan .
-```
+- Daftar Dependensi Tidak Terpakai.
+- Daftar File Mati (Tidak Pernah Di-import).
+- Daftar Kode Mati (Variabel/Fungsi Unused) di dalam file aktif.
 
-### 2. Mode Fix (Pembersihan)
+### 2. Mode Fix (Pembersihan Cerdas)
 
-Melakukan scanning, menampilkan laporan, dan meminta konfirmasi pengguna untuk menghapus kode sampah.
+Melakukan analisis, menampilkan preview perubahan, dan mengeksekusi pembersihan.
 
 ```bash
 node bin/dce-cli.js fix <path_project>
 ```
 
-**Contoh Output Interaksi:**
+**Alur Interaksi:**
 
-```text
-🔍 Analyzing project at: ...
+1.  **Analisis**: Tool memindai proyek.
+2.  **Laporan**: Menampilkan ringkasan isu.
+3.  **Diff Preview**: Menampilkan kode asli vs kode baru (berwarna merah/hijau).
+4.  **Konfirmasi**: `Are you sure you want to apply these changes? (y/N)`.
 
-📦 [Unused Dependencies to be REMOVED]:
-   - unused-lib
+## 🧠 Logika Internal (Algoritma)
 
-💻 [Dead Code to be REMOVED]:
-   📄 src/utils.js
-      Line 45: Function 'deprecatedHelper'
+1.  **Fase 1: Graph Construction**
+    - Mencari _Entry Point_ (misal `index.js`).
+    - Menelusuri semua `import` / `require` secara rekursif (Breadth-First Search).
+    - Menghasilkan daftar **Live Files**. File di folder proyek yang tidak masuk daftar ini dianggap **Dead Files**.
 
-⚠️  SUMMARY: 1 dependencies and 1 code segments will be PERMANENTLY deleted.
-? Are you sure you want to proceed with the deletion? (This cannot be undone) (y/N)
-```
+2.  **Fase 2: Dependency Check**
+    - Mencatat semua paket eksternal yang di-import dalam Graph.
+    - Membandingkan dengan `package.json`. Sisa yang tidak ada di Graph adalah **Unused Dependencies**.
 
-## 🧪 Hasil Pengujian (Self-Scan)
+3.  **Fase 3: Local Dead Code Analysis**
+    - Hanya memindai **Live Files**.
+    - Membangun **Scope Tree** (Global -> Function -> Block).
+    - Menandai deklarasi yang _Reference Count_-nya 0 sebagai **Dead Code**.
 
-Pengujian dilakukan dengan menjalankan tool ini terhadap _source code_ dirinya sendiri (Self-Testing).
-
-### Skenario Uji
-
-1.  **Input**:
-    - File `index.js` dimodifikasi dengan menambahkan variabel `unusedVar` dan fungsi `deadFunc` yang tidak dipanggil.
-    - `package.json` memiliki dependensi namun semua digunakan.
-
-2.  **Proses**:
-    - Jalankan: `node bin/dce-cli.js scan .`
-
-3.  **Hasil Analisis**:
-
-    ```text
-    🔍 Scanning project at: D:\materi kuliah\Tugas Akhir
-
-    📦 [Dependencies]: Clean
-
-    💻 [Dead Code Scanning]:
-       📄 index.js
-          Line 4: Variable 'unusedVar'
-          Line 12: Function 'deadFunc'
-          Line 13: Variable 'innerUnused'
-    ```
-
-4.  **Kesimpulan**:
-    - Algoritma berhasil membedakan antara kode yang dipakai (`useful()`, `publicApi`) dan yang mati.
-    - Scope analysis berjalan dengan benar (mengetahui `innerUnused` ada di dalam fungsi mati).
+4.  **Fase 4: Diff & Execution**
+    - Simulasi penghapusan di memori.
+    - Generate _Unified Diff_ string.
+    - Tulis ke disk hanya jika dikonfirmasi user.
 
 ## 📂 Struktur Direktori
 
 ```
 .
 ├── bin/
-│   └── dce-cli.js          # Entry point aplikasi CLI
+│   └── dce-cli.js           # Main CLI Logic (Graph + Diff Integration)
 ├── src/
 │   ├── analyzer/
-│   │   ├── deadCodeAnalyzer.js    # Logika deteksi dead code (AST & Scope)
-│   │   └── dependencyAnalyzer.js  # Logika deteksi dependensi
+│   │   ├── projectGraph.js        # Logika Reachability Graph
+│   │   ├── deadCodeAnalyzer.js    # Logika Scope & AST Analysis
+│   │   └── dependencyAnalyzer.js  # Helper Dependency Check
 │   ├── eliminator/
-│   │   ├── codeCleaner.js         # Logika regenerasi kode (Escodegen)
-│   │   └── dependencyCleaner.js   # Logika hapus dari package.json
+│   │   ├── diffGenerator.js       # Logika Visualisasi Diff
+│   │   ├── codeCleaner.js         # Regenerasi Kode (Escodegen)
+│   │   └── dependencyCleaner.js   # Update package.json
 │   └── parser/
-│       └── astParser.js           # Wrapper konfigurasi Acorn
-└── index.js                # File dummy untuk pengujian manual
+│       └── astParser.js           # Konfigurasi Parser
+└── index.js                 # Dummy file untuk pengujian
 ```
+
+## 🧪 Hasil Pengujian (Validasi)
+
+Tool ini telah diuji pada dirinya sendiri (_Self-Analysis_) dan berhasil:
+
+1.  Mendeteksi file-file sisa pengembangan yang tidak terhubung ke `dce-cli.js`.
+2.  Mendeteksi dependensi dev yang tidak terpakai (jika ada).
+3.  Mendeteksi variabel dummy seperti `unusedVar` dengan tepat tanpa merusak kode di sekitarnya.
