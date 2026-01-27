@@ -6,11 +6,12 @@ import fs from 'fs-extra';
 import glob from 'fast-glob';
 import { parseCode } from '../src/parser/astParser.js';
 import { findUnusedDependencies } from '../src/analyzer/dependencyAnalyzer.js';
-import { findDeadCode } from '../src/analyzer/deadCodeAnalyzer.js';
+import { findDeadCode } from '../src/analyzer/deadcode/deadCodeAnalyzer.js';
 import { removeDeadCode } from '../src/eliminator/codeCleaner.js';
 import { removeUnusedDependencies } from '../src/eliminator/dependencyCleaner.js';
 import { buildProjectGraph } from '../src/analyzer/projectGraph.js';
 import { generateDiff } from '../src/eliminator/diffGenerator.js';
+import { generateMermaidGraph } from '../src/analyzer/graphVisualizer.js';
 
 program
     .name('deadkiller')
@@ -215,6 +216,35 @@ program
         }
 
         console.log('✨ Done.');
+    });
+
+// Command: VISUALIZE
+program
+    .command('visualize')
+    .argument('<path>', 'Path to project directory')
+    .description('Generate a Mermaid graph of the project structure')
+    .action(async (targetPath) => {
+        const absolutePath = path.resolve(targetPath);
+        if (!fs.existsSync(absolutePath)) {
+            console.error(`❌ Error: Path '${absolutePath}' not found.`);
+            process.exit(1);
+        }
+
+        console.log(`\n🔍 Analyzing project at: ${absolutePath}`);
+
+        try {
+            const graph = await buildProjectGraph(absolutePath);
+            const mermaidContent = generateMermaidGraph(graph, absolutePath);
+            
+            const outputPath = path.join(absolutePath, 'project-graph.mmd');
+            await fs.writeFile(outputPath, mermaidContent);
+            
+            console.log(`\n✨ Graph generated: ${outputPath}`);
+            console.log('   (Preview this file using Mermaid Live Editor or VSCode extensions)');
+        } catch (err) {
+            console.error('❌ Visualization Failed:', err.message);
+            process.exit(1);
+        }
     });
 
 program.parse();

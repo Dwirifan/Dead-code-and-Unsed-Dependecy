@@ -1,0 +1,27 @@
+graph TD
+    N0["📄 bin/dce-cli.js"]
+    N1["📄 index.js"]
+    N2["📄 src/analyzer/deadcode/deadCodeAnalyzer.js"]
+    N3["📄 src/analyzer/deadcode/scope.js"]
+    N4["📄 src/analyzer/deadcode/utils.js"]
+    N5["📄 src/analyzer/dependencyAnalyzer.js"]
+    N6["📄 src/analyzer/graphVisualizer.js"]
+    N7["📄 src/analyzer/projectGraph.js"]
+    N8["📄 src/eliminator/codeCleaner.js"]
+    N9["📄 src/eliminator/dependencyCleaner.js"]
+    N10["📄 src/eliminator/diffGenerator.js"]
+    N11["📄 src/parser/astParser.js"]
+    N1 --> N11
+    N1 --> N8
+    N0 --> N11
+    N0 --> N5
+    N0 --> N2
+    N0 --> N8
+    N0 --> N9
+    N0 --> N7
+    N0 --> N10
+    N0 --> N6
+    N5 --> N11
+    N2 --> N3
+    N2 --> N4
+    N7 --> N11

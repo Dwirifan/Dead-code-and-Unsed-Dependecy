@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "main": "index.js",
+  "bin": {
+    "deadkiller": "./bin/dce-cli.js"
+  },
   "directories": {
     "test": "test"
   },

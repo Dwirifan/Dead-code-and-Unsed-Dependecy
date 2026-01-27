@@ -80,6 +80,7 @@ export async function buildProjectGraph(projectRoot) {
     const liveFiles = new Set();
     const visitedFiles = new Set();
     const usedPackages = new Set();
+    const edges = []; // { from, to }
     const queue = [...entryFiles];
 
     // Mark entries as live potentially (need verify existence)
@@ -160,18 +161,22 @@ export async function buildProjectGraph(projectRoot) {
             // Process local imports
             for (const imp of importsToResolve) {
                 const absolute = await resolvePath(fileDir, imp);
-                if (absolute && !visitedFiles.has(absolute)) {
-                    visitedFiles.add(absolute);
-                    liveFiles.add(absolute);
-                    validQueue.push(absolute);
+                if (absolute) {
+                    // Record Edge: currentFile -> absolute
+                    edges.push({ from: currentFile, to: absolute });
+
+                    if (!visitedFiles.has(absolute)) {
+                        visitedFiles.add(absolute);
+                        liveFiles.add(absolute);
+                        validQueue.push(absolute);
+                    }
                 }
             }
 
         } catch (err) {
-            // Ignore parse errors on individual files (might be minified or flow/ts)
-            // console.warn(`Failed to parse ${currentFile}: ${err.message}`);
+            // Ignore parse errors
         }
     }
 
-    return { liveFiles, usedPackages };
+    return { liveFiles, usedPackages, edges };
 }

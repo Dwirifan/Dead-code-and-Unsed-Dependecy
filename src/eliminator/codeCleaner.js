@@ -21,6 +21,9 @@ export function removeDeadCode(ast, deadNodes) {
     const cleanedAST = estraverse.replace(ast, {
         enter: function (node, parent) {
             // Check if this node is marked for removal
+            if (nodesToRemove.has(node)) {
+                return estraverse.VisitorOption.Remove;
+            }
             
             // 1. Variable Declarations
             // If the node is a VariableDeclarator and it's in our remove list
