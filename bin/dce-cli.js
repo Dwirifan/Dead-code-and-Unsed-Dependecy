@@ -5,13 +5,15 @@ import path from 'path';
 import fs from 'fs-extra';
 import glob from 'fast-glob';
 import { parseCode } from '../src/parser/astParser.js';
-import { findUnusedDependencies } from '../src/analyzer/dependencyAnalyzer.js';
+import { findUnusedDependencies } from '../src/analyzer/dependency/dependencyAnalyzer.js';
 import { findDeadCode } from '../src/analyzer/deadcode/deadCodeAnalyzer.js';
 import { removeDeadCode } from '../src/eliminator/codeCleaner.js';
 import { removeUnusedDependencies } from '../src/eliminator/dependencyCleaner.js';
 import { buildProjectGraph } from '../src/analyzer/projectGraph.js';
 import { generateDiff } from '../src/eliminator/diffGenerator.js';
 import { generateMermaidGraph } from '../src/analyzer/graphVisualizer.js';
+import chalk from 'chalk';
+import { performance } from 'perf_hooks';
 
 program
     .name('deadkiller')
@@ -30,6 +32,35 @@ program
             process.exit(1);
         }
 
+        const startTime = performance.now();
+        const stats = await fs.stat(absolutePath);
+
+        // --- SINGLE FILE MODE ---
+        if (stats.isFile()) {
+            console.log(`\n🔍 Scanning single file: ${path.basename(absolutePath)}`);
+            try {
+                const code = await fs.readFile(absolutePath, 'utf-8');
+                const ast = parseCode(code);
+                const deadNodes = findDeadCode(ast);
+
+                if (deadNodes.length > 0) {
+                    console.log(`\n💻 [Dead Code Report]:`);
+                    console.log(`   📄 ${path.relative(process.cwd(), absolutePath)}`);
+                    deadNodes.forEach(item => {
+                        console.log(`      Line ${item.line}: ${item.type} '${item.name}'`);
+                    });
+                    console.log(`\n❌ Found ${deadNodes.length} issues.`);
+                } else {
+                    console.log('\n✅ No dead code found in this file.');
+                }
+            } catch (err) {
+                console.error('❌ Analysis Failed:', err.message);
+                process.exit(1);
+            }
+            return;
+        }
+
+        // --- DIRECTORY MODE (Project Scan) ---
         console.log(`\n🔍 Scanning project at: ${absolutePath}`);
         console.log('   (Using Graph Reachability Analysis)\n');
 
@@ -78,7 +109,7 @@ program
             try {
                 const code = await fs.readFile(file, 'utf-8');
                 const ast = parseCode(code);
-                const deadNodes = findDeadCode(ast);
+                const deadNodes = findDeadCode(ast, file, graph.globalRegistry);
 
                 if (deadNodes.length > 0) {
                     console.log(`   📄 ${path.relative(absolutePath, file)}`);
@@ -95,6 +126,9 @@ program
         if (totalIssues === 0 && deadFiles.length === 0) {
             console.log('   ✅ No dead code found.');
         }
+
+        const endTime = performance.now();
+        console.log(`\n⏱️  Analysis Time: ${(endTime - startTime).toFixed(2)} ms`);
     });
 
 // Command: FIX
@@ -110,6 +144,7 @@ program
         }
 
         console.log(`\n🔍 Analyzing project at: ${absolutePath}`);
+        const startTime = performance.now();
         
         // Build Graph
         let graph;
@@ -137,35 +172,64 @@ program
         // 3. Dead Code (Live Files) - PREPARE & DIFF
         const deadCodeReport = [];
         const diffs = [];
+        let originalLoc = 0;
+        let originalSize = 0;
+        let newLoc = 0;
+        let newSize = 0;
+
+        for (const file of deadFiles) {
+             const code = await fs.readFile(file, 'utf-8');
+             originalLoc += code.split('\n').length;
+             originalSize += Buffer.byteLength(code);
+        }
 
         for (const file of graph.liveFiles) {
             try {
                 const code = await fs.readFile(file, 'utf-8');
+                originalLoc += code.split('\n').length;
+                originalSize += Buffer.byteLength(code);
+
                 const ast = parseCode(code);
-                const deadNodes = findDeadCode(ast);
+                const deadNodes = findDeadCode(ast, file, graph.globalRegistry);
                 if (deadNodes.length > 0) {
                     // DRY RUN: Generate New Code in Memory
                     const newCode = removeDeadCode(ast, deadNodes);
                     
+                    newLoc += newCode.split('\n').length;
+                    newSize += Buffer.byteLength(newCode);
+
                     // Generate Diff
                     const diffOutput = generateDiff(code, newCode, path.relative(absolutePath, file));
-                    diffs.push(diffOutput);
+                    diffs.push({ diffOutput, file });
 
                     deadCodeReport.push({ file, deadNodes, ast, newCode });
+                } else {
+                    newLoc += code.split('\n').length;
+                    newSize += Buffer.byteLength(code);
                 }
             } catch (err) {}
         }
 
-        // --- REPORT ---
+        // --- REPORT & SELECTION ---
         if (unusedDeps.length === 0 && deadFiles.length === 0 && deadCodeReport.length === 0) {
             console.log('✅ Project is clean.');
             return;
         }
 
+        const inquirer = (await import('inquirer')).default;
+        let selectedDepsToRemove = [];
+
         if (unusedDeps.length > 0) {
-            console.log('\n📦 [Unused Dependencies to be REMOVED]:');
-            unusedDeps.forEach(d => console.log(`   - ${d}`));
+            console.log('\n📦 [Unused Dependencies Detected]:');
+            const { depsToRemove } = await inquirer.prompt([{
+                type: 'checkbox',
+                name: 'depsToRemove',
+                message: 'Select unused dependencies to remove:',
+                choices: unusedDeps.map(d => ({ name: d, value: d, checked: true }))
+            }]);
+            selectedDepsToRemove = depsToRemove;
         }
+
         if (deadFiles.length > 0) {
             console.log('\n🗑️  [Dead Files to be DELETED]:');
             deadFiles.forEach(f => console.log(`   - ${path.relative(absolutePath, f)}`));
@@ -174,18 +238,27 @@ program
         if (diffs.length > 0) {
             console.log('\n📝 [Code Changes Preview]:');
             console.log('==================================================');
-            diffs.forEach(diff => {
-                console.log(diff);
+            diffs.forEach(({ diffOutput, file }) => {
+                if (graph.unsafeFiles.has(file)) {
+                    console.log(chalk.yellow(`⚠️  WARNING: ${path.basename(file)} contains dynamic code (eval/with/computed). Optimization is conservative.`));
+                }
+                console.log(diffOutput);
                 console.log('--------------------------------------------------');
             });
         }
 
+        if (selectedDepsToRemove.length === 0 && deadFiles.length === 0 && diffs.length === 0) {
+            console.log('\n✅ No physical changes selected. Exiting.');
+            const endTime = performance.now();
+            console.log(`   ⏱️  Analysis Time: ${(endTime - startTime).toFixed(2)} ms`);
+            return;
+        }
+
         // --- CONFIRM ---
-        const inquirer = (await import('inquirer')).default;
         const { confirm } = await inquirer.prompt([{
             type: 'confirm',
             name: 'confirm',
-            message: 'Are you sure you want to apply these changes?',
+            message: 'Are you sure you want to apply these physical changes?',
             default: false
         }]);
 
@@ -198,8 +271,8 @@ program
 
         // EXECUTE
         // 1. Remove Deps
-        if (unusedDeps.length > 0) {
-            await removeUnusedDependencies(absolutePath, unusedDeps);
+        if (selectedDepsToRemove.length > 0) {
+            await removeUnusedDependencies(absolutePath, selectedDepsToRemove);
             console.log('   ✅ Dependencies cleaned.');
         }
 
@@ -215,7 +288,59 @@ program
             console.log(`   ✅ Cleaned code: ${path.relative(absolutePath, report.file)}`);
         }
 
-        console.log('✨ Done.');
+        console.log('\n✨ Done.');
+        console.log(`\n📊 [Impact Metrics]:`);
+        console.log(`   📉 Total Lines Removed: ${originalLoc - newLoc} LOC`);
+        console.log(`   🗜️ Total Size Reduced: ${((originalSize - newSize) / 1024).toFixed(2)} KB`);
+        
+        const endTime = performance.now();
+        console.log(`   ⏱️  Analysis Time: ${(endTime - startTime).toFixed(2)} ms`);
+    });
+
+// Command: SHOW-DEPS
+program
+    .command('show-deps')
+    .argument('<path>', 'Path to project directory')
+    .description('Show a summarized list of installed dependencies and devDependencies from package.json')
+    .action(async (targetPath) => {
+        const absolutePath = path.resolve(targetPath);
+        const pkgPath = path.join(absolutePath, 'package.json');
+        
+        if (!fs.existsSync(pkgPath)) {
+            console.error(`❌ Error: 'package.json' not found at '${absolutePath}'.`);
+            process.exit(1);
+        }
+
+        try {
+            const pkg = await fs.readJson(pkgPath);
+            const chalk = (await import('chalk')).default;
+
+            console.log(`\n📦 Dependencies mapped for: ${chalk.cyan(pkg.name || path.basename(absolutePath))}\n`);
+
+            if (pkg.dependencies && Object.keys(pkg.dependencies).length > 0) {
+                console.log(chalk.bold.green('=== Dependencies ==='));
+                for (const [dep, version] of Object.entries(pkg.dependencies)) {
+                    console.log(`  ${chalk.white(dep)}: ${chalk.gray(version)}`);
+                }
+                console.log();
+            } else {
+                console.log(chalk.gray('No standard dependencies found.\n'));
+            }
+
+            if (pkg.devDependencies && Object.keys(pkg.devDependencies).length > 0) {
+                console.log(chalk.bold.yellow('=== devDependencies ==='));
+                for (const [dep, version] of Object.entries(pkg.devDependencies)) {
+                    console.log(`  ${chalk.white(dep)}: ${chalk.gray(version)}`);
+                }
+                console.log();
+            } else {
+                console.log(chalk.gray('No devDependencies found.\n'));
+            }
+
+        } catch (err) {
+            console.error(`❌ Failed to read or parse package.json: ${err.message}`);
+            process.exit(1);
+        }
     });
 
 // Command: VISUALIZE

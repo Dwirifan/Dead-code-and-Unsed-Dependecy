@@ -2,7 +2,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import glob from 'fast-glob';
 import estraverse from 'estraverse';
-import { parseCode } from '../parser/astParser.js';
+import { parseCode } from '../../parser/astParser.js';
 
 /**
  * Reads package.json and returns a list of all dependencies.

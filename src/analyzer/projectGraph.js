@@ -38,7 +38,7 @@ async function resolvePath(baseDir, relativeImport) {
 /**
  * Builds a comprehensive project graph starting from entry points.
  * @param {string} projectRoot 
- * @returns {Promise<{ liveFiles: Set<string>, usedPackages: Set<string> }>}
+ * @returns {Promise<{ liveFiles: Set<string>, usedPackages: Set<string>, edges: Array, unsafeFiles: Set<string>, globalRegistry: Object }>}
  */
 export async function buildProjectGraph(projectRoot) {
     const pkgPath = path.join(projectRoot, 'package.json');
@@ -83,6 +83,13 @@ export async function buildProjectGraph(projectRoot) {
     const edges = []; // { from, to }
     const queue = [...entryFiles];
 
+    // C. Bailout Heuristics & Analysis State
+    const unsafeFiles = new Set();
+    const globalRegistry = {
+        exports: new Map(), // Exported/Declared Names -> { isUnused, file }
+        usages: new Set()   // Used/Called Names
+    };
+
     // Mark entries as live potentially (need verify existence)
     // We filter queue initially
     const validQueue = [];
@@ -104,33 +111,57 @@ export async function buildProjectGraph(projectRoot) {
             if (path.extname(currentFile) === '.json') continue; // Don't parse JSON as JS
 
             const ast = parseCode(code);
+            const importsToResolve = [];
 
+            // Single AST Traversal pass for Module Graph, Call Graph, and Bailout Detection
             estraverse.traverse(ast, {
                 enter: function (node) {
-                    let importPath = null;
+                    // --- 1. Bailout Heuristics (Dynamic Code Detection) ---
+                    if (node.type === 'CallExpression' && node.callee.name === 'eval') {
+                        unsafeFiles.add(currentFile);
+                    }
+                    if (node.type === 'WithStatement') {
+                        unsafeFiles.add(currentFile);
+                    }
+                    if (node.type === 'MemberExpression' && node.computed === true) {
+                        // Dynamic access like obj[varName]
+                        unsafeFiles.add(currentFile);
+                    }
 
-                    // require('x')
+                    // --- 2. Call Graph (Registry Mark phase implicitly via Sweep state) ---
+                    if (node.type === 'CallExpression' && node.callee.type === 'Identifier') {
+                        globalRegistry.usages.add(node.callee.name); // Sweep (Mark as used)
+                    }
+                    if (node.type === 'MemberExpression' && node.property.type === 'Identifier' && !node.computed) {
+                        globalRegistry.usages.add(node.property.name); // Sweep
+                    }
+                    
+                    // Mark Declarations to have them tracked
+                    if (node.type === 'FunctionDeclaration' && node.id) {
+                        if (!globalRegistry.exports.has(node.id.name)) {
+                            globalRegistry.exports.set(node.id.name, { isUnused: true, file: currentFile }); // Mark
+                        }
+                    }
+                    if (node.type === 'VariableDeclarator' && node.id.type === 'Identifier') {
+                        if (!globalRegistry.exports.has(node.id.name)) {
+                            globalRegistry.exports.set(node.id.name, { isUnused: true, file: currentFile }); // Mark
+                        }
+                    }
+
+                    // --- 3. Dependency Graph Construction (Imports tracking) ---
+                    let importPath = null;
                     if (node.type === 'CallExpression' && node.callee.name === 'require' && node.arguments[0]?.value) {
                          importPath = node.arguments[0].value;
-                    } 
-                    // import ... from 'x' or import 'x'
-                    else if ((node.type === 'ImportDeclaration' || node.type === 'ExportNamedDeclaration' || node.type === 'ExportAllDeclaration') && node.source?.value) {
+                    } else if ((node.type === 'ImportDeclaration' || node.type === 'ExportNamedDeclaration' || node.type === 'ExportAllDeclaration') && node.source?.value) {
                         importPath = node.source.value;
-                    }
-                    // dynamic import('x')
-                    else if (node.type === 'ImportExpression' && node.source?.value) {
+                    } else if (node.type === 'ImportExpression' && node.source?.value) {
                         importPath = node.source.value;
                     }
 
                     if (importPath) {
                         if (importPath.startsWith('.')) {
-                            // Local File
-                            // We need to resolve it asynchronously, but traverse is sync.
-                            // Capture it for processing after traversal or manage queue logic carefully.
-                            // Optimization: Just collection paths here.
+                            importsToResolve.push(importPath);
                         } else {
-                            // Package
-                            // Handle scoped @foo/bar
                             if (!importPath.startsWith('/') && !path.isAbsolute(importPath)) {
                                 const parts = importPath.split('/');
                                 const pkgName = importPath.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
@@ -138,23 +169,6 @@ export async function buildProjectGraph(projectRoot) {
                             }
                         }
                     }
-                }
-            });
-
-            // Re-traverse or Use a collection to handle Async Resolution
-            // Since we can't await inside traverse, we'll re-parse or use regex? No, we need AST.
-            // Let's modify the approach: Collect imports during traversal, then process.
-            const importsToResolve = [];
-            estraverse.traverse(ast, {
-                enter: function (node) {
-                     let src = null;
-                     if (node.type === 'CallExpression' && node.callee.name === 'require' && node.arguments[0]?.value) src = node.arguments[0].value;
-                     else if ((node.type === 'ImportDeclaration' || node.type === 'ExportNamedDeclaration' || node.type === 'ExportAllDeclaration') && node.source?.value) src = node.source.value;
-                     else if (node.type === 'ImportExpression' && node.source?.value) src = node.source.value;
-
-                     if (src && src.startsWith('.')) {
-                         importsToResolve.push(src);
-                     }
                 }
             });
 
@@ -178,5 +192,12 @@ export async function buildProjectGraph(projectRoot) {
         }
     }
 
-    return { liveFiles, usedPackages, edges };
+    // Apply Sweep Phase: Reconcile globalRegistry usages against exports
+    for (const [name, info] of globalRegistry.exports.entries()) {
+        if (globalRegistry.usages.has(name)) {
+            info.isUnused = false; // It is used somewhere in the Call Graph
+        }
+    }
+
+    return { liveFiles, usedPackages, edges, unsafeFiles, globalRegistry };
 }

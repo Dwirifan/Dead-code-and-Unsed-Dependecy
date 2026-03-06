@@ -3,7 +3,7 @@ import { Scope } from './scope.js';
 import { isReference } from './utils.js';
 
 // Main Analysis Logic
-function analyzeDeadCodeRevised(ast) {
+function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null) {
     const allScopes = [];
     const globalScope = new Scope();
     allScopes.push(globalScope);
@@ -80,22 +80,37 @@ function analyzeDeadCodeRevised(ast) {
     // 2. ESM: export default ... / export const ...
     estraverse.traverse(ast, {
         enter: function(node) {
+             const checkUsage = (name) => {
+                 if (!globalRegistry) return true; // Default: conservative, if no registry assume used
+                 // Cross-file Call Graph DCE:
+                 // Only mark used if it is in usages set of the global registry
+                 return globalRegistry.usages.has(name);
+             };
+
              if (node.type === 'ExportNamedDeclaration' && node.declaration) {
                  // export const x = 1;
-                 // Mark declarations inside as used.
                  if (node.declaration.type === 'VariableDeclaration') {
                      node.declaration.declarations.forEach(decl => {
-                         if (decl.id.type === 'Identifier') globalScope.markUsed(decl.id.name);
+                         if (decl.id.type === 'Identifier') {
+                             if (checkUsage(decl.id.name)) globalScope.markUsed(decl.id.name);
+                         }
                      });
                  }
                  if (node.declaration.type === 'FunctionDeclaration') {
-                     globalScope.markUsed(node.declaration.id.name);
+                     if (checkUsage(node.declaration.id.name)) globalScope.markUsed(node.declaration.id.name);
                  }
              }
              if (node.type === 'ExportDefaultDeclaration') {
                  // export default x;
                  if (node.declaration.type === 'Identifier') {
-                     globalScope.markUsed(node.declaration.name);
+                     if (checkUsage(node.declaration.name)) globalScope.markUsed(node.declaration.name);
+                 }
+             }
+             // For CommonJS (module.exports.foo = foo)
+             if (node.type === 'AssignmentExpression' && node.left.type === 'MemberExpression' &&
+                 node.left.object.type === 'MemberExpression' && node.left.object.object.name === 'module') {
+                 if (node.right.type === 'Identifier') {
+                     if (checkUsage(node.right.name)) globalScope.markUsed(node.right.name);
                  }
              }
         }
