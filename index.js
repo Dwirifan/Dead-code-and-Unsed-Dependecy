@@ -1,5 +1,5 @@
 import { parseCode } from './src/parser/astParser.js';
-import { findDeadCode } from './src/analyzer/deadCodeAnalyzer.js';
+import { findDeadCode } from './src/analyzer/deadcode/deadCodeAnalyzer.js';
 import { removeDeadCode } from './src/eliminator/codeCleaner.js';
 
 const codeWithDeadStuff = `

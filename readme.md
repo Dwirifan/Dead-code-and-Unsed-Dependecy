@@ -83,6 +83,62 @@ node bin/dce-cli.js fix <path_project>
     - Generate _Unified Diff_ string.
     - Tulis ke disk hanya jika dikonfirmasi user.
 
+### Alur Kerja (Flowchart)
+
+```mermaid
+flowchart TD
+    classDef cli fill:#2b2b2b,stroke:#00ffcc,stroke-width:2px,color:#fff
+    classDef analyzer fill:#1b3b5c,stroke:#4da6ff,stroke-width:2px,color:#fff
+    classDef process fill:#4a4a4a,stroke:#ddd,color:#fff
+    classDef decision fill:#6b3e1b,stroke:#ffa500,shape:rhombus,color:#fff
+    classDef action fill:#1b5c20,stroke:#66ff66,stroke-width:2px,color:#fff
+    classDef warning fill:#5c1b1b,stroke:#ff4d4d,stroke-width:2px,color:#fff
+    classDef output fill:#2d1b5c,stroke:#b366ff,stroke-dasharray: 5 5,color:#fff
+
+    A(["User Input: node bin/dce-cli.js [command] [path]"]):::cli --> B{"Apakah command scan atau fix?"}:::decision
+
+    B -- "Ya (Scan/Fix)" --> C["projectGraph.js: Mulai Graph Construction"]:::process
+    B -- show-deps --> SD["Tampilkan depencencies dari package.json"]:::output
+    B -- visualize --> VZ["Generate Graph Mermaid project-graph.mmd"]:::output
+
+    subgraph Graph Phase ["Fase 1: Peta Ketergantungan (Reachability)"]
+        direction TB
+        C --> D["Cari Entry Point (package.json main / index.js)"]:::process
+        D --> E["astParser.js: Parse file menjadi AST (Acorn + TS Plugin)"]:::process
+        E --> F["BFS Traversal AST Cari import/require"]:::process
+        F --> G{"Semua file yang bisa dicapai?"}:::decision
+        G -- Belum --> E
+        G -- Selesai --> H[("Daftar Live Files & Used Packages")]:::analyzer
+    end
+
+    H --> I["Cari File Yatim (Dead Files): Semua file di disk (-) Live Files"]:::process
+    H --> J["dependencyAnalyzer.js: Cari Unused Deps"]:::process
+
+    subgraph Analysis Phase ["Fase 2: Analisis Dead Code (Live Files)"]
+        H -- Looping per Live File --> K["deadCodeAnalyzer.js: Analisis Scope & Referensi"]:::analyzer
+        K --> L["Bangun Scope Tree (Global -> Function -> Block)"]:::process
+        L --> M["Deteksi isReference() & Constant Folding (if false)"]:::process
+        M --> N[("Kumpulkan Dead Nodes (Variabel/Fungsi Unused)")]:::analyzer
+    end
+
+    N --> O{Mode Command?}:::decision
+    I --> O
+    J --> O
+
+    O -- Command 'scan' --> P[/"Cetak Laporan ke Terminal (Unused Deps, Dead Files, Dead Code)"/]:::output
+    O -- Command 'fix' --> Q["Simulasi Penghapusan & Kalkulasi Metrik (LOC & KB)"]:::process
+
+    subgraph Fix Phase ["Fase 3: Visualisasi & Eksekusi"]
+        Q --> R["diffGenerator.js: Tampilkan Colored Diff Preview"]:::process
+        R --> S{"User konfirmasi hapus? (Inquirer)"}:::decision
+        S -- No --> T[/"Batalkan Eksekusi"/]:::warning
+        S -- Yes --> U["dependencyCleaner.js: Hapus dari package.json"]:::action
+        U --> V["Hapus Dead Files dari sistem"]:::action
+        V --> W["codeCleaner.js: Hapus Dead Node dari AST & Generate ulang kode (Escodegen)"]:::action
+        W --> X[/"Tulis kode bersih ke Disk & Tampilkan Impact Metrics"/]:::output
+    end
+```
+
 ## 📂 Struktur Direktori
 
 ```

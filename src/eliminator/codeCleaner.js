@@ -19,7 +19,7 @@ export function removeDeadCode(ast, deadNodes) {
     const nodesToRemove = new Set(deadNodes.map(d => d.node));
 
     const cleanedAST = estraverse.replace(ast, {
-        enter: function (node, parent) {
+        enter: function (node) {
             // Check if this node is marked for removal
             if (nodesToRemove.has(node)) {
                 return estraverse.VisitorOption.Remove;

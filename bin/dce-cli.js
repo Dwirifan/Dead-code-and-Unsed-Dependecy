@@ -5,7 +5,6 @@ import path from 'path';
 import fs from 'fs-extra';
 import glob from 'fast-glob';
 import { parseCode } from '../src/parser/astParser.js';
-import { findUnusedDependencies } from '../src/analyzer/dependency/dependencyAnalyzer.js';
 import { findDeadCode } from '../src/analyzer/deadcode/deadCodeAnalyzer.js';
 import { removeDeadCode } from '../src/eliminator/codeCleaner.js';
 import { removeUnusedDependencies } from '../src/eliminator/dependencyCleaner.js';
@@ -87,7 +86,7 @@ program
         }
 
         // Logic B (Dead Files): Files on disk but NOT in graph.liveFiles
-        const allFiles = await glob(['**/*.{js,mjs,cjs}'], {
+        const allFiles = await glob(['**/*.{js,mjs,cjs,ts,tsx,mts}'], {
             cwd: absolutePath,
             ignore: ['node_modules/**', 'dist/**', 'test/**', 'tests/**', 'coverage/**'],
             absolute: true
@@ -119,7 +118,7 @@ program
                     totalIssues += deadNodes.length;
                 }
             } catch (err) {
-                // Ignore parse errors
+                console.warn(chalk.yellow(`   ⚠️  Warning: Failed to parse ${path.relative(absolutePath, file)}: ${err.message}`));
             }
         }
 
@@ -162,7 +161,7 @@ program
         const unusedDeps = [...allDeps].filter(d => !graph.usedPackages.has(d));
 
         // 2. Dead Files
-        const allFiles = await glob(['**/*.{js,mjs,cjs}'], {
+        const allFiles = await glob(['**/*.{js,mjs,cjs,ts,tsx,mts}'], {
             cwd: absolutePath,
             ignore: ['node_modules/**', 'dist/**', 'test/**', 'tests/**', 'coverage/**'],
             absolute: true
@@ -207,7 +206,9 @@ program
                     newLoc += code.split('\n').length;
                     newSize += Buffer.byteLength(code);
                 }
-            } catch (err) {}
+            } catch (err) {
+                console.warn(chalk.yellow(`   ⚠️  Warning: Failed to parse ${path.relative(absolutePath, file)}: ${err.message}`));
+            }
         }
 
         // --- REPORT & SELECTION ---

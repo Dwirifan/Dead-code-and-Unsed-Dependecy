@@ -11,7 +11,7 @@ async function resolvePath(baseDir, relativeImport) {
     let candidate = path.resolve(baseDir, relativeImport);
     
     const tryExtensions = async (p) => {
-        const extensions = ['.js', '.mjs', '.cjs', '.json'];
+        const extensions = ['.js', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.json'];
         for (const ext of extensions) {
             if (await fs.pathExists(p + ext)) return p + ext;
         }
@@ -86,8 +86,9 @@ export async function buildProjectGraph(projectRoot) {
     // C. Bailout Heuristics & Analysis State
     const unsafeFiles = new Set();
     const globalRegistry = {
-        exports: new Map(), // Exported/Declared Names -> { isUnused, file }
-        usages: new Set()   // Used/Called Names
+        usedExports: new Map(), // file -> Set of used exported names
+        exports: new Map(), // Exported/Declared Names -> { isUnused, file } (legacy)
+        usages: new Set()   // Used/Called Names (legacy)
     };
 
     // Mark entries as live potentially (need verify existence)
@@ -115,7 +116,8 @@ export async function buildProjectGraph(projectRoot) {
 
             // Single AST Traversal pass for Module Graph, Call Graph, and Bailout Detection
             estraverse.traverse(ast, {
-                enter: function (node) {
+                fallback: 'iteration', // Handle unknown node types (e.g. TypeScript AST nodes)
+                enter: function (node, parent) {
                     // --- 1. Bailout Heuristics (Dynamic Code Detection) ---
                     if (node.type === 'CallExpression' && node.callee.name === 'eval') {
                         unsafeFiles.add(currentFile);
@@ -124,19 +126,17 @@ export async function buildProjectGraph(projectRoot) {
                         unsafeFiles.add(currentFile);
                     }
                     if (node.type === 'MemberExpression' && node.computed === true) {
-                        // Dynamic access like obj[varName]
-                        unsafeFiles.add(currentFile);
+                        // Only mark unsafe if property is truly dynamic (not a literal like obj[0] or obj['key'])
+                        if (node.property.type !== 'Literal') {
+                            unsafeFiles.add(currentFile);
+                        }
                     }
 
-                    // --- 2. Call Graph (Registry Mark phase implicitly via Sweep state) ---
-                    if (node.type === 'CallExpression' && node.callee.type === 'Identifier') {
-                        globalRegistry.usages.add(node.callee.name); // Sweep (Mark as used)
-                    }
-                    if (node.type === 'MemberExpression' && node.property.type === 'Identifier' && !node.computed) {
-                        globalRegistry.usages.add(node.property.name); // Sweep
-                    }
+                    // --- 2. Call Graph ---
+                    // Explicit usages inside CallExpression and MemberExpression 
+                    // are now handled locally by actual scope analysis inside deadCodeAnalyzer.
                     
-                    // Mark Declarations to have them tracked
+                    // Mark Declarations to have them tracked (Legacy)
                     if (node.type === 'FunctionDeclaration' && node.id) {
                         if (!globalRegistry.exports.has(node.id.name)) {
                             globalRegistry.exports.set(node.id.name, { isUnused: true, file: currentFile }); // Mark
@@ -150,23 +150,54 @@ export async function buildProjectGraph(projectRoot) {
 
                     // --- 3. Dependency Graph Construction (Imports tracking) ---
                     let importPath = null;
+                    let importedNames = [];
+
                     if (node.type === 'CallExpression' && node.callee.name === 'require' && node.arguments[0]?.value) {
                          importPath = node.arguments[0].value;
-                    } else if ((node.type === 'ImportDeclaration' || node.type === 'ExportNamedDeclaration' || node.type === 'ExportAllDeclaration') && node.source?.value) {
-                        importPath = node.source.value;
-                    } else if (node.type === 'ImportExpression' && node.source?.value) {
-                        importPath = node.source.value;
+                         importedNames = ['*']; // Conservative fallback
+                         if (parent && parent.type === 'VariableDeclarator' && parent.id.type === 'ObjectPattern') {
+                             importedNames = parent.id.properties.map(p => p.type === 'Property' && p.key.type === 'Identifier' ? p.key.name : '*');
+                         } else if (parent && parent.type === 'MemberExpression' && parent.property.type === 'Identifier' && !parent.computed) {
+                             importedNames = [parent.property.name];
+                         }
+                    } else if (node.type === 'ImportDeclaration' && node.source?.value) {
+                         importPath = node.source.value;
+                         if (node.specifiers) {
+                             node.specifiers.forEach(spec => {
+                                 if (spec.type === 'ImportSpecifier') importedNames.push(spec.imported.name);
+                                 else if (spec.type === 'ImportDefaultSpecifier') importedNames.push('default');
+                                 else if (spec.type === 'ImportNamespaceSpecifier') importedNames.push('*');
+                             });
+                         }
+                         if (importedNames.length === 0) importedNames.push('*'); // side-effect import
+                    } else if ((node.type === 'ExportNamedDeclaration' || node.type === 'ExportAllDeclaration') && node.source?.value) {
+                         importPath = node.source.value;
+                         if (node.type === 'ExportAllDeclaration') {
+                             importedNames.push('*');
+                         } else if (node.specifiers) {
+                             node.specifiers.forEach(spec => {
+                                 if (spec.type === 'ExportSpecifier') importedNames.push(spec.local.name);
+                             });
+                         }
+                    } else if (node.type === 'ImportExpression' && node.source) {
+                         if (node.source.type === 'Literal') {
+                             importPath = node.source.value;
+                             importedNames.push('*');
+                         } else if (node.source.type === 'TemplateLiteral' && node.source.expressions.length === 0) {
+                             importPath = node.source.quasis[0].value.raw;
+                             importedNames.push('*');
+                         } else {
+                             unsafeFiles.add(currentFile);
+                         }
                     }
 
                     if (importPath) {
-                        if (importPath.startsWith('.')) {
-                            importsToResolve.push(importPath);
+                        if (importPath.startsWith('.') || importPath.startsWith('/') || path.isAbsolute(importPath)) {
+                            importsToResolve.push({ path: importPath, names: importedNames });
                         } else {
-                            if (!importPath.startsWith('/') && !path.isAbsolute(importPath)) {
-                                const parts = importPath.split('/');
-                                const pkgName = importPath.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
-                                usedPackages.add(pkgName);
-                            }
+                            const parts = importPath.split('/');
+                            const pkgName = importPath.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
+                            usedPackages.add(pkgName);
                         }
                     }
                 }
@@ -174,10 +205,15 @@ export async function buildProjectGraph(projectRoot) {
 
             // Process local imports
             for (const imp of importsToResolve) {
-                const absolute = await resolvePath(fileDir, imp);
+                const absolute = await resolvePath(fileDir, imp.path);
                 if (absolute) {
                     // Record Edge: currentFile -> absolute
                     edges.push({ from: currentFile, to: absolute });
+
+                    if (!globalRegistry.usedExports.has(absolute)) {
+                        globalRegistry.usedExports.set(absolute, new Set());
+                    }
+                    imp.names.forEach(name => globalRegistry.usedExports.get(absolute).add(name));
 
                     if (!visitedFiles.has(absolute)) {
                         visitedFiles.add(absolute);
