@@ -209,6 +209,84 @@ async function testProjectGraph() {
     }
 }
 
+// ─── Test Suite 7: Dead Code After return/throw/break/continue ─────
+
+async function testAfterTerminator() {
+    console.log('\n📦 Test Suite: Dead Code After return/throw/break/continue');
+    console.log('─'.repeat(50));
+
+    // Case 1: Dead code after return
+    const returnCode = `
+        function greet(name) {
+            return 'Hello ' + name;
+            console.log('never runs');       // dead
+            const unreachable = 42;          // dead
+        }
+        greet('world');
+    `;
+    const deadReturn = findDeadCode(parseCode(returnCode));
+    const deadReturnTypes = deadReturn.filter(d => d.type === 'DeadCode');
+    assert(deadReturnTypes.length >= 2, `Detects ${deadReturnTypes.length} unreachable statements after return (expected >=2)`);
+    assert(!getDeadNames(findDeadCode(parseCode(returnCode))).includes('name'), 'Function param "name" is NOT dead');
+
+    // Case 2: Dead code after throw
+    const throwCode = `
+        function validate(x) {
+            if (!x) {
+                throw new Error('invalid');
+                console.log('dead after throw'); // dead
+            }
+            return x;
+        }
+        validate(1);
+    `;
+    const deadThrow = findDeadCode(parseCode(throwCode));
+    const deadThrowTypes = deadThrow.filter(d => d.type === 'DeadCode');
+    assert(deadThrowTypes.length >= 1, `Detects unreachable statement after throw (found ${deadThrowTypes.length})`);
+
+    // Case 3: Dead code after break inside switch
+    const breakCode = `
+        const val = 1;
+        switch (val) {
+            case 1:
+                console.log('case 1');
+                break;
+                console.log('dead after break'); // dead
+        }
+        console.log(val);
+    `;
+    const deadBreak = findDeadCode(parseCode(breakCode));
+    const deadBreakTypes = deadBreak.filter(d => d.type === 'DeadCode');
+    assert(deadBreakTypes.length >= 1, `Detects unreachable statement after break (found ${deadBreakTypes.length})`);
+
+    // Case 4: Live code BEFORE return must NOT be flagged
+    const liveBeforeReturn = `
+        function compute() {
+            const a = 10;
+            const b = 20;
+            return a + b;
+        }
+        compute();
+    `;
+    const liveCheck = findDeadCode(parseCode(liveBeforeReturn));
+    assert(!getDeadNames(liveCheck).includes('a'), 'Variable "a" before return is NOT dead');
+    assert(!getDeadNames(liveCheck).includes('b'), 'Variable "b" before return is NOT dead');
+
+    // Case 5: Dead code after continue in a loop
+    const continueCode = `
+        for (let i = 0; i < 5; i++) {
+            if (i === 2) {
+                continue;
+                console.log('dead after continue'); // dead
+            }
+            console.log(i);
+        }
+    `;
+    const deadContinue = findDeadCode(parseCode(continueCode));
+    const deadContinueTypes = deadContinue.filter(d => d.type === 'DeadCode');
+    assert(deadContinueTypes.length >= 1, `Detects unreachable statement after continue (found ${deadContinueTypes.length})`);
+}
+
 // ─── Run All Tests ────────────────────────────────────────────────
 
 async function main() {
@@ -222,6 +300,7 @@ async function main() {
     await testIsReference();
     await testDeadBranch();
     await testProjectGraph();
+    await testAfterTerminator();
 
     // Summary
     console.log('\n' + '═'.repeat(50));

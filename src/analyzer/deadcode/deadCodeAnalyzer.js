@@ -89,7 +89,7 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null) {
         fallback: 'iteration', // Handle unknown node types (e.g. TypeScript AST nodes)
         enter: function (node, parent) {
             parentStack.push(node);
-            // Dead Branch Analysis (Constant Folding)
+            // Dead Branch Analysis 1: Constant Folding (if true/false literal)
             if (node.type === 'IfStatement' && node.test.type === 'Literal') {
                 if (node.test.value === false) {
                     // if (false) { ... } -> Consequent is dead
@@ -107,6 +107,39 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null) {
                         line: node.alternate.loc ? node.alternate.loc.start.line : node.loc.start.line,
                         node: node.alternate
                     });
+                }
+            }
+
+            // Dead Branch Analysis 2: Unreachable code after return/throw/break/continue
+            // Works on two container types:
+            //   - BlockStatement: normal function/if/loop bodies  (body array)
+            //   - SwitchCase: case bodies are flat in `consequent` array, not a BlockStatement
+            const terminators = new Set([
+                'ReturnStatement',
+                'ThrowStatement',
+                'BreakStatement',
+                'ContinueStatement'
+            ]);
+
+            const statementsToScan =
+                node.type === 'BlockStatement' ? node.body :
+                node.type === 'SwitchCase'     ? node.consequent :
+                null;
+
+            if (statementsToScan) {
+                let terminatorFound = false;
+                for (const stmt of statementsToScan) {
+                    if (terminatorFound) {
+                        unreachableNodes.push({
+                            name: 'Unreachable Statement',
+                            type: 'DeadCode',
+                            line: stmt.loc ? stmt.loc.start.line : 0,
+                            node: stmt
+                        });
+                    }
+                    if (terminators.has(stmt.type)) {
+                        terminatorFound = true;
+                    }
                 }
             }
 
