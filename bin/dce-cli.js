@@ -11,6 +11,8 @@ import { removeUnusedDependencies } from '../src/eliminator/dependencyCleaner.js
 import { buildProjectGraph } from '../src/analyzer/projectGraph.js';
 import { generateDiff } from '../src/eliminator/diffGenerator.js';
 import { generateMermaidGraph } from '../src/analyzer/graphVisualizer.js';
+import { createBackup } from '../src/eliminator/backupManager.js';
+import { RuleEngine } from '../src/analyzer/ruleEngine.js';
 import chalk from 'chalk';
 import { performance } from 'perf_hooks';
 
@@ -63,6 +65,9 @@ program
         console.log(`\n🔍 Scanning project at: ${absolutePath}`);
         console.log('   (Using Graph Reachability Analysis)\n');
 
+        const ruleEngine = new RuleEngine();
+        await ruleEngine.loadConfig(absolutePath);
+
         // A & B: Build Graph
         let graph;
         try {
@@ -92,7 +97,8 @@ program
             absolute: true
         });
         
-        const deadFiles = allFiles.filter(f => !graph.liveFiles.has(f));
+        const rawDeadFiles = allFiles.filter(f => !graph.liveFiles.has(f));
+        const deadFiles = rawDeadFiles.filter(f => !ruleEngine.isIgnoredFile(f, absolutePath));
         let totalIssues = 0;
 
         if (deadFiles.length > 0) {
@@ -108,7 +114,7 @@ program
             try {
                 const code = await fs.readFile(file, 'utf-8');
                 const ast = parseCode(code);
-                const deadNodes = findDeadCode(ast, file, graph.globalRegistry);
+                const deadNodes = findDeadCode(ast, file, graph.globalRegistry, ruleEngine);
 
                 if (deadNodes.length > 0) {
                     console.log(`   📄 ${path.relative(absolutePath, file)}`);
@@ -145,6 +151,9 @@ program
         console.log(`\n🔍 Analyzing project at: ${absolutePath}`);
         const startTime = performance.now();
         
+        const ruleEngine = new RuleEngine();
+        await ruleEngine.loadConfig(absolutePath);
+        
         // Build Graph
         let graph;
         try {
@@ -166,7 +175,8 @@ program
             ignore: ['node_modules/**', 'dist/**', 'test/**', 'tests/**', 'coverage/**'],
             absolute: true
         });
-        const deadFiles = allFiles.filter(f => !graph.liveFiles.has(f));
+        const rawDeadFiles = allFiles.filter(f => !graph.liveFiles.has(f));
+        const deadFiles = rawDeadFiles.filter(f => !ruleEngine.isIgnoredFile(f, absolutePath));
 
         // 3. Dead Code (Live Files) - PREPARE & DIFF
         const deadCodeReport = [];
@@ -189,7 +199,7 @@ program
                 originalSize += Buffer.byteLength(code);
 
                 const ast = parseCode(code);
-                const deadNodes = findDeadCode(ast, file, graph.globalRegistry);
+                const deadNodes = findDeadCode(ast, file, graph.globalRegistry, ruleEngine);
                 if (deadNodes.length > 0) {
                     // DRY RUN: Generate New Code in Memory
                     const newCode = removeDeadCode(ast, deadNodes);
@@ -269,6 +279,21 @@ program
         }
 
         console.log('\n🚀 Applying fixes...');
+
+        // 0. CREATE CHECKPOINT (BACKUP) BEFORE EXECUTION
+        const filesToBackup = [
+            ...deadFiles,
+            ...deadCodeReport.map(report => report.file)
+        ];
+        const backupPackageJson = selectedDepsToRemove.length > 0;
+        
+        try {
+            const backupPath = await createBackup(absolutePath, filesToBackup, backupPackageJson);
+            const chalk = (await import('chalk')).default;
+            console.log(chalk.cyan(`   💾 Backup created at: ${path.relative(absolutePath, backupPath)}`));
+        } catch (err) {
+            console.warn(chalk.yellow(`   ⚠️  Warning: Failed to create backup. Proceeding anyway. Error: ${err.message}`));
+        }
 
         // EXECUTE
         // 1. Remove Deps

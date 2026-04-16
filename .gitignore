@@ -1,0 +1,26 @@
+# Dependency directories
+node_modules/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Optional npm cache and temp files
+.npm
+
+# dotenv environment variables file
+.env
+.env.test
+.env.local
+
+# MAC specific
+.DS_Store
