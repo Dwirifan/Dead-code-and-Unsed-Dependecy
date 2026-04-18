@@ -1,0 +1,29 @@
+================================================
+CATATAN HARIAN - PROYEK DCE (DEADKILLER CLI)
+Tanggal: 18 April 2026
+================================================
+
+STATUS PROJECT SAAT INI (Kondisi Infrastruktur Terkini):
+------------------------------------------------
+1. Kebersihan Workspace:
+   - Folder dummy testing (test/ dan test_scope/) sudah dihapus.
+   - File DOKUMENTASI.md dan project-graph.mmd sudah dihapus dan semua informasi utamanya telah disatukan secara terpusat di dalam readme.md.
+
+2. Pembaruan Logika Internal (Modularitas):
+   - Modul "deadCodeAnalyzer" kini tidak berdiri sendiri menjadi satu file raksasa, melainkan bertindak sebagai koordinator yang memanggil file helper.
+   - Fitur baru yang telah aktif: "branchAnalyzer" (memblokir cabang logika yang tak mungkin tereksekusi), "exportAnalyzer" (lintas modul), "isReference" (pemeriksaan panggil/kuitansi), dan "destructuringExtractor".
+
+3. Keamanan Tambahan Terkini:
+   - "ruleEngine.js" : Memberi kemampuan bagi user untuk melindungi folder/file secara paksa via .deadkillerrc.json.
+   - "backupManager.js": Menjamin keselamatan code user dengan cara mengkopi/menduplikasi file asli ke folder .deadkiller_backup sebelum proses penghapusan dilakukan secara aktual di *disk*.
+
+FOKUS SELANJUTNYA (TO-DO LIST PENGERJAAN TOOLS):
+------------------------------------------------
+[ ] Menentukan Edge Case lain di Analyzer (misal React JSX / Komponen Framework Tertentu).
+[ ] Memperkuat sistem parser.
+[ ] (Tambahkan ide Anda selanjutnya di bawah ini...)
+
+================================================
+IDE / JURNAL BEBAS / BUG YANG DITEMUKAN:
+================================================
+- ...
