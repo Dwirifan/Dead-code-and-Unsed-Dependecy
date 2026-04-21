@@ -47,30 +47,47 @@ export async function buildProjectGraph(projectRoot) {
     }
     const pkg = await fs.readJson(pkgPath);
     
-    // A. Identifikasi Titik Masuk Sistem (Entry Point)
-    let entryFiles = [];
-    if (pkg.main) {
-        entryFiles.push(path.resolve(projectRoot, pkg.main));
-    } else {
-        // Fallbacks
+    // A. Identifikasi SEMUA Titik Masuk Sistem (Entry Points)
+    // Mengumpulkan dari berbagai field package.json agar tidak ada file live yang terlewat
+    const entrySet = new Set();
+
+    // main field
+    if (pkg.main) entrySet.add(path.resolve(projectRoot, pkg.main));
+
+    // module field (ESM builds)
+    if (pkg.module) entrySet.add(path.resolve(projectRoot, pkg.module));
+
+    // bin field — CLI entry points (sangat penting untuk CLI tools)
+    if (pkg.bin) {
+        if (typeof pkg.bin === 'string') {
+            entrySet.add(path.resolve(projectRoot, pkg.bin));
+        } else {
+            Object.values(pkg.bin).forEach(b => entrySet.add(path.resolve(projectRoot, b)));
+        }
+    }
+
+    // exports field (modern package exports map)
+    if (pkg.exports) {
+        const collectExports = (val) => {
+            if (typeof val === 'string') {
+                entrySet.add(path.resolve(projectRoot, val));
+            } else if (typeof val === 'object' && val !== null) {
+                Object.values(val).forEach(collectExports);
+            }
+        };
+        collectExports(pkg.exports);
+    }
+
+    // Fallback: kandidat file umum jika tidak ada field di atas
+    if (entrySet.size === 0) {
         const candidates = ['index.js', 'main.js', 'src/index.js', 'app.js', 'server.js'];
         for (const c of candidates) {
             const full = path.resolve(projectRoot, c);
-            if (await fs.pathExists(full)) {
-                entryFiles.push(full);
-                break; 
-            }
+            if (await fs.pathExists(full)) { entrySet.add(full); break; }
         }
     }
-    
-    // Include all bin scripts if exist
-    if (pkg.bin) {
-        if (typeof pkg.bin === 'string') {
-            entryFiles.push(path.resolve(projectRoot, pkg.bin));
-        } else {
-            Object.values(pkg.bin).forEach(p => entryFiles.push(path.resolve(projectRoot, p)));
-        }
-    }
+
+    const entryFiles = [...entrySet];
 
     if (entryFiles.length === 0) {
         throw new Error('Could not auto-detect entry point. Please specify "main" in package.json.');

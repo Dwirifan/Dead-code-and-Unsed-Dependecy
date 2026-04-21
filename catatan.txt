@@ -1,32 +1,114 @@
 ================================================
 CATATAN HARIAN - PROYEK DCE (DEADKILLER CLI)
 ================================================
-
-STATUS PROJECT SAAT INI (Kondisi Infrastruktur Terkini):
-------------------------------------------------
-1. Kebersihan Workspace:
-   - Folder dummy testing (test/ dan test_scope/) sudah dihapus.
-   - File DOKUMENTASI.md dan project-graph.mmd sudah dihapus dan semua informasi utamanya telah disatukan secara terpusat di dalam readme.md.
-
-2. Pembaruan Logika Internal (Modularitas & Global Analysis):
-   - Modul "deadCodeAnalyzer" kini tidak berdiri sendiri menjadi satu file raksasa, melainkan bertindak sebagai koordinator yang memanggil file helper.
-   - Proyek kini mendukung **Global Analysis** dasar (lintas file) untuk mendeteksi _Dead Files_, keterpakaian _Export_, dan _Unused Dependencies_.
-   - Fitur pendukung: "branchAnalyzer", "exportAnalyzer", "isReference", dan "destructuringExtractor".
-
-3. Arsitektur Generator Baru (Dukungan penuh TypeScript Native):
-   - Mengubah tumpukan mesin bawah (_tech stack_) dari Acorn & Escodegen menjadi **@typescript-eslint/typescript-estree** (sebagai Parser berakurasi Enterprise) dan **magic-string** (pemotong teks statis super cepat).
-   - Seluruh baris kode TypeScript dan format/komentar aslinya kini tetap bersih dan tidak pudar/hilang saat Mode Fix dijalankan.
-
-4. Keamanan Tambahan Terkini:
-   - "ruleEngine.js": Memberi kemampuan bagi user untuk melindungi folder/file via .deadkillerrc.json.
-   - "backupManager.js": Menjamin keselamatan code user dengan menduplikasi file asli ke folder .deadkiller_backup sebelum proses nyata dilakukan.
-
-FOKUS SELANJUTNYA (TO-DO LIST PENGERJAAN TOOLS):
-------------------------------------------------
-- menambahkan fitur Code Structure Traceability
-- 
+Terakhir diperbarui: 2026-04-22
 
 ================================================
-IDE / JURNAL BEBAS / BUG YANG DITEMUKAN:
+STATUS PROJECT SAAT INI
 ================================================
 
+[x] SELESAI — Infrastruktur & Arsitektur
+    - Workspace bersih (hapus test/, file dummy)
+    - Modularisasi deadCodeAnalyzer (koordinator + helper)
+    - Global Analysis: Dead Files, Export Usage, Unused Deps
+    - Tech stack: @typescript-eslint/typescript-estree + magic-string
+    - ruleEngine.js (ignore via .deadkillerrc.json)
+    - backupManager.js (checkpoint sebelum fix)
+
+[x] SELESAI — Visualisasi & Dashboard
+    - Migrasi Mermaid.js → vis.js Network (hierarki UD, interaktif)
+    - HTML dashboard standalone (logo Base64, CSS inline)
+    - Bilingual ID/EN dengan toggle + simpan ke localStorage
+    - Legend direktori, zoom/fit controls
+
+[x] SELESAI — CLI Modernisasi
+    - Ganti emoji → simbol CLI-safe ([>], [ok], [!], [~], dst.)
+    - Fix crash Ctrl+C (ExitPromptError) via global uncaughtException handler
+    - Wizard interaktif (Inquirer) dengan menu bersih
+
+[x] SELESAI — Fitur History & Restore Checkpoint
+    - restoreManager.js: listCheckpoints(), restoreCheckpoint(), deleteCheckpoint()
+    - Perintah `history <path>`: tampil riwayat, restore, hapus
+    - Menu di wizard: [H] Riwayat & Restore Backup
+
+[x] SELESAI — Perbaikan Logika Fix
+    - fix <file>  : mode file tunggal (tanpa graph, 1x konfirmasi)
+    - fix <folder>: mode direktori (global, maks 2 prompt)
+    - Dead files tidak lagi muncul sebagai checkbox tapi Y/N
+    - Prompt dikurangi dari 4 klik → maks 2 klik
+
+[x] SELESAI — Bug Fix Kritis
+    - BUG: Shebang #!/usr/bin/env node gagal di-parse → FIX: allowHashBang: true
+    - BUG: fast-glob forward slash vs path.resolve backslash (Windows) →
+      FIX: .map(f => path.resolve(f)) setelah setiap glob()
+    - BUG: Entry point hanya dari pkg.main, file CLI tidak di-trace →
+      FIX: Kumpulkan semua: main + bin + module + exports ke entrySet
+
+[x] SELESAI — Refactoring: Pecah bin/dce-cli.js
+    - Dari 582 baris monolitik → 6 file terpisah
+    - src/commands/scanCommand.js
+    - src/commands/fixCommand.js
+    - src/commands/showDepsCommand.js
+    - src/commands/visualizeCommand.js
+    - src/commands/historyCommand.js
+    - bin/dce-cli.js → thin entry point (~44 baris)
+
+================================================
+KLASIFIKASI FITUR (3 KELOMPOK)
+================================================
+
+A — ANALISIS (Read-Only, Aman)
+    scan <file>       : dead code 1 file
+    scan <folder>     : dead code + dead files + unused deps (seluruh proyek)
+    show-deps <folder>: lihat daftar dependensi
+    visualize <folder>: HTML dashboard keterlacakan kode
+
+B — TINDAKAN (Write + Backup Otomatis)
+    fix <file>        : bersihkan 1 file, preview diff, 1x konfirmasi
+    fix <folder>      : bersihkan proyek global, backup otomatis
+
+C — PEMULIHAN (Safety Net)
+    history <folder>  : lihat/restore/hapus checkpoint backup
+
+================================================
+TO-DO / FOKUS SELANJUTNYA
+================================================
+
+PRIORITAS TINGGI:
+[ ] 1. Perbaiki menu Wizard agar mencerminkan 3 kelompok fitur di atas
+        - Tambahkan separator: "─── Analisis ───" dan "─── Bersihkan ───"
+        - Setelah scan, tawarkan "Mau langsung fix sekarang?"
+[ ] 2. Test pada proyek React/JSX (parser sudah support, belum diverifikasi)
+        - Buat proyek React dummy kecil untuk testing
+        - Pastikan import dari node_modules tidak masuk dead files
+[ ] 3. Refactor: dependencyAnalyzer.js tidak terpakai
+        - File src/analyzer/dependency/dependencyAnalyzer.js adalah satu-satunya
+          file yang benar-benar "mati" di proyek ini — pertimbangkan hapus atau
+          integrasikan kembali
+
+PRIORITAS SEDANG:
+[ ] 4. Config file .deadkillerrc.json
+        - Dokumen format opsi yang tersedia (ignore patterns, entry overrides)
+[ ] 5. Output JSON mode
+        - Tambahkan flag --json untuk scan agar bisa dipakai di CI/CD pipeline
+[ ] 6. Perbaiki tampilan diff di terminal
+        - Diff saat ini menggunakan warna chalk, tapi format bisa lebih rapi
+
+PRIORITAS RENDAH (untuk pengembangan lebih lanjut):
+[ ] 7. Reverse trace: "siapa yang mengimport file X?"
+        - Data sudah ada di graph.edges, tinggal query & tampilkan
+[ ] 8. Watch mode: auto-scan saat file berubah (gunakan chokidar)
+[ ] 9. Laporan HTML ringkasan dari scan (beda dengan visualize)
+
+================================================
+IDE / JURNAL BEBAS / BUG YANG DITEMUKAN
+================================================
+
+- Parameter 'idNode' di deadCodeAnalyzer.js baris 52 masih terdeteksi
+  sebagai dead code (parameter tidak terpakai). Ini TRUE POSITIVE.
+  Pertimbangkan untuk fix manual atau biarkan sebagai demo.
+
+- dependencyAnalyzer.js tidak diimport oleh siapapun. Kemungkinan legacy
+  dari iterasi awal. Perlu dicek apakah masih relevan atau bisa dihapus.
+
+================================================

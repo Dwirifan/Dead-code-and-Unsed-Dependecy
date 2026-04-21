@@ -6,6 +6,7 @@ const PARSER_OPTIONS = {
     jsx: true,
     comment: true,
     errorOnUnknownASTType: false,
+    allowHashBang: true, // agar shebang (#!/usr/bin/env node) tidak menyebabkan parse error
 };
 
 /**
