@@ -1,8 +1,10 @@
 /**
- * Recursively extracts all Identifier names from a destructuring pattern.
- * Supports: Identifier, ObjectPattern, ArrayPattern, RestElement, AssignmentPattern.
- * @param {object} pattern - AST pattern node (e.g., node.id of a VariableDeclarator)
- * @returns {Array<{name: string, node: object}>} List of extracted identifiers with their AST nodes
+ * Menggali (Extract) secara rekursif semua nama Variabel (Identifier) dari pola dekonstruksi.
+ * Mendukung pola komplit: Identifier murni, ObjectPattern ({a, b}), ArrayPattern ([a, b]),
+ * RestElement (...rest), dan AssignmentPattern (a = 1).
+ * 
+ * @param {object} pattern - Node AST pola (contoh: node.id dari sebuah VariableDeclarator)
+ * @returns {Array<{name: string, node: object}>} Daftar pengidentifikasi yang berhasil digali berserta Node AST aslinya
  */
 export function extractIdentifiers(pattern) {
     const identifiers = [];
@@ -11,10 +13,12 @@ export function extractIdentifiers(pattern) {
 
     switch (pattern.type) {
         case 'Identifier':
+            // Variabel murni
             identifiers.push({ name: pattern.name, node: pattern });
             break;
 
         case 'ObjectPattern':
+            // Pola Objek destructuring: const { a, b } = obj;
             for (const prop of pattern.properties) {
                 if (prop.type === 'RestElement') {
                     identifiers.push(...extractIdentifiers(prop.argument));
@@ -25,6 +29,7 @@ export function extractIdentifiers(pattern) {
             break;
 
         case 'ArrayPattern':
+            // Pola Array destructuring: const [a, b] = arr;
             for (const element of pattern.elements) {
                 if (element) {
                     identifiers.push(...extractIdentifiers(element));
@@ -33,10 +38,12 @@ export function extractIdentifiers(pattern) {
             break;
 
         case 'RestElement':
+            // Sisa elemen (rest operator): ...rest
             identifiers.push(...extractIdentifiers(pattern.argument));
             break;
 
         case 'AssignmentPattern':
+            // Pola bernilai default: a = 1
             identifiers.push(...extractIdentifiers(pattern.left));
             break;
 

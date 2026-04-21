@@ -1,21 +1,33 @@
-import * as acorn from "acorn";
-import tsPlugin from "acorn-typescript";
+import { parse } from '@typescript-eslint/typescript-estree';
 
-const parser = acorn.Parser.extend(tsPlugin());
+const PARSER_OPTIONS = {
+    loc: true,
+    range: true,
+    jsx: true,
+    comment: true,
+    errorOnUnknownASTType: false,
+};
 
 /**
- * Parses a string of JavaScript or TypeScript code into an Abstract Syntax Tree (AST).
- * @param {string} codeString - The source code to parse.
- * @returns {object} The generated AST node.
+ * Mem-parsing string kode JavaScript atau TypeScript menjadi Abstract Syntax Tree (AST)
+ * berformat ESTree yang kompatibel dengan estraverse.
+ *
+ * @param {string} codeString - Kode sumber yang akan di-parse.
+ * @param {object} [options] - Opsi tambahan untuk menimpa konfigurasi default parser.
+ * @returns {object} AST node root (Program) berformat ESTree-compatible.
+ * @throws {Error} Jika parsing gagal karena sintaks tidak valid.
  */
-export function parseCode(codeString) {
-  try {
-    return parser.parse(codeString, {
-      ecmaVersion: "latest",
-      sourceType: "module",
-      locations: true, // Useful for reporting errors/positions
-    });
-  } catch (error) {
-    throw new Error(`Failed to parse code: ${error.message}`);
-  }
+export function parseCode(codeString, options = {}) {
+    if (typeof codeString !== 'string') {
+        throw new Error('parseCode: input harus berupa string kode sumber.');
+    }
+
+    try {
+        return parse(codeString, { ...PARSER_OPTIONS, ...options });
+    } catch (error) {
+        const location = error.lineNumber
+            ? ` (baris ${error.lineNumber}, kolom ${error.column})`
+            : '';
+        throw new Error(`Gagal parsing kode${location}: ${error.message}`);
+    }
 }

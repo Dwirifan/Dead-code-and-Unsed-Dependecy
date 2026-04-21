@@ -6,7 +6,7 @@ import { findFunctionScope } from './scopeHelpers.js';
 import { findUnreachableBranches } from './branchAnalyzer.js';
 import { markUsedExports } from './exportAnalyzer.js';
 
-// Main Analysis Logic
+// Logika Analisis Utama
 function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, ruleEngine = null) {
     const allScopes = [];
     const globalScope = new Scope();
@@ -23,7 +23,7 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, rul
         enter: function (node, parent) {
             parentStack.push(node);
 
-            // Scope Creation
+            // Pembuatan Jangkauan (Scope)
             if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)) {
                 const newScope = new Scope(currentScope);
                 allScopes.push(newScope);
@@ -41,7 +41,7 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, rul
                 }
             }
 
-            // Declarations
+            // Sinkronisasi Deklarasi Variabel/Fungsi
             if (node.type === 'VariableDeclarator') {
                 const declarationKind = (parent && parent.type === 'VariableDeclaration') ? parent.kind : 'let';
                 const identifiers = extractIdentifiers(node.id);
@@ -50,7 +50,9 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, rul
                     : currentScope;
                 
                 identifiers.forEach(({ name, node: idNode }) => {
-                    targetScope.addDeclaration(name, 'Variable', node.loc.start.line, idNode);
+                    // Simpan referensi ke VariableDeclarator (node) dan VariableDeclaration (parent)
+                    // agar magic-string bisa menghapus seluruh deklarasi, bukan hanya nama identifier
+                    targetScope.addDeclaration(name, 'Variable', node.loc.start.line, node, parent);
                 });
             }
 
@@ -60,7 +62,7 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, rul
                 }
             }
 
-            // Function parameters
+            // Evaluasi Parameter Fungsi
             if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)) {
                 node.params.forEach(param => {
                     const identifiers = extractIdentifiers(param);
@@ -70,7 +72,7 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, rul
                 });
             }
 
-            // Import declarations
+            // Pendataan Deklarasi Impor
             if (node.type === 'ImportDeclaration' && node.specifiers) {
                 node.specifiers.forEach(spec => {
                     if (spec.local && spec.local.type === 'Identifier') {
@@ -79,7 +81,7 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, rul
                 });
             }
 
-            // References
+            // Pelacakan Referensi Penggunaan
             if (node.type === 'Identifier') {
                 const grandParent = parentStack.length >= 3 ? parentStack[parentStack.length - 3] : null;
                 if (isReference(node, parent, grandParent)) {
@@ -112,6 +114,18 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, rul
 
     // Phase 4: Pengumpulan Dead Variables & Unreachable Branches
     const deadCode = [];
+    const processedParents = new Set(); // Cegah duplikasi penghapusan VariableDeclaration
+
+    // Kumpulkan semua dead variable names terlebih dahulu
+    const allDeadNames = new Set();
+    allScopes.forEach(scope => {
+        scope.declarations.forEach((info, name) => {
+            if (!info.used && !(ruleEngine && ruleEngine.isIgnoredVariable(name))) {
+                allDeadNames.add(name);
+            }
+        });
+    });
+
     allScopes.forEach(scope => {
        scope.declarations.forEach((info, name) => {
            if (!info.used) {
@@ -119,11 +133,42 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, rul
                    return;
                }
 
+               // Tentukan node yang tepat untuk dihapus oleh magic-string
+               let targetNode = info.node; // Default: VariableDeclarator
+
+               if (info.type === 'Variable' && info.parentNode && info.parentNode.type === 'VariableDeclaration') {
+                   const parentDecl = info.parentNode;
+
+                   if (processedParents.has(parentDecl)) {
+                       // Parent sudah diproses sebelumnya, skip agar tidak duplikat
+                       return;
+                   }
+
+                   // Cek apakah SEMUA declarator di parent ini juga dead
+                   const allDeclaratorsDead = parentDecl.declarations.every(declarator => {
+                       if (declarator.id && declarator.id.type === 'Identifier') {
+                           return allDeadNames.has(declarator.id.name);
+                       }
+                       // Untuk destructuring, cek semua identifier di dalamnya
+                       const ids = extractIdentifiers(declarator.id);
+                       return ids.every(({ name: idName }) => allDeadNames.has(idName));
+                   });
+
+                   if (allDeclaratorsDead) {
+                       // Semua declarator dead → hapus seluruh VariableDeclaration
+                       targetNode = parentDecl;
+                       processedParents.add(parentDecl);
+                   } else {
+                       // Hanya sebagian dead → hapus VariableDeclarator individual
+                       targetNode = info.node;
+                   }
+               }
+
                deadCode.push({
                    name,
                    type: info.type,
                    line: info.line,
-                   node: info.node
+                   node: targetNode
                });
            }
        });

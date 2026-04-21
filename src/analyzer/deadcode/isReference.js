@@ -1,59 +1,62 @@
 /**
- * Helper to determine if identifier is a reference (usage) vs declaration.
+ * Alat bantu (Helper) untuk membedah apakah sebuah *Identifier* 
+ * merupakan referensi (dipanggil) atau hanyalah sebuah deklarasi.
  * 
- * @param {object} node - The AST node to check
- * @param {object} parent - The parent AST node
- * @param {object} [grandParent] - The grandparent AST node (for context)
- * @returns {boolean} True if the node is a reference
+ * @param {object} node - Titik AST target
+ * @param {object} parent - Titik induk (Parent) dari node
+ * @param {object} [grandParent] - Titik kakek/leluhur dari node (untuk membaca konteks)
+ * @returns {boolean} Bernilai 'true' jika node adalah referensi pemanggilan
  */
 export function isReference(node, parent, grandParent) {
     if (!parent) return false;
     
-    // Declaration cases (NOT references)
+    // Kasus-kasus Deklarasi (BUKAN Referensi Pemanggilan)
     if (parent.type === 'VariableDeclarator' && parent.id === node) return false;
     if (parent.type === 'FunctionDeclaration' && parent.id === node) return false;
     if (parent.type === 'MethodDefinition' && parent.key === node) return false;
 
-    // Property handling
+    // Penanganan Properti Objek (Key bukan panggilan variabel)
     if (parent.type === 'Property' && parent.key === node && !parent.computed) return false;
     if (parent.type === 'Property' && parent.value === node && grandParent && grandParent.type === 'ObjectPattern') return false;
 
+    // Penanganan Parameter pada blok fungsi
     if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(parent.type)) {
         if (parent.params.includes(node)) return false;
     }
+    // Properti dalam ekspresi member (obj.properti)
     if (parent.type === 'MemberExpression' && parent.property === node && !parent.computed) return false;
 
-    // Import specifiers
+    // Spesifikator Impor
     if (parent.type === 'ImportSpecifier' && parent.imported === node) return false;
     if (parent.type === 'ImportDefaultSpecifier') return false;
     if (parent.type === 'ImportNamespaceSpecifier') return false;
     if (parent.type === 'ImportSpecifier' && parent.local === node) return false;
 
-    // Export specifiers 
+    // Spesifikator Ekspor 
     if (parent.type === 'ExportSpecifier' && parent.exported === node) return false;
 
-    // Class declaration name is not a reference
+    // Nama kelas deklarasi murni
     if (parent.type === 'ClassDeclaration' && parent.id === node) return false;
 
-    // Catch clause parameter is a declaration
+    // Penangkapan parameter (Catch clause error)
     if (parent.type === 'CatchClause' && parent.param === node) return false;
 
-    // For-in/for-of left side declaration
+    // Iterator Untuk (For-in/for-of left side)
     if ((parent.type === 'ForInStatement' || parent.type === 'ForOfStatement') && parent.left === node) return false;
 
-    // Label identifiers
+    // Penanda Label Identifikasi
     if (parent.type === 'LabeledStatement' && parent.label === node) return false;
     if (parent.type === 'BreakStatement' && parent.label === node) return false;
     if (parent.type === 'ContinueStatement' && parent.label === node) return false;
 
-    // ArrayPattern elements 
+    // Pola Array 
     if (parent.type === 'ArrayPattern') return false;
 
-    // RestElement 
+    // Sisa Elemen (...rest)
     if (parent.type === 'RestElement') return false;
 
-    // AssignmentPattern left
+    // Pola Pengisian (AssignmentPattern)
     if (parent.type === 'AssignmentPattern' && parent.left === node) return false;
 
-    return true;
+    return true; // Jika lolos semua jebakan di atas, maka ini adalah The Real Reference
 }

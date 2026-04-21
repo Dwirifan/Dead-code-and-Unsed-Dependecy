@@ -1,6 +1,5 @@
 ================================================
 CATATAN HARIAN - PROYEK DCE (DEADKILLER CLI)
-Tanggal: 18 April 2026
 ================================================
 
 STATUS PROJECT SAAT INI (Kondisi Infrastruktur Terkini):
@@ -9,21 +8,25 @@ STATUS PROJECT SAAT INI (Kondisi Infrastruktur Terkini):
    - Folder dummy testing (test/ dan test_scope/) sudah dihapus.
    - File DOKUMENTASI.md dan project-graph.mmd sudah dihapus dan semua informasi utamanya telah disatukan secara terpusat di dalam readme.md.
 
-2. Pembaruan Logika Internal (Modularitas):
+2. Pembaruan Logika Internal (Modularitas & Global Analysis):
    - Modul "deadCodeAnalyzer" kini tidak berdiri sendiri menjadi satu file raksasa, melainkan bertindak sebagai koordinator yang memanggil file helper.
-   - Fitur baru yang telah aktif: "branchAnalyzer" (memblokir cabang logika yang tak mungkin tereksekusi), "exportAnalyzer" (lintas modul), "isReference" (pemeriksaan panggil/kuitansi), dan "destructuringExtractor".
+   - Proyek kini mendukung **Global Analysis** dasar (lintas file) untuk mendeteksi _Dead Files_, keterpakaian _Export_, dan _Unused Dependencies_.
+   - Fitur pendukung: "branchAnalyzer", "exportAnalyzer", "isReference", dan "destructuringExtractor".
 
-3. Keamanan Tambahan Terkini:
-   - "ruleEngine.js" : Memberi kemampuan bagi user untuk melindungi folder/file secara paksa via .deadkillerrc.json.
-   - "backupManager.js": Menjamin keselamatan code user dengan cara mengkopi/menduplikasi file asli ke folder .deadkiller_backup sebelum proses penghapusan dilakukan secara aktual di *disk*.
+3. Arsitektur Generator Baru (Dukungan penuh TypeScript Native):
+   - Mengubah tumpukan mesin bawah (_tech stack_) dari Acorn & Escodegen menjadi **@typescript-eslint/typescript-estree** (sebagai Parser berakurasi Enterprise) dan **magic-string** (pemotong teks statis super cepat).
+   - Seluruh baris kode TypeScript dan format/komentar aslinya kini tetap bersih dan tidak pudar/hilang saat Mode Fix dijalankan.
+
+4. Keamanan Tambahan Terkini:
+   - "ruleEngine.js": Memberi kemampuan bagi user untuk melindungi folder/file via .deadkillerrc.json.
+   - "backupManager.js": Menjamin keselamatan code user dengan menduplikasi file asli ke folder .deadkiller_backup sebelum proses nyata dilakukan.
 
 FOKUS SELANJUTNYA (TO-DO LIST PENGERJAAN TOOLS):
 ------------------------------------------------
-[ ] Menentukan Edge Case lain di Analyzer (misal React JSX / Komponen Framework Tertentu).
-[ ] Memperkuat sistem parser.
-[ ] (Tambahkan ide Anda selanjutnya di bawah ini...)
+- menambahkan fitur Code Structure Traceability
+- 
 
 ================================================
 IDE / JURNAL BEBAS / BUG YANG DITEMUKAN:
 ================================================
-- ...
+

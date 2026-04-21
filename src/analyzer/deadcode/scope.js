@@ -1,14 +1,18 @@
+/**
+ * Kelas Scope: Merepresentasikan jangkauan (scope) lingkungan Lexical environment
+ * mulai dari tingkat Global, Fungsi, hingga Blok.
+ */
 export class Scope {
     constructor(parent = null) {
         this.parent = parent;
-        this.declarations = new Map(); // name -> { type, line, node, used: false }
-        this.references = []; // names of referenced variables
+        this.declarations = new Map(); // Pendataan nama -> { type, line, node, used: false }
+        this.references = []; // Kumpulan nama-nama variabel yang dipanggil/digunakan
     }
 
-    addDeclaration(name, type, line, node) {
-        // Only add if not already declared in this scope (handle var vs let/const redundancy if needed, but simple map is ok)
+    addDeclaration(name, type, line, node, parentNode = null) {
+        // Hanya meregistrasi jika belum pernah dideklarasikan di scope ini (hindari duplikasi)
         if (!this.declarations.has(name)) {
-            this.declarations.set(name, { type, line, node, used: false });
+            this.declarations.set(name, { type, line, node, parentNode, used: false });
         }
     }
 
@@ -17,7 +21,7 @@ export class Scope {
     }
 
     resolve() {
-        // Resolve references in this scope against declarations in this scope or parents
+        // Cocokkan variabel yang dipanggil dengan variabel yang dideklarasikan di scope ini atau parent-nya
         for (const refName of this.references) {
             this.markUsed(refName);
         }

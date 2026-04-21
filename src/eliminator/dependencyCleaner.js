@@ -2,9 +2,11 @@ import fs from 'fs-extra';
 import path from 'path';
 
 /**
- * Removes unused dependencies from package.json
- * @param {string} projectRoot 
- * @param {string[]} unusedDeps - List of dependency names to remove
+ * Membersihkan dan menghapus daftar dependensi yang tidak terpakai
+ * secara langsung dari berkas manifesto `package.json`.
+ * @param {string} projectRoot - Path direktori akar proyek
+ * @param {string[]} unusedDeps - Array berisi nama-nama dependensi NPM yang akan dihapus
+ * @returns {Promise<number>} Jumlah total dependensi yang berhasil dihapus
  */
 export async function removeUnusedDependencies(projectRoot, unusedDeps) {
     const packageJsonPath = path.join(projectRoot, 'package.json');

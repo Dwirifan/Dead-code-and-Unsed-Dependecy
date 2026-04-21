@@ -11,7 +11,7 @@ export function findUnreachableBranches(ast) {
     estraverse.traverse(ast, {
         fallback: 'iteration',
         enter: function (node) {
-            // Dead Branch Analysis 1: Constant Folding (if true/false literal)
+            // Analisis Percabangan Mati 1: Constant Folding (Simulasi if true/false statis statis)
             if (node.type === 'IfStatement' && node.test.type === 'Literal') {
                 if (node.test.value === false) {
                     unreachableNodes.push({
@@ -30,7 +30,7 @@ export function findUnreachableBranches(ast) {
                 }
             }
 
-            // Dead Branch Analysis 2: Unreachable code after return/throw/break/continue
+            // Analisis Percabangan Mati 2: Kode Tak Terjangkau setelah terminator (return/throw/break/continue)
             const terminators = new Set([
                 'ReturnStatement',
                 'ThrowStatement',

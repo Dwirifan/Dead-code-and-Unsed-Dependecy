@@ -14,6 +14,7 @@ import { generateMermaidGraph } from '../src/analyzer/graphVisualizer.js';
 import { createBackup } from '../src/eliminator/backupManager.js';
 import { RuleEngine } from '../src/analyzer/ruleEngine.js';
 import chalk from 'chalk';
+import ora from 'ora';
 import { performance } from 'perf_hooks';
 
 program
@@ -21,7 +22,7 @@ program
     .description('Automated Dead Code and Unused Dependency Eliminator')
     .version('1.0.0');
 
-// Command: SCAN
+// Perintah: SCAN (Pelacakan Kering)
 program
     .command('scan')
     .argument('<path>', 'Path to project directory')
@@ -36,7 +37,7 @@ program
         const startTime = performance.now();
         const stats = await fs.stat(absolutePath);
 
-        // --- SINGLE FILE MODE ---
+        // --- MODE PELACAKAN SATU FILE ---
         if (stats.isFile()) {
             console.log(`\n🔍 Scanning single file: ${path.basename(absolutePath)}`);
             try {
@@ -61,23 +62,26 @@ program
             return;
         }
 
-        // --- DIRECTORY MODE (Project Scan) ---
-        console.log(`\n🔍 Scanning project at: ${absolutePath}`);
-        console.log('   (Using Graph Reachability Analysis)\n');
+        // --- MODE DIREKTORI (Pelacakan Proyek Global) ---
+        console.log(`\n🔍 Menganalisis proyek di: ${chalk.cyan(absolutePath)}`);
+        
+        const spinner = ora('Membangun Graph Ketergantungan (Reachability Analysis)...').start();
 
         const ruleEngine = new RuleEngine();
         await ruleEngine.loadConfig(absolutePath);
 
-        // A & B: Build Graph
+        // Fase A & B: Membangun Struktur Graf Proyek
         let graph;
         try {
             graph = await buildProjectGraph(absolutePath);
         } catch (err) {
-            console.error('❌ Graph Build Failed:', err.message);
+            spinner.fail('Gagal membangun struktur graf proyek!');
+            console.error(err.message);
             process.exit(1);
         }
+        spinner.succeed(`Graf terbentuk: ${graph.liveFiles.size} File Aktif dipetakan.`);
 
-        // Logic D: Unused Dependencies (Compare graph.usedPackages vs package.json)
+        // Logika D: Mendeteksi Dependensi Tak Terpakai (Bandingkan graf.usedPackages vs package.json)
         const pkgPath = path.join(absolutePath, 'package.json');
         const pkg = await fs.readJson(pkgPath);
         const allDeps = new Set(Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }));
@@ -90,7 +94,7 @@ program
             console.log('📦 [Dependencies]: Clean');
         }
 
-        // Logic B (Dead Files): Files on disk but NOT in graph.liveFiles
+        // Logika B: Menyaring File Yatim/Mati (Ada di disk tapi tak dipetakan di Graf)
         const allFiles = await glob(['**/*.{js,mjs,cjs,ts,tsx,mts}'], {
             cwd: absolutePath,
             ignore: ['node_modules/**', 'dist/**', 'test/**', 'tests/**', 'coverage/**'],
@@ -107,7 +111,8 @@ program
             totalIssues += deadFiles.length;
         }
 
-        // Logic C: Dead Code in LIVE files only
+        // Logika C: Melacak Dead Code (Hanya di dalam rentang file yang Hidup)
+        const scanSpinner = ora('Melacak Dead Code di seluruh File Aktif...').start();
         console.log('\n💻 [Dead Code Scanning (Live Files Only)]:');
         
         for (const file of graph.liveFiles) {
@@ -128,15 +133,16 @@ program
             }
         }
 
+        scanSpinner.stop();
         if (totalIssues === 0 && deadFiles.length === 0) {
-            console.log('   ✅ No dead code found.');
+            console.log('   ✅ Tidak ada dead code yang tertinggal!');
         }
 
         const endTime = performance.now();
         console.log(`\n⏱️  Analysis Time: ${(endTime - startTime).toFixed(2)} ms`);
     });
 
-// Command: FIX
+// Perintah: FIX (Pemangkasan Fisik Berbasis Interaktif)
 program
     .command('fix')
     .argument('<path>', 'Path to project directory')
@@ -148,18 +154,20 @@ program
             process.exit(1);
         }
 
-        console.log(`\n🔍 Analyzing project at: ${absolutePath}`);
+        console.log(`\n🔍 Menganalisis proyek di: ${chalk.cyan(absolutePath)}`);
         const startTime = performance.now();
-        
         const ruleEngine = new RuleEngine();
         await ruleEngine.loadConfig(absolutePath);
         
+        const spinner = ora('Membangun Graph dan melacak Dead Code...').start();
+
         // Build Graph
         let graph;
         try {
             graph = await buildProjectGraph(absolutePath);
         } catch (err) {
-            console.error('❌ Graph Build Failed:', err.message);
+            spinner.fail('Gagal membangun graf');
+            console.error(err.message);
             process.exit(1);
         }
 
@@ -178,7 +186,7 @@ program
         const rawDeadFiles = allFiles.filter(f => !graph.liveFiles.has(f));
         const deadFiles = rawDeadFiles.filter(f => !ruleEngine.isIgnoredFile(f, absolutePath));
 
-        // 3. Dead Code (Live Files) - PREPARE & DIFF
+        // 3. Pemrosesan Dead Code (Live Files) - PERSIAPAN & PRALIHAT (DIFF)
         const deadCodeReport = [];
         const diffs = [];
         let originalLoc = 0;
@@ -201,8 +209,8 @@ program
                 const ast = parseCode(code);
                 const deadNodes = findDeadCode(ast, file, graph.globalRegistry, ruleEngine);
                 if (deadNodes.length > 0) {
-                    // DRY RUN: Generate New Code in Memory
-                    const newCode = removeDeadCode(ast, deadNodes);
+                    // DRY RUN: Manipulasi ke String Memori untuk disiapkan (menggunakan magic-string)
+                    const newCode = removeDeadCode(code, deadNodes);
                     
                     newLoc += newCode.split('\n').length;
                     newSize += Buffer.byteLength(newCode);
@@ -217,11 +225,12 @@ program
                     newSize += Buffer.byteLength(code);
                 }
             } catch (err) {
-                console.warn(chalk.yellow(`   ⚠️  Warning: Failed to parse ${path.relative(absolutePath, file)}: ${err.message}`));
+                // Ignore parse failures
             }
         }
+        spinner.stop();
 
-        // --- REPORT & SELECTION ---
+        // --- PELAPORAN & SELEKSI PENGHAPUSAN ---
         if (unusedDeps.length === 0 && deadFiles.length === 0 && deadCodeReport.length === 0) {
             console.log('✅ Project is clean.');
             return;
@@ -241,9 +250,16 @@ program
             selectedDepsToRemove = depsToRemove;
         }
 
+        let finalDeadFiles = [];
         if (deadFiles.length > 0) {
-            console.log('\n🗑️  [Dead Files to be DELETED]:');
-            deadFiles.forEach(f => console.log(`   - ${path.relative(absolutePath, f)}`));
+            console.log('\n🗑️  [Dead Files/Orphaned Files Detected]:');
+            const { filesToRemove } = await inquirer.prompt([{
+                type: 'checkbox',
+                name: 'filesToRemove',
+                message: 'Pilih File Yatim (Dead Files) yang ingin Anda HAPUS dari penyimpanan:',
+                choices: deadFiles.map(f => ({ name: path.relative(absolutePath, f), value: f, checked: false }))
+            }]);
+            finalDeadFiles = filesToRemove;
         }
 
         if (diffs.length > 0) {
@@ -258,14 +274,14 @@ program
             });
         }
 
-        if (selectedDepsToRemove.length === 0 && deadFiles.length === 0 && diffs.length === 0) {
-            console.log('\n✅ No physical changes selected. Exiting.');
+        if (selectedDepsToRemove.length === 0 && finalDeadFiles.length === 0 && diffs.length === 0) {
+            console.log('\n✅ Tidak ada perubahan fisik yang dipilih / dieksekusi. Selesai.');
             const endTime = performance.now();
             console.log(`   ⏱️  Analysis Time: ${(endTime - startTime).toFixed(2)} ms`);
             return;
         }
 
-        // --- CONFIRM ---
+        // --- KONFIRMASI AKHIR ---
         const { confirm } = await inquirer.prompt([{
             type: 'confirm',
             name: 'confirm',
@@ -278,37 +294,37 @@ program
             return;
         }
 
-        console.log('\n🚀 Applying fixes...');
+        console.log('\n🚀 Menerapkan pembersihan (Applying Fixes)...');
 
-        // 0. CREATE CHECKPOINT (BACKUP) BEFORE EXECUTION
+        // 0. MENCIPTAKAN TITIK PEMULIHAN (BACKUP) SEBELUM MENGUBAH FISIK FILE
+        const backupSpinner = ora('Membuat File Backup Keamanan (Checkpoint)...').start();
         const filesToBackup = [
-            ...deadFiles,
+            ...finalDeadFiles,
             ...deadCodeReport.map(report => report.file)
         ];
         const backupPackageJson = selectedDepsToRemove.length > 0;
         
         try {
             const backupPath = await createBackup(absolutePath, filesToBackup, backupPackageJson);
-            const chalk = (await import('chalk')).default;
-            console.log(chalk.cyan(`   💾 Backup created at: ${path.relative(absolutePath, backupPath)}`));
+            backupSpinner.succeed(`Keamanan Terjamin! Backup dibuat di folder .deadkiller_backup`);
         } catch (err) {
-            console.warn(chalk.yellow(`   ⚠️  Warning: Failed to create backup. Proceeding anyway. Error: ${err.message}`));
+            backupSpinner.warn(`Gagal membuat backup penuh. Lanjut berisiko: ${err.message}`);
         }
 
-        // EXECUTE
-        // 1. Remove Deps
+        // EKSEKUSI FISIK
+        // 1. Membersihkan Dependensi
         if (selectedDepsToRemove.length > 0) {
             await removeUnusedDependencies(absolutePath, selectedDepsToRemove);
             console.log('   ✅ Dependencies cleaned.');
         }
 
         // 2. Remove Dead Files
-        for (const f of deadFiles) {
+        for (const f of finalDeadFiles) {
             await fs.remove(f);
-            console.log(`   ✅ Deleted file: ${path.relative(absolutePath, f)}`);
+            console.log(`   ✅ Menghapus File: ${path.relative(absolutePath, f)}`);
         }
 
-        // 3. Clean Dead Code (Write from memory to disk)
+        // 3. Membersihkan Dead Code (Menimpa ulang source code ke disk)
         for (const report of deadCodeReport) {
             await fs.writeFile(report.file, report.newCode); // Use the code we already generated
             console.log(`   ✅ Cleaned code: ${path.relative(absolutePath, report.file)}`);
@@ -323,7 +339,7 @@ program
         console.log(`   ⏱️  Analysis Time: ${(endTime - startTime).toFixed(2)} ms`);
     });
 
-// Command: SHOW-DEPS
+// Perintah: SHOW-DEPS (Bedah Dependensi)
 program
     .command('show-deps')
     .argument('<path>', 'Path to project directory')
@@ -369,33 +385,63 @@ program
         }
     });
 
-// Command: VISUALIZE
+// Perintah: VISUALIZE (Keterlacakan Visual Dashboard HTML)
 program
     .command('visualize')
     .argument('<path>', 'Path to project directory')
-    .description('Generate a Mermaid graph of the project structure')
+    .description('Menganalisis Proyek dan menampilkan Code Structure Traceability HTML Dashboard')
     .action(async (targetPath) => {
         const absolutePath = path.resolve(targetPath);
         if (!fs.existsSync(absolutePath)) {
-            console.error(`❌ Error: Path '${absolutePath}' not found.`);
+            console.error(`❌ Error: Path '${absolutePath}' tidak ditemukan.`);
             process.exit(1);
         }
 
-        console.log(`\n🔍 Analyzing project at: ${absolutePath}`);
+        console.log(`\n🔍 Menganalisis Celah Proyek untuk Traceability di: ${chalk.cyan(absolutePath)}`);
+        const spinner = ora('Menambang struktur dan membangun Interactive HTML Map...').start();
 
         try {
             const graph = await buildProjectGraph(absolutePath);
-            const mermaidContent = generateMermaidGraph(graph, absolutePath);
             
-            const outputPath = path.join(absolutePath, 'project-graph.mmd');
-            await fs.writeFile(outputPath, mermaidContent);
+            // Baca Package JSON
+            const pkgPath = path.join(absolutePath, 'package.json');
+            let pkgData = { dependencies: {}, devDependencies: {} };
+            if (fs.existsSync(pkgPath)) {
+                pkgData = await fs.readJson(pkgPath);
+            }
+
+            const htmlContent = generateMermaidGraph(graph, absolutePath, pkgData);
             
-            console.log(`\n✨ Graph generated: ${outputPath}`);
-            console.log('   (Preview this file using Mermaid Live Editor or VSCode extensions)');
+            const outputPath = path.join(absolutePath, 'code-structure-trace.html');
+            await fs.writeFile(outputPath, htmlContent);
+            
+            spinner.succeed(`Berhasil! Dashboard Keterlacakan dibuat: ${outputPath}`);
+            
+            // Buka di Default Browser secara otomatis
+            const { exec } = await import('child_process');
+            let command;
+            switch (process.platform) {
+                case 'darwin': command = `open "${outputPath}"`; break;
+                case 'win32': command = `start "" "${outputPath}"`; break;
+                default: command = `xdg-open "${outputPath}"`; break;
+            }
+            exec(command);
+            
+            console.log(chalk.green('   🌐 Browser lokal Anda akan terbuka untuk menampilkan Dashboard Traceability.'));
         } catch (err) {
-            console.error('❌ Visualization Failed:', err.message);
+            spinner.fail('Visualisasi Gagal');
+            console.error(err.message);
             process.exit(1);
         }
     });
 
-program.parse();
+// 🚀 ENGINE STARTUP ORCHESTRATOR
+if (process.argv.length === 2) {
+    import('../src/ui/wizard.js').then(({ launchWizard }) => {
+        launchWizard();
+    }).catch(err => {
+        console.error("Gagal meluncurkan antarmuka Wizard UI:", err);
+    });
+} else {
+    program.parse(process.argv);
+}

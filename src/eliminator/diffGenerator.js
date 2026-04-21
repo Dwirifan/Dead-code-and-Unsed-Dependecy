@@ -2,21 +2,23 @@ import * as Diff from 'diff';
 import chalk from 'chalk';
 
 /**
- * Generates a terminal-friendly unified diff.
- * @param {string} oldCode - Original source code.
- * @param {string} newCode - Modified source code.
- * @param {string} fileName - Name of the file being diffed.
- * @returns {string} Colored diff output.
+ * Menganalisis perbedaan dua buah string dan mencetaknya dalam bentuk warna-warni (Unified Diff) yang ramah Terminal.
+ * Laporan ini digunakan sebagai pralihat visualisasi keamanan sebelum mengeksekusi penghapusan asli.
+ * 
+ * @param {string} oldCode - Teks kode sumber versi asli/lama.
+ * @param {string} newCode - Teks kode sumber versi modifikasi (setelah pemotongan dead code).
+ * @param {string} fileName - Nama file yang sedang dianalisis.
+ * @returns {string} String keluaran Diff yang sudah diwarnai dengan kapur (Chalk).
  */
 export function generateDiff(oldCode, newCode, fileName) {
     const patch = Diff.createTwoFilesPatch(fileName, fileName, oldCode, newCode, 'Original', 'Modified', { context: 3 });
     const lines = patch.split('\n');
     let output = '';
 
-    // Colorize Output
+    // Pewarnaan Keluaran (Colorize Output)
     lines.forEach(line => {
         if (line.startsWith('Index:') || line.startsWith('===')) {
-            // Skip header noise if desired, or keep it dimmed
+            // Lewati sampah metadata header (Skip header noise)
             return; 
         }
         if (line.startsWith('---') || line.startsWith('+++')) {

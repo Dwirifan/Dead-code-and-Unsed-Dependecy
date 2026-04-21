@@ -14,8 +14,8 @@ export function markUsedExports(ast, globalScope, fileName, globalRegistry, rule
                      return true;
                  }
 
-                 if (!globalRegistry) return true; // Default: conservative, if no registry assume used
-                 // Cross-file Call Graph DCE:
+                 if (!globalRegistry) return true; // Default konservatif: Jika tidak ada registri graf global, asumsikan dipakai
+                 // Evaluasi Silang File Berbasis Call Graph (Ekspor -> Impor):
                  if (globalRegistry.usedExports && fileName) {
                      const fileUsed = globalRegistry.usedExports.get(fileName);
                      if (fileUsed && (fileUsed.has(name) || fileUsed.has('*'))) {
@@ -23,7 +23,7 @@ export function markUsedExports(ast, globalScope, fileName, globalRegistry, rule
                      }
                      return false;
                  }
-                 // Legacy fallback
+                 // Fallback metodologi usang (Global registry lama)
                  return globalRegistry.usages.has(name);
              };
 
@@ -45,7 +45,7 @@ export function markUsedExports(ast, globalScope, fileName, globalRegistry, rule
                      if (checkUsage(node.declaration.name)) globalScope.markUsed(node.declaration.name);
                  }
              }
-             // For CommonJS (module.exports.foo = foo)
+             // Dukungan gaya ekspor CommonJS (module.exports.foo = foo)
              if (node.type === 'AssignmentExpression' && node.left.type === 'MemberExpression' &&
                  node.left.object.type === 'MemberExpression' && node.left.object.object.name === 'module') {
                  if (node.right.type === 'Identifier') {

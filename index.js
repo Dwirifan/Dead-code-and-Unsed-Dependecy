@@ -36,9 +36,9 @@ try {
             console.log(`   [Line ${item.line}] ${item.type} '${item.name}'`);
         });
 
-        // 2. Eliminate
+        // 2. Eliminate (menggunakan magic-string — kirim code string, bukan AST)
         console.log('\n--- Eliminating Dead Code ---');
-        const cleanedCode = removeDeadCode(ast, deadNodes);
+        const cleanedCode = removeDeadCode(codeWithDeadStuff, deadNodes);
         
         console.log('\n--- Result Code ---');
         console.log(cleanedCode);

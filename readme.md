@@ -19,34 +19,43 @@ Proyek Tugas Akhir ini mengembangkan alat bantu (tool) berbasis _Command Line In
     npm install
     ```
 
-## 📖 Cara Penggunaan (Panduan CLI)
+## 📖 Cara Penggunaan (Commands)
 
-### 1. Mode Scan (Analisis & Laporan)
-Menampilkan laporan lengkap kesehatan kode tanpa mengubah apapun.
+DeadKiller dibangun dengan tingkat fleksibilitas super. Anda bisa menjalankannya menggunakan **Menu Interaktif yang ramah pengguna**, atau **Pure Command Line** (cocok untuk automasi CI/CD).
+
+### 🌟 1. The Interactive Wizard Mode (Rekomendasi Utama)
+Perintah ini akan membuka layar antar muka UI/UX yang akan memandu Anda (layaknya *installer* program). Sangat dianjurkan bagi pemula!
 ```bash
-node bin/dce-cli.js scan <path_project>
+node bin/dce-cli.js
 ```
 
-### 2. Mode Fix (Pembersihan Cerdas)
-Melakukan analisis, menampilkan preview perubahan, membuat backup, dan mengeksekusi pembersihan.
-```bash
-node bin/dce-cli.js fix <path_project>
-```
+### 💻 2. Baris Perintah Langsung (Pure CLI)
 
-### 💡 Tips Penggunaan Lainnya
-```bash
-# Lihat semua dependencies terdaftar di package.json
-node bin/dce-cli.js show-deps ./
+- **Mode Pelacakan (Scan)**
+  Hanya membedah dan melacak penyakit kode (*Dry Run*). Sistem mengaudit tanpa menghapus apapun.
+  ```bash
+  node bin/dce-cli.js scan <path_project>
+  ```
 
-# Generate diagram ketergantungan antar file (hasil: project-graph.mmd)
-node bin/dce-cli.js visualize ./
+- **Mode Sapu Bersih (Fix)**
+  Mendeteksi kode mati, meminta konfirmasi (berupa *checkbox* UI), melaksanakan pembedahan presisi mempertahankan *types* TypeScript, lalu **membuat backup keamanan** secara dinamis.
+  ```bash
+  node bin/dce-cli.js fix <path_project>
+  ```
 
-# Scan proyek TypeScript
-node bin/dce-cli.js scan ./my-ts-project
+- **Lacak Arsitektur Kode (Visualizer / Traceability)**
+  Menciptakan **Web Dashboard HTML Interaktif** (memuat Diagram Mermaid & Daftar Dependensi) dan akan segera melempar peramban (*Default Browser*) Anda secara paksa untuk menampilkannya!
+  ```bash
+  node bin/dce-cli.js visualize <path_project>
+  ```
 
-# Jalankan automated test suite
-npm test
-```
+- **Analisis Paket Kosong (Show Dependencies)**
+  Memeriksa manifest `package.json` yang yatim piatu, menguras sumber daya tanpa pernah di-impor (*unused dependencies*).
+  ```bash
+  node bin/dce-cli.js show-deps <path_project>
+  ```
+
+> **Tips:** Variabel `<path_project>` bisa Anda isi dengan `./` jika proyek yang dituju ada di direktori Anda berada.
 
 ## 🧠 Arsitektur dan Alur Kerja Keseluruhan
 
@@ -71,7 +80,7 @@ flowchart TD
     subgraph Graph Phase ["Fase 1: Peta Ketergantungan (Reachability)"]
         direction TB
         C --> D["Cari Entry Point (package.json main / index.js)"]:::process
-        D --> E["astParser.js: Parse file menjadi AST (Acorn + TS Plugin)"]:::process
+        D --> E["astParser.js: Parse file menjadi ESTree AST (@typescript-eslint/typescript-estree)"]:::process
         E --> F["BFS Traversal AST Cari import/require"]:::process
         F --> G{"Semua file yang bisa dicapai?"}:::decision
         G -- Belum --> E
@@ -102,7 +111,7 @@ flowchart TD
         S -- Yes --> BM["backupManager.js: Backup File Asli"]:::process
         BM --> U["dependencyCleaner.js: Hapus dari package.json"]:::action
         U --> V["Hapus Dead Files dari sistem"]:::action
-        V --> W["codeCleaner.js: Hapus Dead Node & Generate kode (Escodegen)"]:::action
+        V --> W["codeCleaner.js: Hapus Dead Node utuh mempertahankan tipe TS (magic-string)"]:::action
         W --> X[/"Tulis kode bersih ke Disk & Tampilkan Impact Metrics"/]:::output
     end
 ```
@@ -185,10 +194,10 @@ Bertugas menemukan semua *dead code* dalam satu file dengan bantuan AST dan poho
 Mekanisme safe-layer. Menggandakan titik penyimpanan sistem file origin pada skema `.deadkiller_backup/backup_{timestamp}/` sehingga file tidak rusak saat operasi eksekusi mode `fix` dijalankan.
 
 ### `src/eliminator/codeCleaner.js` & `src/eliminator/dependencyCleaner.js`
-Algojo eksekusi langsung. Bekerja di *memori komputer* untuk menghilangkan *tree nodes* yang rusak di kode (*codeCleaner.js* dengan `Estraverse`), dan di modul paket (*dependencyCleaner.js*), lalu menyimpan hasil modifikasi murni bersih (*Escodegen*).
+Algojo eksekusi langsung. *codeCleaner.js* bekerja sangat presisi memotong teks mati (`magic-string`) berdasarkan koordinat AST tanpa merusak spasi atau *type annotations* TypeScript. Sementara *dependencyCleaner.js* membersihkan modul sisa di `package.json`.
 
 ## 🔗 Dependensi Pokok
-- **Acorn** & **Acorn-TypeScript**: Untuk mem-parse string JavaScript/TypeScript menjadi AST.
-- **Estraverse**: Traversal dan replace node di AST.
-- **Escodegen**: Regenerasi source code utuh dari AST.
+- **@typescript-eslint/typescript-estree**: *Engine* utama yang mengubah kode JavaScript/TypeScript menjadi format pohon *ESTree* berakurasi standar perusahaan.
+- **Estraverse**: Alat jelajah (*traversal*) dan pelacak setiap percabangan dalam *Scope tree*.
+- **Magic-string**: *Surgical tool* atau *algojo string* untuk memotong dead-code secara langsung (menjamin keaslian kode TypeScript tak terbuang percuma).
 - **Commander.js** & **Inquirer**: Menyusun rangka arsitektur antarmuka CLI.

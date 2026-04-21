@@ -4,7 +4,7 @@ import { parseCode } from '../parser/astParser.js';
 import estraverse from 'estraverse';
 
 /**
- * Tries to resolve a file path accurately (handling .js, .json, /index.js)
+ * Mencoba mensimulasikan resolusi path Node.js secara akurat (Memperkirakan .js, .json, hingga /index.js)
  */
 async function resolvePath(baseDir, relativeImport) {
     // 1. Exact path
@@ -18,26 +18,26 @@ async function resolvePath(baseDir, relativeImport) {
         return null;
     };
 
-    // Check if it's a file directly
+    // Mengecek apakah target mengarah langsung ke sebuah file spesifik
     if (await fs.pathExists(candidate) && (await fs.stat(candidate)).isFile()) return candidate;
     
-    // Check extensions
+    // Menebak ekstensi bila resolusi spesifik gagal
     let found = await tryExtensions(candidate);
     if (found) return found;
 
-    // Check directory (index.js)
+    // Jika target terdeteksi sebagai folder, asumsikan memanggil file `index` di dalamnya
     if (await fs.pathExists(candidate) && (await fs.stat(candidate)).isDirectory()) {
          // try candidate/index.js
          found = await tryExtensions(path.join(candidate, 'index'));
          if (found) return found;
     }
 
-    return null; // Could not resolve locally (might be dynamic or error)
+    return null; // Gagal diresolusi secara lokal (Bisa jadi impor dinamis paksa atau path rusak)
 }
 
 /**
- * Builds a comprehensive project graph starting from entry points.
- * @param {string} projectRoot 
+ * Membangun sebuah graf struktural yang komprehensif merayapi titik masuk (entry point) menggunakan BFS.
+ * @param {string} projectRoot - Direktori proyek
  * @returns {Promise<{ liveFiles: Set<string>, usedPackages: Set<string>, edges: Array, unsafeFiles: Set<string>, globalRegistry: Object }>}
  */
 export async function buildProjectGraph(projectRoot) {
@@ -47,7 +47,7 @@ export async function buildProjectGraph(projectRoot) {
     }
     const pkg = await fs.readJson(pkgPath);
     
-    // A. Identify Entry Point
+    // A. Identifikasi Titik Masuk Sistem (Entry Point)
     let entryFiles = [];
     if (pkg.main) {
         entryFiles.push(path.resolve(projectRoot, pkg.main));
@@ -76,14 +76,14 @@ export async function buildProjectGraph(projectRoot) {
         throw new Error('Could not auto-detect entry point. Please specify "main" in package.json.');
     }
 
-    // B. Dependency Graph Construction (BFS)
+    // B. Pembangunan Graf Keterhubungan dengan Metode Breadth-First Search (BFS)
     const liveFiles = new Set();
     const visitedFiles = new Set();
     const usedPackages = new Set();
     const edges = []; // { from, to }
     const queue = [...entryFiles];
 
-    // C. Bailout Heuristics & Analysis State
+    // C. Status Pencatatan Keamanan (Bailout Heuristics) & Memori Analisis
     const unsafeFiles = new Set();
     const globalRegistry = {
         usedExports: new Map(), // file -> Set of used exported names
@@ -114,7 +114,7 @@ export async function buildProjectGraph(projectRoot) {
             const ast = parseCode(code);
             const importsToResolve = [];
 
-            // Single AST Traversal pass for Module Graph, Call Graph, and Bailout Detection
+            // Sapuan Tunggal Melintasi AST (Satu pass agar efisien O(N)) untuk Graf dan Pendeteksian Kerentanan
             estraverse.traverse(ast, {
                 fallback: 'iteration', // Handle unknown node types (e.g. TypeScript AST nodes)
                 enter: function (node, parent) {
@@ -136,7 +136,7 @@ export async function buildProjectGraph(projectRoot) {
                     // Explicit usages inside CallExpression and MemberExpression 
                     // are now handled locally by actual scope analysis inside deadCodeAnalyzer.
                     
-                    // Mark Declarations to have them tracked (Legacy)
+                    // Mendata Pendeklarasian Ekspor untuk dilacak (Legacy/Penyokong)
                     if (node.type === 'FunctionDeclaration' && node.id) {
                         if (!globalRegistry.exports.has(node.id.name)) {
                             globalRegistry.exports.set(node.id.name, { isUnused: true, file: currentFile }); // Mark
@@ -148,7 +148,7 @@ export async function buildProjectGraph(projectRoot) {
                         }
                     }
 
-                    // --- 3. Dependency Graph Construction (Imports tracking) ---
+                    // --- 3. Pelacakan Instruksi Impor (Sistem Rekat Graf) ---
                     let importPath = null;
                     let importedNames = [];
 
@@ -203,12 +203,12 @@ export async function buildProjectGraph(projectRoot) {
                 }
             });
 
-            // Process local imports
+            // Eksekusi Pembangunan Edge (Garis Silsilah) untuk Impor Lokal
             for (const imp of importsToResolve) {
                 const absolute = await resolvePath(fileDir, imp.path);
                 if (absolute) {
-                    // Record Edge: currentFile -> absolute
-                    edges.push({ from: currentFile, to: absolute });
+                    // Record Edge: currentFile -> absolute (berserta label trace impor)
+                    edges.push({ from: currentFile, to: absolute, names: imp.names });
 
                     if (!globalRegistry.usedExports.has(absolute)) {
                         globalRegistry.usedExports.set(absolute, new Set());
@@ -228,7 +228,7 @@ export async function buildProjectGraph(projectRoot) {
         }
     }
 
-    // Apply Sweep Phase: Reconcile globalRegistry usages against exports
+    // Sapuan Konsiliasi Akhir: Cocokkan referensi global terhadap ekspor yang digunakan
     for (const [name, info] of globalRegistry.exports.entries()) {
         if (globalRegistry.usages.has(name)) {
             info.isUnused = false; // It is used somewhere in the Call Graph

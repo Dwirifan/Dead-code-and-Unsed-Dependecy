@@ -5,14 +5,14 @@ import estraverse from 'estraverse';
 import { parseCode } from '../../parser/astParser.js';
 
 /**
- * Reads package.json and returns a list of all dependencies.
- * @param {string} projectRoot 
- * @returns {Promise<Set<string>>} Set of dependency names
+ * Membaca package.json dan mengembalikan daftar seluruh dependensi yang terdaftar.
+ * @param {string} projectRoot - Path direktori akar proyek
+ * @returns {Promise<Set<string>>} Set berisi nama-nama dependensi NPM
  */
 async function getPackageDependencies(projectRoot) {
     const packageJsonPath = path.join(projectRoot, 'package.json');
     if (!await fs.pathExists(packageJsonPath)) {
-        throw new Error('package.json not found');
+        throw new Error('File package.json tidak ditemukan');
     }
 
     const pkg = await fs.readJson(packageJsonPath);
@@ -25,15 +25,15 @@ async function getPackageDependencies(projectRoot) {
 }
 
 /**
- * Extracts the base package name from an import string.
- * Handles scoped packages (@scope/pkg/sub) -> @scope/pkg
- * Handles regular packages (pkg/sub) -> pkg
- * @param {string} importPath 
- * @returns {string} Base package name
+ * Mengekstraksi nama paket dasar dari string impor.
+ * Menangani scoped packages (@scope/pkg/sub) -> @scope/pkg
+ * Menangani package reguler (pkg/sub) -> pkg
+ * @param {string} importPath - Path impor mentah
+ * @returns {string|null} Nama dasar paket atau null jika merupakan impor lokal
  */
 function getPackageName(importPath) {
-    if (importPath.startsWith('.')) return null; // Ignore relative imports
-    if (path.isAbsolute(importPath)) return null; // Ignore absolute paths
+    if (importPath.startsWith('.')) return null; // Abaikan impor relatif (file lokal)
+    if (path.isAbsolute(importPath)) return null; // Abaikan impor absolut (Sistem File OS)
 
     const parts = importPath.split('/');
     if (importPath.startsWith('@')) {
@@ -43,9 +43,10 @@ function getPackageName(importPath) {
 }
 
 /**
- * Scans all JavaScript files in the project and extracts imported modules.
- * @param {string} projectRoot 
- * @returns {Promise<Set<string>>} Set of used package names
+ * Melacak semua file JavaScript di dalam proyek dan mengeksekusi modul impor
+ * untuk mendata paket NPM apa saja yang secara fisik dipanggil oleh kode.
+ * @param {string} projectRoot - Path direktori akar proyek
+ * @returns {Promise<Set<string>>} Set berisi nama dependensi yang benar-benar dipakai
  */
 async function getUsedDependencies(projectRoot) {
     const usedDeps = new Set();
@@ -58,7 +59,7 @@ async function getUsedDependencies(projectRoot) {
     for (const file of files) {
         try {
             const code = await fs.readFile(file, 'utf-8');
-            // Skip empty files or shell scripts
+            // Lewati file kosong atau skrip shell
             if (!code.trim() || code.startsWith('#!')) continue;
 
             const ast = parseCode(code);
@@ -67,19 +68,18 @@ async function getUsedDependencies(projectRoot) {
                 enter: function (node) {
                     let source = null;
 
-                    // 1. ImportDeclaration: import x from 'y'; import 'y';
+                    // 1. Deklarasi Import: import x from 'y'; import 'y';
                     if (node.type === 'ImportDeclaration' && node.source && node.source.value) {
                         source = node.source.value;
                     }
-                    // 2. CallExpression: require('y');
+                    // 2. Ekspresi Pemanggilan: require('y');
                     else if (node.type === 'CallExpression' && 
                              node.callee.name === 'require' && 
                              node.arguments.length > 0 && 
                              node.arguments[0].type === 'Literal') {
                         source = node.arguments[0].value;
                     }
-                    // 3. Dynamic Import: import('y') - treated as CallExpression with import keyword in some parsers or ImportExpression in newer ones
-                    // Acorn 'latest' parses dynamic import import('x') as ImportExpression
+                    // 3. Impor Dinamis: import('y')
                     else if (node.type === 'ImportExpression' && node.source && node.source.type === 'Literal') {
                         source = node.source.value;
                     }
@@ -94,7 +94,7 @@ async function getUsedDependencies(projectRoot) {
                 }
             });
         } catch (err) {
-            console.warn(`Warning: Failed to parse ${path.basename(file)}: ${err.message}`);
+            console.warn(`Peringatan: Gagal mem-parsing ${path.basename(file)}: ${err.message}`);
         }
     }
 
@@ -102,20 +102,20 @@ async function getUsedDependencies(projectRoot) {
 }
 
 /**
- * Main function to analyze unused dependencies.
- * @param {string} projectRoot 
- * @returns {Promise<string[]>} List of unused dependencies
+ * Logika Utama untuk menganalisis dan mencari Dependensi NPM yang tidak terpakai.
+ * @param {string} projectRoot - Path direktori akar proyek
+ * @returns {Promise<string[]>} Daftar nama dependensi yang yatim/tak terpakai
  */
 export async function findUnusedDependencies(projectRoot) {
-    console.log(`Analyzing dependencies in: ${projectRoot}`);
+    console.log(`Menganalisis dependensi paket NPM di: ${projectRoot}`);
     
     const declaredDeps = await getPackageDependencies(projectRoot);
     const usedDeps = await getUsedDependencies(projectRoot);
 
     const unused = [];
     for (const dep of declaredDeps) {
-        // Special case: definitions/types often used implicitly, but let's stick to strict code usage for now
-        // or dependencies that start with @types/ might be devDependencies not imported in code directly if uses JSDoc
+        // Catatan: Dependensi seperti @types/ mungkin dipakai secara implisit untuk JSDoc
+        // Namun, jika tidak ditemukan pemanggilannya di kode aktual, kita anggap yatim.
         if (!usedDeps.has(dep)) {
             unused.push(dep);
         }
