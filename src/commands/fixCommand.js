@@ -6,6 +6,7 @@ import ora from 'ora';
 import { performance } from 'perf_hooks';
 import { parseCode } from '../parser/astParser.js';
 import { findDeadCode } from '../analyzer/deadcode/deadCodeAnalyzer.js';
+import { findUnusedDependencies } from '../analyzer/dependency/dependencyAnalyzer.js';
 import { removeDeadCode } from '../eliminator/codeCleaner.js';
 import { removeUnusedDependencies } from '../eliminator/dependencyCleaner.js';
 import { buildProjectGraph } from '../analyzer/projectGraph.js';
@@ -102,17 +103,17 @@ async function _fixDirectory(absolutePath, startTime, inquirer) {
     try { graph = await buildProjectGraph(absolutePath); }
     catch (err) { spinner.fail(err.message); process.exit(1); }
 
-    // Dependensi tidak terpakai
-    const pkgPath = path.join(absolutePath, 'package.json');
+    // Dependensi tidak terpakai — dianalisis oleh modul dependencyAnalyzer
     let unusedDeps = [];
-    if (await fs.pathExists(pkgPath)) {
-        const pkg    = await fs.readJson(pkgPath);
-        const allDeps = new Set(Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }));
-        unusedDeps   = [...allDeps].filter(d => !graph.usedPackages.has(d));
+    try {
+        const depReport = await findUnusedDependencies(absolutePath, graph.usedPackages);
+        unusedDeps = depReport.unused;
+    } catch (_) {
+        // package.json tidak ditemukan — lewati analisis dependensi
     }
 
     // Dead files — normalisasi path glob ke format OS lokal
-    const allFiles = (await glob(['**/*.{js,mjs,cjs,ts,tsx,mts}'], {
+    const allFiles = (await glob(['**/*.{js,jsx,mjs,cjs,ts,tsx,mts}'], {
         cwd: absolutePath,
         ignore: ['node_modules/**', 'dist/**', 'test/**', 'tests/**', 'coverage/**'],
         absolute: true

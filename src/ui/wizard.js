@@ -12,7 +12,7 @@ const cliPath = path.resolve(__dirname, '../../bin/dce-cli.js');
 export async function launchWizard() {
     showBanner();
 
-    // 1. Pilih Aksi
+    // 1. Pilih Aksi — dikelompokkan sesuai 3 klasifikasi fitur
     let action;
     try {
         const answer = await inquirer.prompt([
@@ -21,12 +21,15 @@ export async function launchWizard() {
                 name: 'action',
                 message: 'Apa yang ingin Anda lakukan hari ini?',
                 choices: [
+                    new inquirer.Separator('─── Analisis (Read-Only) ───'),
                     { name: '[>] Analisis Proyek          (scan)',      value: 'scan' },
-                    { name: '[*] Bersihkan Proyek          (fix)',       value: 'fix' },
                     { name: '[+] Lihat Dependensi          (show-deps)', value: 'show-deps' },
-                    { name: '[H] Riwayat & Restore Backup  (history)',   value: 'history' },
                     { name: '[~] Buat Diagram Visualisasi  (visualize)', value: 'visualize' },
-                    new inquirer.Separator(),
+                    new inquirer.Separator('─── Tindakan (Write + Backup) ───'),
+                    { name: '[*] Bersihkan Proyek          (fix)',       value: 'fix' },
+                    new inquirer.Separator('─── Pemulihan (Safety Net) ───'),
+                    { name: '[H] Riwayat & Restore Backup  (history)',   value: 'history' },
+                    new inquirer.Separator('────────────────────────────'),
                     { name: '[x] Keluar', value: 'exit' },
                 ]
             }
@@ -72,6 +75,31 @@ export async function launchWizard() {
         execSync(`node "${cliPath}" ${action} "${targetDirectory}"`, { stdio: 'inherit' });
     } catch (error) {
         // Kesalahan sudah ditangani dan di-print oleh proses anak (dce-cli.js)
+    }
+
+    // 4. Setelah scan selesai, tawarkan langsung fix
+    if (action === 'scan') {
+        try {
+            const { wantFix } = await inquirer.prompt([
+                {
+                    type: 'confirm',
+                    name: 'wantFix',
+                    message: 'Mau langsung fix (bersihkan dead code) sekarang?',
+                    default: false
+                }
+            ]);
+
+            if (wantFix) {
+                console.log(uiColors.primary('\n[>>] Melanjutkan ke mode fix...\n'));
+                try {
+                    execSync(`node "${cliPath}" fix "${targetDirectory}"`, { stdio: 'inherit' });
+                } catch (error) {
+                    // Kesalahan sudah ditangani oleh proses anak
+                }
+            }
+        } catch (err) {
+            // Ctrl+C — abaikan saja
+        }
     }
 
     console.log();

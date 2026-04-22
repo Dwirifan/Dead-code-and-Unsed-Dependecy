@@ -7,6 +7,7 @@ import { performance } from 'perf_hooks';
 import { parseCode } from '../parser/astParser.js';
 import { findDeadCode } from '../analyzer/deadcode/deadCodeAnalyzer.js';
 import { buildProjectGraph } from '../analyzer/projectGraph.js';
+import { findUnusedDependencies } from '../analyzer/dependency/dependencyAnalyzer.js';
 import { RuleEngine } from '../analyzer/ruleEngine.js';
 
 /**
@@ -67,22 +68,21 @@ export function registerScanCommand(program) {
             }
             spinner.succeed(`Graf terbentuk: ${graph.liveFiles.size} File Aktif dipetakan.`);
 
-            // Dependensi tidak terpakai
-            const pkgPath = path.join(absolutePath, 'package.json');
-            if (await fs.pathExists(pkgPath)) {
-                const pkg     = await fs.readJson(pkgPath);
-                const allDeps = new Set(Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }));
-                const unused  = [...allDeps].filter(d => !graph.usedPackages.has(d));
-                if (unused.length > 0) {
-                    console.log('\n[+] [Unused Dependencies]:');
-                    unused.forEach(d => console.log(`   - ${d}`));
+            // Dependensi tidak terpakai — dianalisis oleh modul dependencyAnalyzer
+            try {
+                const depReport = await findUnusedDependencies(absolutePath, graph.usedPackages);
+                if (depReport.unused.length > 0) {
+                    console.log(`\n[+] [Unused Dependencies] (${depReport.totalUnused} dari ${depReport.totalDeclared}):`);
+                    depReport.unused.forEach(d => console.log(`   - ${d}`));
                 } else {
                     console.log('[+] [Dependencies]: Clean');
                 }
+            } catch (_) {
+                // package.json tidak ditemukan — lewati analisis dependensi
             }
 
             // Dead files — normalisasi path glob ke format OS lokal
-            const allFiles = (await glob(['**/*.{js,mjs,cjs,ts,tsx,mts}'], {
+            const allFiles = (await glob(['**/*.{js,jsx,mjs,cjs,ts,tsx,mts}'], {
                 cwd: absolutePath,
                 ignore: ['node_modules/**', 'dist/**', 'test/**', 'tests/**', 'coverage/**'],
                 absolute: true

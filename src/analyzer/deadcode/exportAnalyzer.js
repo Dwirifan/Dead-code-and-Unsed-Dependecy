@@ -44,6 +44,14 @@ export function markUsedExports(ast, globalScope, fileName, globalRegistry, rule
                  if (node.declaration.type === 'Identifier') {
                      if (checkUsage(node.declaration.name)) globalScope.markUsed(node.declaration.name);
                  }
+                 // export default function Foo() { ... }
+                 if (node.declaration.type === 'FunctionDeclaration' && node.declaration.id) {
+                     if (checkUsage(node.declaration.id.name)) globalScope.markUsed(node.declaration.id.name);
+                 }
+                 // export default class Bar { ... }
+                 if (node.declaration.type === 'ClassDeclaration' && node.declaration.id) {
+                     if (checkUsage(node.declaration.id.name)) globalScope.markUsed(node.declaration.id.name);
+                 }
              }
              // Dukungan gaya ekspor CommonJS (module.exports.foo = foo)
              if (node.type === 'AssignmentExpression' && node.left.type === 'MemberExpression' &&

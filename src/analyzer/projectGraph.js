@@ -11,7 +11,7 @@ async function resolvePath(baseDir, relativeImport) {
     let candidate = path.resolve(baseDir, relativeImport);
     
     const tryExtensions = async (p) => {
-        const extensions = ['.js', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.json'];
+        const extensions = ['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.json'];
         for (const ext of extensions) {
             if (await fs.pathExists(p + ext)) return p + ext;
         }

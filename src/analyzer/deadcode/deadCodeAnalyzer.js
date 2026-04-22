@@ -30,6 +30,20 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, rul
                 currentScope = newScope;
                 scopeStack.push(newScope);
                 scopeTypeStack.push('function');
+
+                // Deteksi Self-Reference (Rekursi):
+                // Tandai nama fungsi pemilik scope ini agar self-call tidak dihitung
+                // sebagai penggunaan eksternal. Tanpa ini, fungsi rekursif yang tidak
+                // dipanggil dari luar akan lolos deteksi dead code.
+                if (node.type === 'FunctionDeclaration' && node.id) {
+                    // function factorial(n) { ... factorial(n-1) ... }
+                    newScope.selfName = node.id.name;
+                } else if (parent && parent.type === 'VariableDeclarator'
+                           && parent.id && parent.id.type === 'Identifier') {
+                    // const factorial = function(n) { ... factorial(n-1) ... }
+                    // const factorial = (n) => ... factorial(n-1) ...
+                    newScope.selfName = parent.id.name;
+                }
             } else if (node.type === 'BlockStatement') {
                 const isFunctionBody = parent && ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(parent.type);
                 if (!isFunctionBody) {
