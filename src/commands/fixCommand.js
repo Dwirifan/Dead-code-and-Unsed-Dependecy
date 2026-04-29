@@ -9,10 +9,10 @@ import { findDeadCode } from '../analyzer/deadcode/deadCodeAnalyzer.js';
 import { findUnusedDependencies } from '../analyzer/dependency/dependencyAnalyzer.js';
 import { removeDeadCode } from '../eliminator/codeCleaner.js';
 import { removeUnusedDependencies } from '../eliminator/dependencyCleaner.js';
-import { buildProjectGraph } from '../analyzer/projectGraph.js';
 import { generateDiff } from '../eliminator/diffGenerator.js';
 import { createBackup } from '../eliminator/backupManager.js';
 import { RuleEngine } from '../analyzer/ruleEngine.js';
+import { buildGraphWithInteractiveFallback } from './commandHelpers.js';
 
 /**
  * Mendaftarkan perintah `fix` ke instance Commander yang diberikan.
@@ -100,8 +100,8 @@ async function _fixDirectory(absolutePath, startTime, inquirer) {
     await ruleEngine.loadConfig(absolutePath);
 
     let graph;
-    try { graph = await buildProjectGraph(absolutePath); }
-    catch (err) { spinner.fail(err.message); process.exit(1); }
+    try { graph = await buildGraphWithInteractiveFallback(absolutePath, ruleEngine, spinner); }
+    catch (err) { if (spinner) spinner.fail(err.message); process.exit(1); }
 
     // Dependensi tidak terpakai — dianalisis oleh modul dependencyAnalyzer
     let unusedDeps = [];
@@ -128,6 +128,10 @@ async function _fixDirectory(absolutePath, startTime, inquirer) {
     let originalLoc = 0, originalSize = 0, newLoc = 0, newSize = 0;
 
     for (const file of graph.liveFiles) {
+        // Skip file JSON dan node_modules (tidak bisa di-parse sebagai JS/TS)
+        const ext = path.extname(file);
+        if (ext === '.json' || file.includes('node_modules')) continue;
+
         try {
             const code    = await fs.readFile(file, 'utf-8');
             originalLoc  += code.split('\n').length;

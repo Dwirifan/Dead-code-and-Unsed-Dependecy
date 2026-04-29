@@ -2,8 +2,9 @@ import path from 'path';
 import fs from 'fs-extra';
 import chalk from 'chalk';
 import ora from 'ora';
-import { buildProjectGraph } from '../analyzer/projectGraph.js';
 import { generateMermaidGraph } from '../analyzer/graphVisualizer.js';
+import { RuleEngine } from '../analyzer/ruleEngine.js';
+import { buildGraphWithInteractiveFallback } from './commandHelpers.js';
 
 /**
  * Mendaftarkan perintah `visualize` ke instance Commander yang diberikan.
@@ -25,7 +26,9 @@ export function registerVisualizeCommand(program) {
             const spinner = ora('Menambang struktur dan membangun Interactive HTML Map...').start();
 
             try {
-                const graph = await buildProjectGraph(absolutePath);
+                const ruleEngine = new RuleEngine();
+                await ruleEngine.loadConfig(absolutePath);
+                const graph = await buildGraphWithInteractiveFallback(absolutePath, ruleEngine, spinner);
 
                 const pkgPath = path.join(absolutePath, 'package.json');
                 let pkgData   = { dependencies: {}, devDependencies: {} };

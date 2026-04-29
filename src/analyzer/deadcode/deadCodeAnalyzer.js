@@ -5,6 +5,7 @@ import { extractIdentifiers } from './destructuringExtractor.js';
 import { findFunctionScope } from './scopeHelpers.js';
 import { findUnreachableBranches } from './branchAnalyzer.js';
 import { markUsedExports } from './exportAnalyzer.js';
+import { findDuplicateConditions } from './logicAnalyzer.js';
 
 // Logika Analisis Utama
 function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, ruleEngine = null) {
@@ -63,7 +64,7 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, rul
                     ? findFunctionScope(scopeStack, scopeTypeStack)
                     : currentScope;
                 
-                identifiers.forEach(({ name, node: idNode }) => {
+                identifiers.forEach(({ name }) => {
                     // Simpan referensi ke VariableDeclarator (node) dan VariableDeclaration (parent)
                     // agar magic-string bisa menghapus seluruh deklarasi, bukan hanya nama identifier
                     targetScope.addDeclaration(name, 'Variable', node.loc.start.line, node, parent);
@@ -190,6 +191,10 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, rul
 
     const unreachableNodes = findUnreachableBranches(ast);
     deadCode.push(...unreachableNodes);
+
+    // Phase 5: Analisis Logika (Duplicate Conditions)
+    const duplicateConditions = findDuplicateConditions(ast);
+    deadCode.push(...duplicateConditions);
 
     return deadCode;
 }

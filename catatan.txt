@@ -842,3 +842,25 @@ REKOMENDASI UNTUK BAB TUGAS AKHIR
   - Argumen keamanan: hapus deps = kurangi attack surface [6]
 
 ================================================
+BATASAN & KELEMAHAN SISTEM (LIMITATION OF STUDY)
+UNTUK BAB PEMBAHASAN TUGAS AKHIR
+================================================
+Dalam teori Analisis Statis (Static Code Analysis), mencapai tingkat kesempurnaan 100% adalah mustahil secara matematis (Halting Problem). Engine DeadKiller sengaja didesain konservatif untuk mengutamakan keamanan kode pengguna. Berikut adalah 4 batasan utama engine:
+
+1. Properti Objek (MemberExpression Tree Shaking)
+   - Masalah: Engine melacak 'Scope Variabel', bukan struktur internal objek. Jika ada `const config = { a: 1, b: 2 }; console.log(config.a);`, engine akan menganggap seluruh objek `config` terpakai (Live). Properti `b` yang mati tidak akan dihapus.
+   - Alasan Pembatasan: Menghapus properti objek secara statis sangat berbahaya di JavaScript karena objek sering dimutasi secara dinamis atau dikirimkan via API (contoh: JSON.stringify). Bundler raksasa seperti Webpack pun umumnya menghindari tree-shaking properti internal objek demi keamanan.
+
+2. Mutual Recursion (Rekursi Silang / Lingkaran Setan)
+   - Masalah: Jika Fungsi A memanggil Fungsi B, dan Fungsi B memanggil Fungsi A, tetapi tidak ada satupun pemanggilan dari luar mereka berdua, secara logika mereka berdua adalah Dead Code. Namun engine akan menganggap mereka saling membutuhkan (Live) karena sistem pencocokan referensi antar Scope.
+   - Solusi Teoritis: Menggunakan "Reachability Graph" (Graf Ketercapaian) dengan menelusuri rute eksekusi langsung dari akar/global. Ini adalah pengembangan masa depan yang bagus untuk disarankan (Future Work).
+
+3. Constant Propagation / Data-Flow Analysis
+   - Masalah: Engine hanya mengevaluasi nilai literal langsung (seperti if(false)), namun gagal melacak alur data variabel. Contoh: `const isDebug = false; if(isDebug) { ... }`. Blok 'if' ini secara logika adalah dead code, namun engine akan menganggap 'isDebug' dipakai, sehingga blok di dalamnya tidak dihapus.
+   - Alasan Pembatasan: Membangun Control Flow Graph (CFG) yang sanggup mengingat status state variabel adalah materi Compiler Theory tingkat lanjut yang melebihi ruang lingkup skripsi S1.
+
+4. Ketergantungan Titik Masuk (Multi-Entry HTML) [SUDAH DISELESAIKAN ✅]
+   - Masalah Lama: Engine gagal membaca file yang tidak terdaftar di package.json, menganggap script terpisah (seperti custom script di HTML) sebagai Dead Files secara keliru.
+   - Status Penyelesaian: Telah diselesaikan secara sempurna pada 23 April 2026 melalui fitur 'Custom Entry Points' pada .deadkillerrc.json. Pengguna kini bebas menentukan Node Akar secara manual.
+
+================================================

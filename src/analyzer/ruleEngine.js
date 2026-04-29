@@ -11,7 +11,8 @@ export class RuleEngine {
         this.rules = {
             ignorePrefixedVariables: "^_", // Abaikan variabel berewalan '_'
             preserveExports: true,         // Lindungi fungsi/variabel yg di-export
-            preserveFiles: []              // Lindungi file dari penghapusan
+            preserveFiles: [],             // Lindungi file dari penghapusan
+            entryPoints: []                // Entry points khusus tambahan
         };
     }
 
@@ -66,5 +67,18 @@ export class RuleEngine {
             // Bisa menggunakan simple string match (atau minimatch untuk wildcard ke depan)
             return relativePath.includes(pattern);
         });
+    }
+
+    /**
+     * Menyimpan konfigurasi ke file `.deadkillerrc.json` di root project.
+     * @param {string} projectRoot Lokasi root project
+     */
+    async saveConfig(projectRoot) {
+        const configPath = path.join(projectRoot, '.deadkillerrc.json');
+        try {
+            await fs.writeJson(configPath, this.rules, { spaces: 2 });
+        } catch (err) {
+            console.error(`[RuleEngine] Gagal menyimpan konfigurasi: ${err.message}`);
+        }
     }
 }

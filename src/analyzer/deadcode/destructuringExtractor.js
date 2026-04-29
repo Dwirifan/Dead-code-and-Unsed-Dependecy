@@ -23,7 +23,11 @@ export function extractIdentifiers(pattern) {
                 if (prop.type === 'RestElement') {
                     identifiers.push(...extractIdentifiers(prop.argument));
                 } else if (prop.type === 'Property') {
-                    identifiers.push(...extractIdentifiers(prop.value));
+                    const extracted = extractIdentifiers(prop.value);
+                    // Ganti referensi AST node ke level 'Property'
+                    // Agar saat magic-string menghapus, seluruh "kunci: nilai" terhapus, bukan cuma nilainya
+                    extracted.forEach(item => item.node = prop);
+                    identifiers.push(...extracted);
                 }
             }
             break;
