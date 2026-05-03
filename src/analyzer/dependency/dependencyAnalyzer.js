@@ -57,6 +57,24 @@ export async function getDeclaredDependencies(projectRoot) {
 export async function findUnusedDependencies(projectRoot, usedPackages) {
     const { runtimeDeps, devDeps } = await getDeclaredDependencies(projectRoot);
 
+    // Inject Implicit Framework Dependencies
+    // Framework modern seperti Next.js, Create React App (react-scripts), atau Vite
+    // seringkali menyertakan dependensi secara implisit tanpa instruksi `import` eksplisit di kode.
+    const implicitDependencies = new Map([
+        ['next', ['react', 'react-dom']],
+        ['react-scripts', ['react', 'react-dom']],
+        ['@vitejs/plugin-react', ['react', 'react-dom']],
+        ['@vitejs/plugin-react-swc', ['react', 'react-dom']]
+    ]);
+
+    // Jika framework terdeteksi (baik di package.json atau kode), tambahkan paket implisit ke `usedPackages`
+    const allDeclared = new Set([...runtimeDeps, ...devDeps]);
+    for (const [framework, implicitlyUsed] of implicitDependencies.entries()) {
+        if (allDeclared.has(framework) || usedPackages.has(framework)) {
+            implicitlyUsed.forEach(pkg => usedPackages.add(pkg));
+        }
+    }
+
     // Bandingkan: hanya runtime dependencies vs yang benar-benar dipakai
     const unused = [];
     for (const dep of runtimeDeps) {

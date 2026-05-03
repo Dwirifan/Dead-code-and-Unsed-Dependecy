@@ -2,7 +2,7 @@ import path from 'path';
 import fs from 'fs-extra';
 import chalk from 'chalk';
 import ora from 'ora';
-import { buildProjectGraph } from '../analyzer/projectGraph.js';
+import { buildProjectGraph } from '../analyzer/graph/projectGraph.js';
 import { RuleEngine } from '../analyzer/ruleEngine.js';
 import { findUnusedDependencies } from '../analyzer/dependency/dependencyAnalyzer.js';
 

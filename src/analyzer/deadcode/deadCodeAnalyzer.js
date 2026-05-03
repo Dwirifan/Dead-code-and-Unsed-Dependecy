@@ -1,4 +1,5 @@
 import estraverse from 'estraverse';
+import { visitorKeys as tsVisitorKeys } from '@typescript-eslint/visitor-keys';
 import { Scope } from './scope.js';
 import { isReference } from './isReference.js';
 import { extractIdentifiers } from './destructuringExtractor.js';
@@ -6,6 +7,10 @@ import { findFunctionScope } from './scopeHelpers.js';
 import { findUnreachableBranches } from './branchAnalyzer.js';
 import { markUsedExports } from './exportAnalyzer.js';
 import { findDuplicateConditions } from './logicAnalyzer.js';
+import { findUnusedClassMethods } from './classAnalyzer.js';
+
+// Gabungkan Visitor Keys ESTree standar dengan ekstrasi TypeScript/JSX
+const visitorKeys = { ...estraverse.VisitorKeys, ...tsVisitorKeys };
 
 // Logika Analisis Utama
 function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, ruleEngine = null) {
@@ -20,7 +25,8 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, rul
 
     // Phase 1: Murni memetakan Variable Scope & Referensi Variabel
     estraverse.traverse(ast, {
-        fallback: 'iteration', 
+        fallback: 'iteration',
+        keys: visitorKeys,
         enter: function (node, parent) {
             parentStack.push(node);
 
@@ -45,6 +51,13 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, rul
                     // const factorial = (n) => ... factorial(n-1) ...
                     newScope.selfName = parent.id.name;
                 }
+            } else if (node.type === 'ClassDeclaration' || node.type === 'ClassExpression') {
+                // Class Body mendapatkan scope sendiri agar method-nya bisa dilacak
+                const newScope = new Scope(currentScope);
+                allScopes.push(newScope);
+                currentScope = newScope;
+                scopeStack.push(newScope);
+                scopeTypeStack.push('class');
             } else if (node.type === 'BlockStatement') {
                 const isFunctionBody = parent && ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(parent.type);
                 if (!isFunctionBody) {
@@ -77,6 +90,13 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, rul
                 }
             }
 
+            // Pendataan Deklarasi Class (agar class tanpa penggunaan terdeteksi)
+            if (node.type === 'ClassDeclaration' && node.id) {
+                if (currentScope.parent) {
+                    currentScope.parent.addDeclaration(node.id.name, 'Variable', node.loc.start.line, node);
+                }
+            }
+
             // Evaluasi Parameter Fungsi
             if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)) {
                 node.params.forEach(param => {
@@ -96,17 +116,55 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, rul
                 });
             }
 
-            // Pelacakan Referensi Penggunaan
-            if (node.type === 'Identifier') {
+            // Pendataan TypeScript-only Deklarasi (Interface, Type Alias, Enum)
+            if (node.type === 'TSInterfaceDeclaration' && node.id) {
+                currentScope.addDeclaration(node.id.name, 'Variable', node.loc.start.line, node);
+            }
+            if (node.type === 'TSTypeAliasDeclaration' && node.id) {
+                currentScope.addDeclaration(node.id.name, 'Variable', node.loc.start.line, node);
+            }
+            if (node.type === 'TSEnumDeclaration' && node.id) {
+                currentScope.addDeclaration(node.id.name, 'Variable', node.loc.start.line, node);
+            }
+
+            // Pelacakan Referensi Penggunaan (Read vs Write Differentiation)
+            if (node.type === 'Identifier' || node.type === 'JSXIdentifier') {
                 const grandParent = parentStack.length >= 3 ? parentStack[parentStack.length - 3] : null;
                 if (isReference(node, parent, grandParent)) {
-                    currentScope.addReference(node.name);
+                    // Tentukan apakah ini konteks WRITE (assignment target) atau READ
+                    const isWriteContext = (
+                        // a = 10 (left side of assignment, bukan compound +=, -=, dll)
+                        (parent.type === 'AssignmentExpression' && parent.left === node && parent.operator === '=') ||
+                        // a++ atau a--
+                        (parent.type === 'UpdateExpression')
+                    );
+
+                    // Compound assignment (a += 10) → READ + WRITE (perlu baca nilai lama)
+                    const isCompoundWrite = (
+                        parent.type === 'AssignmentExpression' && parent.left === node && parent.operator !== '='
+                    );
+
+                    if (isCompoundWrite) {
+                        // +=, -=, *=, dll → variabel DIBACA lalu ditulis, jadi tetap READ
+                        currentScope.addReadReference(node.name);
+                        currentScope.addWriteReference(node.name);
+                    } else if (isWriteContext) {
+                        // Pure write (a = 10) → hanya WRITE, TIDAK menandai used
+                        currentScope.addWriteReference(node.name);
+                    } else {
+                        // Normal read (console.log(a), return a, dst)
+                        currentScope.addReadReference(node.name);
+                    }
                 }
             }
         },
         leave: function (node, parent) {
             parentStack.pop();
             if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)) {
+                scopeStack.pop();
+                scopeTypeStack.pop();
+                currentScope = scopeStack[scopeStack.length - 1];
+            } else if (node.type === 'ClassDeclaration' || node.type === 'ClassExpression') {
                 scopeStack.pop();
                 scopeTypeStack.pop();
                 currentScope = scopeStack[scopeStack.length - 1];
@@ -118,7 +176,8 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, rul
                     currentScope = scopeStack[scopeStack.length - 1];
                 }
             }
-        }
+        },
+        keys: visitorKeys
     });
 
     // Phase 2: Hubungkan Expor / Lintas Modul
@@ -179,9 +238,14 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, rul
                    }
                }
 
+               // Tentukan tipe: apakah Write-Only atau benar-benar tidak pernah disentuh
+               const effectiveType = (info.writeCount > 0 && info.readCount === 0)
+                   ? 'WriteOnly'
+                   : info.type;
+
                deadCode.push({
                    name,
-                   type: info.type,
+                   type: effectiveType,
                    line: info.line,
                    node: targetNode
                });
@@ -195,6 +259,10 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, rul
     // Phase 5: Analisis Logika (Duplicate Conditions)
     const duplicateConditions = findDuplicateConditions(ast);
     deadCode.push(...duplicateConditions);
+
+    // Phase 6: Simple Type Inference — Unused Class Methods
+    const unusedMethods = findUnusedClassMethods(ast, globalRegistry);
+    deadCode.push(...unusedMethods);
 
     return deadCode;
 }

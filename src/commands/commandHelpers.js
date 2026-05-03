@@ -1,6 +1,6 @@
 import inquirer from 'inquirer';
 import chalk from 'chalk';
-import { buildProjectGraph } from '../analyzer/projectGraph.js';
+import { buildProjectGraph } from '../analyzer/graph/projectGraph.js';
 
 /**
  * Membangun Project Graph dengan fallback prompt interaktif

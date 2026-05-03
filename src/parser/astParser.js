@@ -18,17 +18,43 @@ const PARSER_OPTIONS = {
  * @returns {object} AST node root (Program) berformat ESTree-compatible.
  * @throws {Error} Jika parsing gagal karena sintaks tidak valid.
  */
-export function parseCode(codeString, options = {}) {
+export class ParseError extends Error {
+    constructor(message, filePath, line, column) {
+        super(message);
+        this.name = 'ParseError';
+        this.filePath = filePath;
+        this.line = line;
+        this.column = column;
+    }
+}
+
+/**
+ * Mem-parsing string kode JavaScript atau TypeScript menjadi Abstract Syntax Tree (AST)
+ * berformat ESTree yang kompatibel dengan estraverse.
+ *
+ * @param {string} codeString - Kode sumber yang akan di-parse.
+ * @param {string} [filePath] - Path file (untuk error reporting dan resolusi TypeScript).
+ * @param {object} [options] - Opsi tambahan untuk menimpa konfigurasi default parser.
+ * @returns {object} AST node root (Program) berformat ESTree-compatible.
+ * @throws {ParseError} Jika parsing gagal karena sintaks tidak valid.
+ */
+export function parseCode(codeString, filePath = 'unknown', options = {}) {
     if (typeof codeString !== 'string') {
-        throw new Error('parseCode: input harus berupa string kode sumber.');
+        throw new Error(`[Internal Error] parseCode: input harus berupa string kode sumber. Path: ${filePath}`);
     }
 
     try {
-        return parse(codeString, { ...PARSER_OPTIONS, ...options });
+        return parse(codeString, { 
+            ...PARSER_OPTIONS, 
+            filePath, // Mengirim filePath ke parser untuk konteks yang lebih baik
+            ...options 
+        });
     } catch (error) {
-        const location = error.lineNumber
-            ? ` (baris ${error.lineNumber}, kolom ${error.column})`
-            : '';
-        throw new Error(`Gagal parsing kode${location}: ${error.message}`);
+        throw new ParseError(
+            `Gagal parsing kode: ${error.message}`,
+            filePath,
+            error.lineNumber || null,
+            error.column || null
+        );
     }
 }

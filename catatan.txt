@@ -1,57 +1,74 @@
 ================================================
 CATATAN HARIAN - PROYEK DCE (DEADKILLER CLI)
 ================================================
-Terakhir diperbarui: 2026-04-22
+Terakhir diperbarui: 2026-05-03
 
 ================================================
-PEMAHAMAN STRUKTUR PROYEK & RELASI ANTAR FILE
+BAB ARSITEKTUR & PENJELASAN MODUL (Untuk Skripsi)
 ================================================
 
-DeadKiller CLI adalah tool Node.js (ESM) untuk mendeteksi dan menghapus
-dead code serta dependensi NPM yang tidak terpakai secara otomatis.
-Tech stack utama: @typescript-eslint/typescript-estree (parser AST),
-estraverse (traversal AST), magic-string (manipulasi string presisi),
-commander (CLI framework), inquirer (interactive prompts), chalk (terminal colors).
+DeadKiller dirancang menggunakan arsitektur Modular / Single Responsibility Principle (SRP).
+Tujuannya agar sistem sangat scalable: jika ada sintaks JavaScript/TypeScript baru di masa depan,
+kita hanya perlu menambahkan satu file modul tanpa mengganggu stabilitas Core Traversal Engine.
+
+────────────────────────────────────────────────
+1. MODUL DEPENDENCY (NPM Packages)
+────────────────────────────────────────────────
+  src/analyzer/dependency/dependencyAnalyzer.js
+  Tugas: Modul ini terpisah murni untuk menganalisis package.json.
+  - Membaca daftar `dependencies` (runtime dependencies).
+  - Melewatkan (bypass) `devDependencies` karena mereka adalah alat bantu (webpack, prettier)
+    yang dipanggil via CLI, bukan melalui import di dalam source code.
+  - Membandingkan daftar dependencies dengan `usedPackages` hasil dari Graph BFS.
+
+────────────────────────────────────────────────
+2. MODUL DEAD CODE (AST Traversal)
+────────────────────────────────────────────────
+  Logika deteksi "Dead Code" dipecah menjadi 1 Orkestrator dan 6 File Pasukan Khusus:
+
+  [Orkestrator Utama]
+  ├── deadCodeAnalyzer.js
+  │   Tugas: Core Traversal Loop. Menelusuri Abstract Syntax Tree (AST) secara keseluruhan.
+  │   Ibarat "Pabrik Utama", file ini yang memetakan Scope, mendaftar semua Identifier, 
+  │   dan memanggil fungsi detektif dari file-file di bawah ini.
+
+  [Pasukan Khusus / Helpers]
+  ├── scope.js & scopeHelpers.js
+  │   Tugas: Mencatat siklus hidup variabel (Lexical Scoping). Ibarat memori RAM sementara.
+  │
+  ├── isReference.js
+  │   Tugas: Membedakan mana "Deklarasi" (const a = 1) dan mana "Referensi" (console.log(a)).
+  │   Sangat krusial untuk mencegah penghapusan variabel yang sedang dipakai.
+  │
+  ├── destructuringExtractor.js
+  │   Tugas: Membedah sintaks JavaScript modern seperti `{ nama, umur } = user` atau `[a, b] = arr`.
+  │
+  ├── branchAnalyzer.js
+  │   Tugas: Detektif untuk `UnreachableBranch` (misal kode di bawah `return` atau `if(false)`).
+  │
+  ├── logicAnalyzer.js
+  │   Tugas: Detektif untuk `DuplicateCondition` (misal `if (x) {} else if (x) {}`).
+  │
+  └── exportAnalyzer.js
+      Tugas: Menganalisis keamanan ekspor (lintas-modul) untuk `preserveExports` rule.
 
 ────────────────────────────────────────────────
 POHON DIREKTORI (TREE)
 ────────────────────────────────────────────────
 
   tugas-akhir/
-  ├── package.json              # Manifest: nama "tugas-akhir", type: module (ESM)
-  │                             #   main → index.js
-  │                             #   bin.deadkiller → ./bin/dce-cli.js
-  ├── index.js                  # Demo/playground: contoh penggunaan API secara programmatic
+  ├── package.json              # Manifest dan Dependencies
   ├── bin/
-  │   └── dce-cli.js            # ★ Entry point CLI utama (thin ~49 baris)
+  │   └── dce-cli.js            # Entry point CLI utama
   ├── src/
-  │   ├── parser/
-  │   │   └── astParser.js      # Modul parsing kode → AST
-  │   ├── analyzer/
-  │   │   ├── deadcode/
-  │   │   │   ├── deadCodeAnalyzer.js       # Koordinator utama analisis dead code
-  │   │   │   ├── scope.js                  # Kelas Scope (lexical environment)
-  │   │   │   ├── scopeHelpers.js           # Helper: cari function scope untuk `var`
-  │   │   │   ├── isReference.js            # Helper: bedakan deklarasi vs referensi
-  │   │   │   ├── destructuringExtractor.js # Helper: ekstrak identifier dari destructuring
-  │   │   │   ├── exportAnalyzer.js         # Helper: analisis ekspor lintas-modul
-  │   │   │   └── branchAnalyzer.js         # Helper: deteksi unreachable branches
-  │   │   ├── dependency/
-  │   │   │   └── dependencyAnalyzer.js     # ⚠ DEAD FILE — tidak diimport siapapun
-  │   │   ├── projectGraph.js               # BFS graph builder: liveFiles, edges, usedPackages
-  │   │   ├── ruleEngine.js                 # Mesin aturan (.deadkillerrc.json)
-  │   │   └── graphVisualizer.js            # Generator HTML dashboard (vis.js Network)
-  │   ├── eliminator/
-  │   │   ├── codeCleaner.js        # Penghapusan dead code via magic-string
-  │   │   ├── diffGenerator.js      # Preview diff berwarna (chalk + diff library)
-  │   │   ├── backupManager.js      # Pembuat checkpoint backup sebelum fix
-  │   │   ├── restoreManager.js     # Daftar/restore/hapus checkpoint backup
-  │   │   └── dependencyCleaner.js  # Hapus dependensi dari package.json
+  │   ├── parser/               # Mengubah String Kode menjadi AST (ESTree)
+  │   ├── analyzer/             # Mesin Logika (Graph, DeadCode, Dependency, RuleEngine)
+  │   ├── eliminator/           # Mesin Eksekusi (MagicString, Hapus Kode, Backup/Restore)
+  │   └── commands/             # Antarmuka CLI (Command Scan, Fix, History, ShowDeps) dari package.json
   │   ├── commands/
   │   │   ├── scanCommand.js        # Perintah: deadkiller scan <path>
   │   │   ├── fixCommand.js         # Perintah: deadkiller fix <path>
   │   │   ├── showDepsCommand.js    # Perintah: deadkiller show-deps <path>
-  │   │   ├── visualizeCommand.js   # Perintah: deadkiller visualize <path>
   │   │   └── historyCommand.js     # Perintah: deadkiller history <path>
   │   └── ui/
   │       ├── wizard.js             # Interactive wizard (menu tanpa argumen)
@@ -456,14 +473,18 @@ PRIORITAS TINGGI:
         - Arsitektur pipeline lengkap sesuai judul TA:
           projectGraph (BFS → usedPackages) → dependencyAnalyzer (analisis)
           → dependencyCleaner (eliminasi dari package.json)
-
+[ ] 4. Peningkatan Safety & Confidence (Hasil Audit 2026-05-04)
+        - Implementasi 'Confidence Score' (High/Medium/Low) pada laporan.
+        - Berikan label Status (Safe / Review / Risky) di terminal.
+        - Tambahkan sistem 'Bailout Warning' eksplisit untuk file unsafe (eval, dll).
+        - Pastikan auto-fix hanya menyentuh temuan berkategori 'Safe'.
 
 PRIORITAS SEDANG:
-[ ] 4. Config file .deadkillerrc.json
+[ ] 5. Config file .deadkillerrc.json
         - Dokumen format opsi yang tersedia (ignore patterns, entry overrides)
-[ ] 5. Output JSON mode
+[ ] 6. Output JSON mode
         - Tambahkan flag --json untuk scan agar bisa dipakai di CI/CD pipeline
-[ ] 6. Perbaiki tampilan diff di terminal
+[ ] 7. Perbaiki tampilan diff di terminal
         - Diff saat ini menggunakan warna chalk, tapi format bisa lebih rapi
 
 PRIORITAS RENDAH (untuk pengembangan lebih lanjut):

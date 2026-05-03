@@ -19,9 +19,10 @@ export function removeDeadCode(codeString, deadNodes) {
 
     // Sortir deadNodes berdasarkan posisi range[0] secara menurun (dari belakang ke depan)
     // agar penghapusan tidak menggeser indeks node yang belum dihapus.
-    // PENTING: Jangan hapus 'DuplicateCondition' (mencegah syntax error 'else' menggantung)
-    //          dan 'Parameter' (menghapus parameter bisa merusak API signature / callback contract).
-    const UNFIXABLE_TYPES = new Set(['DuplicateCondition', 'Parameter']);
+    // PENTING: Jangan hapus 'DuplicateCondition' (mencegah syntax error 'else' menggantung),
+    //          'Parameter' (menghapus parameter bisa merusak API signature / callback contract),
+    //          dan 'ClassMethod' (method mungkin dipanggil via inheritance atau dynamic dispatch).
+    const UNFIXABLE_TYPES = new Set(['DuplicateCondition', 'Parameter', 'ClassMethod']);
     const sortedNodes = [...deadNodes]
         .filter(d => d.node && d.node.range && !UNFIXABLE_TYPES.has(d.type))
         .sort((a, b) => b.node.range[0] - a.node.range[0]);

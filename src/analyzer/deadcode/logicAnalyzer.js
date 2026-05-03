@@ -36,6 +36,7 @@ export function findDuplicateConditions(ast) {
     const visitedIfs = new Set();
 
     estraverse.traverse(ast, {
+        fallback: 'iteration',
         enter(node) {
             // 1. Cek IfStatement berantai (if ... else if)
             if (node.type === 'IfStatement') {

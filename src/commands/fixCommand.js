@@ -61,7 +61,7 @@ async function _fixSingleFile(absolutePath, startTime, inquirer) {
     try { code = await fs.readFile(absolutePath, 'utf-8'); }
     catch (e) { console.error(`[ERROR] Tidak bisa membaca file: ${e.message}`); process.exit(1); }
 
-    const ast        = parseCode(code);
+    const ast        = parseCode(code, filePath);
     const ruleEngine = new RuleEngine();
     const deadNodes  = findDeadCode(ast, absolutePath, new Map(), ruleEngine);
 
@@ -115,7 +115,7 @@ async function _fixDirectory(absolutePath, startTime, inquirer) {
     // Dead files — normalisasi path glob ke format OS lokal
     const allFiles = (await glob(['**/*.{js,jsx,mjs,cjs,ts,tsx,mts}'], {
         cwd: absolutePath,
-        ignore: ['node_modules/**', 'dist/**', 'test/**', 'tests/**', 'coverage/**'],
+        ignore: ['node_modules/**', 'dist/**', 'test/**', 'tests/**', 'coverage/**', '*.config.*', '.*.js', '.*.mjs', '.*.ts'],
         absolute: true
     })).map(f => path.resolve(f));
 
@@ -128,15 +128,15 @@ async function _fixDirectory(absolutePath, startTime, inquirer) {
     let originalLoc = 0, originalSize = 0, newLoc = 0, newSize = 0;
 
     for (const file of graph.liveFiles) {
-        // Skip file JSON dan node_modules (tidak bisa di-parse sebagai JS/TS)
+        // Skip file JSON, CSS dan node_modules (tidak bisa di-parse sebagai JS/TS)
         const ext = path.extname(file);
-        if (ext === '.json' || file.includes('node_modules')) continue;
+        if (ext === '.json' || ext === '.css' || ext === '.scss' || ext === '.sass' || ext === '.less' || file.includes('node_modules')) continue;
 
         try {
             const code    = await fs.readFile(file, 'utf-8');
             originalLoc  += code.split('\n').length;
             originalSize += Buffer.byteLength(code);
-            const ast     = parseCode(code);
+            const ast     = parseCode(code, file);
             const dead    = findDeadCode(ast, file, graph.globalRegistry, ruleEngine);
             if (dead.length > 0) {
                 const newCode = removeDeadCode(code, dead);
