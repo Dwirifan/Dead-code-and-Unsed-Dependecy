@@ -1,8 +1,11 @@
 import path from 'path';
 import fs from 'fs-extra';
+import glob from 'fast-glob';
 import chalk from 'chalk';
 import ora from 'ora';
 import { generateMermaidGraph } from '../analyzer/graphVisualizer.js';
+import { parseCode } from '../parser/astParser.js';
+import { findDeadCode } from '../analyzer/deadcode/deadCodeAnalyzer.js';
 import { RuleEngine } from '../analyzer/ruleEngine.js';
 import { buildGraphWithInteractiveFallback } from './commandHelpers.js';
 
@@ -14,7 +17,7 @@ export function registerVisualizeCommand(program) {
     program
         .command('visualize')
         .argument('<path>', 'Path to project directory')
-        .description('Analisis proyek dan buka HTML Dashboard keterlacakan kode')
+        .description('Analisis proyek dan buka HTML Dashboard keterlacakan kode (termasuk laporan dead code)')
         .action(async (targetPath) => {
             const absolutePath = path.resolve(targetPath);
             if (!fs.existsSync(absolutePath)) {
@@ -34,7 +37,41 @@ export function registerVisualizeCommand(program) {
                 let pkgData   = { dependencies: {}, devDependencies: {} };
                 if (fs.existsSync(pkgPath)) pkgData = await fs.readJson(pkgPath);
 
-                const htmlContent = generateMermaidGraph(graph, absolutePath, pkgData);
+                // === Kumpulkan data Dead Code untuk ditampilkan di dashboard ===
+                const allDeadNodes = [];
+                for (const file of graph.liveFiles) {
+                    const ext = path.extname(file);
+                    if (ext === '.json' || ext === '.css' || ext === '.scss' || ext === '.sass' || ext === '.less' || file.includes('node_modules')) continue;
+                    try {
+                        const code = await fs.readFile(file, 'utf-8');
+                        const ast = parseCode(code, file);
+                        const deadNodes = findDeadCode(ast, file, graph.globalRegistry, ruleEngine);
+                        deadNodes.forEach(n => allDeadNodes.push({ file: path.relative(absolutePath, file), ...n }));
+                    } catch (_) {}
+                }
+
+                // Dead files
+                const allFiles = (await glob(['**/*.{js,jsx,mjs,cjs,ts,tsx,mts}'], {
+                    cwd: absolutePath,
+                    ignore: ['node_modules/**', 'dist/**', 'test/**', 'tests/**', 'coverage/**', '*.config.*', '.*.js', '.*.mjs', '.*.ts'],
+                    absolute: true
+                })).map(f => path.resolve(f));
+
+                const deadFiles = allFiles
+                    .filter(f => !graph.liveFiles.has(f))
+                    .filter(f => !ruleEngine.isIgnoredFile(f, absolutePath))
+                    .map(f => path.relative(absolutePath, f));
+
+                // Data report untuk dashboard
+                const reportData = {
+                    safeNodes:   allDeadNodes.filter(n => n.status === 'safe'),
+                    reviewNodes: allDeadNodes.filter(n => n.status === 'review'),
+                    riskyNodes:  allDeadNodes.filter(n => n.status === 'risky'),
+                    deadFiles,
+                    unsafeFiles: graph.unsafeFiles ? [...graph.unsafeFiles].map(f => path.relative(absolutePath, f)) : []
+                };
+
+                const htmlContent = generateMermaidGraph(graph, absolutePath, pkgData, reportData);
                 const outputPath  = path.join(absolutePath, 'code-structure-trace.html');
                 await fs.writeFile(outputPath, htmlContent);
 

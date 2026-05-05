@@ -8,6 +8,10 @@ import { registerFixCommand }      from '../src/commands/fixCommand.js';
 import { registerShowDepsCommand } from '../src/commands/showDepsCommand.js';
 import { registerVisualizeCommand } from '../src/commands/visualizeCommand.js';
 import { registerHistoryCommand }  from '../src/commands/historyCommand.js';
+import { registerTraceCommand }    from '../src/commands/traceCommand.js';
+import { registerWatchCommand }    from '../src/commands/watchCommand.js';
+import { registerReportCommand }   from '../src/commands/reportCommand.js';
+import { registerInitCommand }     from '../src/commands/initCommand.js';
 
 // ── Global Ctrl+C handler ──────────────────────────────────────────────────
 // Inquirer v9+ melempar ExitPromptError saat user menekan Ctrl+C.
@@ -36,6 +40,10 @@ registerFixCommand(program);
 registerShowDepsCommand(program);
 registerVisualizeCommand(program);
 registerHistoryCommand(program);
+registerTraceCommand(program);
+registerWatchCommand(program);
+registerReportCommand(program);
+registerInitCommand(program);
 
 // ── Engine Startup Orchestrator ───────────────────────────────────────────
 // Tanpa argumen → launch interactive wizard

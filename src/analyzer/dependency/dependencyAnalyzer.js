@@ -61,10 +61,13 @@ export async function findUnusedDependencies(projectRoot, usedPackages) {
     // Framework modern seperti Next.js, Create React App (react-scripts), atau Vite
     // seringkali menyertakan dependensi secara implisit tanpa instruksi `import` eksplisit di kode.
     const implicitDependencies = new Map([
-        ['next', ['react', 'react-dom']],
+        ['next', ['react', 'react-dom', 'eslint-config-next']],
         ['react-scripts', ['react', 'react-dom']],
         ['@vitejs/plugin-react', ['react', 'react-dom']],
-        ['@vitejs/plugin-react-swc', ['react', 'react-dom']]
+        ['@vitejs/plugin-react-swc', ['react', 'react-dom']],
+        ['nuxt', ['vue']],
+        ['nuxt3', ['vue']],
+        ['gatsby', ['react', 'react-dom']],
     ]);
 
     // Jika framework terdeteksi (baik di package.json atau kode), tambahkan paket implisit ke `usedPackages`
@@ -75,12 +78,38 @@ export async function findUnusedDependencies(projectRoot, usedPackages) {
         }
     }
 
+    // Auto-Ignore: Package yang TIDAK PERNAH di-import di kode sumber
+    // Mereka dipanggil via CLI, config files, atau compiler — bukan melalui import/require.
+    const BUILD_TOOL_PATTERNS = [
+        /^@types\//,           // TypeScript type definitions (@types/node, @types/react, dll)
+        /^eslint/,             // ESLint dan semua plugin/config-nya
+        /^prettier/,           // Prettier formatter
+        /^@eslint\//,          // ESLint scoped packages
+        /^stylelint/,          // Stylelint CSS linter
+    ];
+    const BUILD_TOOL_EXACT = new Set([
+        'typescript',          // TypeScript compiler (dipanggil via tsc, bukan import)
+        'webpack', 'webpack-cli', 'webpack-dev-server',
+        'babel-core', '@babel/core', '@babel/cli',
+        'rollup', 'esbuild', 'swc',
+        'jest', 'mocha', 'vitest', 'nyc', 'c8',
+        'nodemon', 'ts-node', 'tsx',
+        'husky', 'lint-staged', 'commitlint',
+        'concurrently', 'cross-env', 'rimraf',
+        'postcss', 'autoprefixer', 'tailwindcss',
+        'sass', 'less', 'stylus',
+    ]);
+
     // Bandingkan: hanya runtime dependencies vs yang benar-benar dipakai
     const unused = [];
     for (const dep of runtimeDeps) {
-        if (!usedPackages.has(dep)) {
-            unused.push(dep);
-        }
+        if (usedPackages.has(dep)) continue;
+
+        // Skip jika masuk kategori build tool (tidak pernah di-import)
+        if (BUILD_TOOL_EXACT.has(dep)) continue;
+        if (BUILD_TOOL_PATTERNS.some(pattern => pattern.test(dep))) continue;
+
+        unused.push(dep);
     }
 
     return {

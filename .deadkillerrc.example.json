@@ -1,0 +1,15 @@
+{
+  "// DOKUMENTASI": "File ini adalah konfigurasi DeadKiller CLI (.deadkillerrc.json)",
+
+  "mode": "vanilla",
+
+  "ignorePrefixedVariables": "^_",
+
+  "preserveExports": true,
+
+  "preserveFiles": [],
+
+  "ignoreDependencies": [],
+
+  "entryPoints": []
+}

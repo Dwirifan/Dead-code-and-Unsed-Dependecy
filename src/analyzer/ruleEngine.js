@@ -9,10 +9,19 @@ export class RuleEngine {
     constructor() {
         // Konfigurasi standar (Default Rules)
         this.rules = {
-            ignorePrefixedVariables: "^_", // Abaikan variabel berewalan '_'
+            mode: 'vanilla',               // Mode framework: 'vanilla' | 'react' | 'next'
+            ignorePrefixedVariables: "^_", // Abaikan variabel berawalan '_'
             preserveExports: true,         // Lindungi fungsi/variabel yg di-export
             preserveFiles: [],             // Lindungi file dari penghapusan
+            ignoreDependencies: [],        // Dependensi yang tidak dianggap unused
             entryPoints: []                // Entry points khusus tambahan
+        };
+
+        // Direktori yang dilindungi oleh framework mode
+        this._frameworkPreservedPaths = {
+            vanilla: [],
+            react:   ['public/'],
+            next:    ['pages/', 'app/', 'api/', 'public/', 'middleware.']
         };
     }
 
@@ -59,14 +68,30 @@ export class RuleEngine {
      * @returns {boolean} True jika file dilindungi
      */
     isIgnoredFile(absolutePath, projectRoot) {
-        if (!this.rules.preserveFiles || this.rules.preserveFiles.length === 0) return false;
-
         const relativePath = path.relative(projectRoot, absolutePath).replace(/\\/g, '/');
-        
-        return this.rules.preserveFiles.some(pattern => {
-            // Bisa menggunakan simple string match (atau minimatch untuk wildcard ke depan)
-            return relativePath.includes(pattern);
-        });
+
+        // 1. Cek preserveFiles manual dari config
+        if (this.rules.preserveFiles && this.rules.preserveFiles.length > 0) {
+            const matchManual = this.rules.preserveFiles.some(pattern => {
+                return relativePath.includes(pattern);
+            });
+            if (matchManual) return true;
+        }
+
+        // 2. Framework-aware auto-protection
+        const mode = this.rules.mode || 'vanilla';
+        const protectedPaths = this._frameworkPreservedPaths[mode] || [];
+        return protectedPaths.some(p => relativePath.startsWith(p) || relativePath.includes('/' + p));
+    }
+
+    /**
+     * Mengecek apakah dependensi masuk dalam daftar ignoreDependencies
+     * @param {string} depName Nama package
+     * @returns {boolean} True jika dilindungi
+     */
+    isIgnoredDependency(depName) {
+        if (!this.rules.ignoreDependencies || this.rules.ignoreDependencies.length === 0) return false;
+        return this.rules.ignoreDependencies.includes(depName);
     }
 
     /**

@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DeadKiller Report — dead-code-categories</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            line-height: 1.6;
+        }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, #161b22 0%, #1c2333 100%);
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 24px;
+        }
+        .header h1 {
+            font-size: 28px;
+            color: #58a6ff;
+            margin-bottom: 8px;
+        }
+        .header .subtitle {
+            color: #8b949e;
+            font-size: 14px;
+        }
+
+        /* Stats Cards */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .stat-card {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+        }
+        .stat-card .number {
+            font-size: 36px;
+            font-weight: 700;
+        }
+        .stat-card .label {
+            color: #8b949e;
+            font-size: 13px;
+            margin-top: 4px;
+        }
+        .stat-card.safe .number { color: #3fb950; }
+        .stat-card.review .number { color: #d29922; }
+        .stat-card.risky .number { color: #f85149; }
+        .stat-card.info .number { color: #58a6ff; }
+
+        /* Section */
+        .section {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            overflow: hidden;
+        }
+        .section-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid #30363d;
+            font-weight: 600;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .section-body { padding: 16px 20px; }
+
+        /* Table */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        th {
+            text-align: left;
+            padding: 10px 12px;
+            border-bottom: 2px solid #30363d;
+            color: #8b949e;
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+        td {
+            padding: 8px 12px;
+            border-bottom: 1px solid #21262d;
+        }
+        tr:hover td { background: #1c2333; }
+
+        /* Badges */
+        .badge {
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .badge-high { background: #f8514920; color: #f85149; }
+        .badge-medium { background: #d2992220; color: #d29922; }
+        .badge-low { background: #8b949e20; color: #8b949e; }
+        .badge-safe { background: #3fb95020; color: #3fb950; }
+        .badge-review { background: #d2992220; color: #d29922; }
+        .badge-risky { background: #f8514920; color: #f85149; }
+
+        /* List */
+        .file-list { list-style: none; }
+        .file-list li {
+            padding: 6px 0;
+            border-bottom: 1px solid #21262d;
+            font-family: 'Cascadia Code', 'Fira Code', monospace;
+            font-size: 13px;
+        }
+        .file-list li:last-child { border-bottom: none; }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: #484f58;
+            font-size: 12px;
+        }
+
+        /* Empty state */
+        .empty {
+            color: #3fb950;
+            padding: 16px 0;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>☠️ DeadKiller — Analysis Report</h1>
+            <div class="subtitle">
+                Proyek: <strong>dead-code-categories</strong> &nbsp;|&nbsp;
+                Tanggal: Selasa, 05 Mei 2026 pukul 03.44.32 &nbsp;|&nbsp;
+                Waktu Analisis: 31 ms
+            </div>
+        </div>
+
+        <!-- Stats -->
+        <div class="stats-grid">
+            <div class="stat-card info">
+                <div class="number">2</div>
+                <div class="label">File Aktif</div>
+            </div>
+            <div class="stat-card safe">
+                <div class="number">3</div>
+                <div class="label">Safe to Remove</div>
+            </div>
+            <div class="stat-card review">
+                <div class="number">0</div>
+                <div class="label">Needs Review</div>
+            </div>
+            <div class="stat-card risky">
+                <div class="number">1</div>
+                <div class="label">Risky</div>
+            </div>
+            <div class="stat-card safe">
+                <div class="number">0</div>
+                <div class="label">Dead Files</div>
+            </div>
+            <div class="stat-card safe">
+                <div class="number">0</div>
+                <div class="label">Unused Deps</div>
+            </div>
+        </div>
+
+        
+
+        
+
+        
+
+        
+        <!-- Safe Dead Code -->
+        <div class="section">
+            <div class="section-header" style="color: #3fb950;">🟢 Safe to Remove (3 temuan)</div>
+            <div class="section-body">
+                <table>
+                    <thead><tr><th>File</th><th>Line</th><th>Name</th><th>Type</th><th>Confidence</th><th>Status</th></tr></thead>
+                    <tbody>
+        <tr>
+            <td><code>index.js</code></td>
+            <td>1</td>
+            <td>unusedImport</td>
+            <td>Variable</td>
+            <td><span class="badge badge-high">HIGH</span></td>
+            <td><span class="badge badge-safe">SAFE</span></td>
+        </tr>
+    
+        <tr>
+            <td><code>index.js</code></td>
+            <td>4</td>
+            <td>unusedVar</td>
+            <td>Variable</td>
+            <td><span class="badge badge-high">HIGH</span></td>
+            <td><span class="badge badge-safe">SAFE</span></td>
+        </tr>
+    
+        <tr>
+            <td><code>index.js</code></td>
+            <td>9</td>
+            <td>Unreachable Statement</td>
+            <td>DeadCode</td>
+            <td><span class="badge badge-high">HIGH</span></td>
+            <td><span class="badge badge-safe">SAFE</span></td>
+        </tr>
+    </tbody>
+                </table>
+            </div>
+        </div>
+        
+
+        
+
+        
+        <!-- Risky Dead Code -->
+        <div class="section">
+            <div class="section-header" style="color: #f85149;">🔴 Risky (1 temuan)</div>
+            <div class="section-body">
+                <table>
+                    <thead><tr><th>File</th><th>Line</th><th>Name</th><th>Type</th><th>Confidence</th><th>Status</th></tr></thead>
+                    <tbody>
+        <tr>
+            <td><code>index.js</code></td>
+            <td>6</td>
+            <td>b</td>
+            <td>Parameter</td>
+            <td><span class="badge badge-low">LOW</span></td>
+            <td><span class="badge badge-risky">RISKY</span></td>
+        </tr>
+    </tbody>
+                </table>
+            </div>
+        </div>
+        
+
+        
+
+        <div class="footer">
+            Generated by DeadKiller CLI v1.0.0 — Static Analysis Engine for Dead Code Elimination
+        </div>
+    </div>
+</body>
+</html>

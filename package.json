@@ -10,7 +10,7 @@
     "test": "test"
   },
   "scripts": {
-    "test": "node test/run-tests.js"
+    "test": "node --test test/run-tests.js"
   },
   "keywords": [],
   "author": "",

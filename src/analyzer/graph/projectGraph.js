@@ -52,9 +52,14 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
         const fileDir = path.dirname(currentFile);
         
         try {
+            // Skip file yang bukan JavaScript/TypeScript — CSS, JSON, gambar, font, dll
+            // yang di-import oleh framework (Next.js: import styles from './x.module.css')
+            // tetap dianggap "live file" tapi tidak di-parse sebagai kode JS.
+            const PARSEABLE_EXTENSIONS = new Set(['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts']);
+            const ext = path.extname(currentFile).toLowerCase();
+            if (!PARSEABLE_EXTENSIONS.has(ext)) continue;
+
             const code = await fs.readFile(currentFile, 'utf-8');
-            // Skip binary or non-js
-            if (path.extname(currentFile) === '.json') continue; // Don't parse JSON as JS
 
             const ast = parseCode(code, currentFile);
             const importsToResolve = [];
@@ -177,7 +182,12 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
             }
 
         } catch (err) {
-            // Ignore parse errors
+            // File gagal di-parse (syntax error, encoding, dll) → skip tapi beri warning
+            const relPath = path.relative(projectRoot, currentFile);
+            if (err.name === 'ParseError') {
+                console.warn(`[!] Skip parse error: ${relPath} (line ${err.line || '?'}): ${err.message.split('\n')[0]}`);
+            }
+            // File tetap dianggap live (sudah masuk liveFiles) tapi tidak dianalisis lebih lanjut
         }
     }
 

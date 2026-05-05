@@ -5,6 +5,7 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { performance } from 'perf_hooks';
 import { parseCode } from '../parser/astParser.js';
+import { ParseCache } from '../parser/parseCache.js';
 import { findDeadCode } from '../analyzer/deadcode/deadCodeAnalyzer.js';
 import { findUnusedDependencies } from '../analyzer/dependency/dependencyAnalyzer.js';
 import { removeDeadCode } from '../eliminator/codeCleaner.js';
@@ -61,19 +62,42 @@ async function _fixSingleFile(absolutePath, startTime, inquirer) {
     try { code = await fs.readFile(absolutePath, 'utf-8'); }
     catch (e) { console.error(`[ERROR] Tidak bisa membaca file: ${e.message}`); process.exit(1); }
 
-    const ast        = parseCode(code, filePath);
+    const ast        = parseCode(code, absolutePath);
     const ruleEngine = new RuleEngine();
-    const deadNodes  = findDeadCode(ast, absolutePath, new Map(), ruleEngine);
+    const deadNodes  = findDeadCode(ast, absolutePath, null, ruleEngine);
 
     if (deadNodes.length === 0) {
         console.log(chalk.green('[ok] File bersih! Tidak ada dead code ditemukan.\n'));
         return;
     }
 
-    console.log(chalk.yellow(`[*] Dead code ditemukan (${deadNodes.length} item):`));
-    deadNodes.forEach(n => console.log(`   Line ${n.line}: ${n.type} '${n.name}'`));
+    // Pisahkan item berdasarkan status keamanan
+    const safeNodes   = deadNodes.filter(n => n.status === 'safe');
+    const reviewNodes = deadNodes.filter(n => n.status === 'review');
+    const riskyNodes  = deadNodes.filter(n => n.status === 'risky');
 
-    const newCode = removeDeadCode(code, deadNodes);
+    // Tampilkan laporan lengkap
+    console.log(chalk.yellow(`[*] Dead code ditemukan (${deadNodes.length} item):`))
+    if (safeNodes.length > 0) {
+        console.log(chalk.green(`\n   ${chalk.bold('[SAFE]')} — Akan dihapus otomatis (${safeNodes.length} item):`));
+        safeNodes.forEach(n => console.log(`      Line ${n.line}: ${n.type} '${n.name}'`));
+    }
+    if (reviewNodes.length > 0) {
+        console.log(chalk.yellow(`\n   ${chalk.bold('[REVIEW]')} — Hanya dilaporkan (${reviewNodes.length} item):`));
+        reviewNodes.forEach(n => console.log(`      Line ${n.line}: ${n.type} '${n.name}'`));
+    }
+    if (riskyNodes.length > 0) {
+        console.log(chalk.red(`\n   ${chalk.bold('[RISKY]')} — Tidak dihapus (${riskyNodes.length} item):`));
+        riskyNodes.forEach(n => console.log(`      Line ${n.line}: ${n.type} '${n.name}'`));
+    }
+
+    // Hanya auto-fix item SAFE
+    if (safeNodes.length === 0) {
+        console.log(chalk.gray('\n[ok] Tidak ada item yang aman untuk dihapus otomatis. Tinjau manual item di atas.\n'));
+        return;
+    }
+
+    const newCode = removeDeadCode(code, safeNodes);
     const diff    = generateDiff(code, newCode, path.basename(absolutePath));
     console.log(chalk.gray('\n--- Preview ---'));
     console.log(diff);
@@ -81,7 +105,7 @@ async function _fixSingleFile(absolutePath, startTime, inquirer) {
 
     const { ok } = await inquirer.prompt([{
         type: 'confirm', name: 'ok',
-        message: `Hapus ${deadNodes.length} item dead code dari file ini? (backup otomatis dibuat)`,
+        message: `Hapus ${safeNodes.length} item SAFE dari file ini? (backup otomatis dibuat)`,
         default: true
     }]);
     if (!ok) { console.log(chalk.gray('[.] Dibatalkan.\n')); return; }
@@ -90,7 +114,10 @@ async function _fixSingleFile(absolutePath, startTime, inquirer) {
     await fs.writeFile(absolutePath, newCode);
 
     const locDiff = code.split('\n').length - newCode.split('\n').length;
-    console.log(chalk.green(`\n[ok] Selesai! ${locDiff} baris dihapus. (${(performance.now() - startTime).toFixed(0)} ms)\n`));
+    console.log(chalk.green(`\n[ok] Selesai! ${locDiff} baris dihapus. (${(performance.now() - startTime).toFixed(0)} ms)`));
+    if (reviewNodes.length + riskyNodes.length > 0) {
+        console.log(chalk.yellow(`[!] ${reviewNodes.length + riskyNodes.length} item REVIEW/RISKY tidak dihapus. Tinjau secara manual.\n`));
+    }
 }
 
 async function _fixDirectory(absolutePath, startTime, inquirer) {
@@ -125,30 +152,54 @@ async function _fixDirectory(absolutePath, startTime, inquirer) {
 
     // Dead code di dalam live files (global, otomatis)
     const deadCodeReport = [];
+    const skippedReport  = []; // Item review/risky yang hanya dilaporkan
+    const cache = new ParseCache();
     let originalLoc = 0, originalSize = 0, newLoc = 0, newSize = 0;
 
     for (const file of graph.liveFiles) {
-        // Skip file JSON, CSS dan node_modules (tidak bisa di-parse sebagai JS/TS)
-        const ext = path.extname(file);
-        if (ext === '.json' || ext === '.css' || ext === '.scss' || ext === '.sass' || ext === '.less' || file.includes('node_modules')) continue;
+        // Skip file yang bukan JavaScript/TypeScript (tidak bisa di-parse)
+        const PARSEABLE_EXTENSIONS = new Set(['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts']);
+        const ext = path.extname(file).toLowerCase();
+        if (!PARSEABLE_EXTENSIONS.has(ext) || file.includes('node_modules')) continue;
 
         try {
-            const code    = await fs.readFile(file, 'utf-8');
+            // Cek cache terlebih dahulu
+            let code, ast;
+            const cached = await cache.get(file);
+            if (cached) {
+                code = cached.code;
+                ast  = cached.ast;
+            } else {
+                code = await fs.readFile(file, 'utf-8');
+                ast  = parseCode(code, file);
+                await cache.set(file, ast, code);
+            }
+
             originalLoc  += code.split('\n').length;
             originalSize += Buffer.byteLength(code);
-            const ast     = parseCode(code, file);
-            const dead    = findDeadCode(ast, file, graph.globalRegistry, ruleEngine);
-            if (dead.length > 0) {
-                const newCode = removeDeadCode(code, dead);
+            const allDead = findDeadCode(ast, file, graph.globalRegistry, ruleEngine);
+
+            // Pisahkan: hanya item SAFE yang di-auto-fix
+            const safeDead   = allDead.filter(n => n.status === 'safe');
+            const unsafeDead = allDead.filter(n => n.status !== 'safe');
+
+            // Catat item yang tidak di-fix
+            unsafeDead.forEach(n => skippedReport.push({ file, ...n }));
+
+            if (safeDead.length > 0) {
+                const newCode = removeDeadCode(code, safeDead);
                 newLoc  += newCode.split('\n').length;
                 newSize += Buffer.byteLength(newCode);
-                deadCodeReport.push({ file, dead, newCode,
+                deadCodeReport.push({ file, dead: safeDead, newCode,
                     diff: generateDiff(code, newCode, path.relative(absolutePath, file)) });
             } else {
                 newLoc  += code.split('\n').length;
                 newSize += Buffer.byteLength(code);
             }
-        } catch (_) { /* skip file yang gagal di-parse */ }
+        } catch (err) {
+            // Beri warning jika file gagal di-parse, jangan silent skip
+            console.warn(chalk.yellow(`   [!] Gagal parse: ${path.relative(absolutePath, file)}: ${err.message?.split('\n')[0] || err.message}`));
+        }
     }
 
     for (const f of deadFiles) {
@@ -166,16 +217,44 @@ async function _fixDirectory(absolutePath, startTime, inquirer) {
     }
 
     console.log(chalk.cyan('\n====== LAPORAN ANALISIS ======'));
+
+    // Tampilkan unsafe files warning
+    if (graph.unsafeFiles && graph.unsafeFiles.size > 0) {
+        console.log(chalk.yellow(`\n[!] ${graph.unsafeFiles.size} file mengandung pola dinamis (eval/computed/dynamic):`));
+        for (const uf of graph.unsafeFiles) {
+            console.log(chalk.gray(`   - ${path.relative(absolutePath, uf)}`));
+        }
+    }
+
     if (deadCodeReport.length > 0) {
-        console.log(chalk.yellow(`\n[*] Dead code di ${deadCodeReport.length} file:`));
+        console.log(chalk.yellow(`\n[*] Dead code SAFE di ${deadCodeReport.length} file (akan dihapus):`));
         deadCodeReport.forEach(({ file, dead, diff }) => {
             console.log(`   -> ${path.relative(absolutePath, file)}  (${dead.length} item)`);
-            dead.forEach(n => console.log(`      Line ${n.line}: ${n.type} '${n.name}'`));
+            dead.forEach(n => console.log(`      Line ${n.line}: ${n.type} '${n.name}' ${chalk.green('[SAFE]')}`));
             console.log(chalk.gray(diff));
         });
     } else {
-        console.log(chalk.green('\n[ok] Tidak ada dead code di file aktif.'));
+        console.log(chalk.green('\n[ok] Tidak ada dead code SAFE di file aktif.'));
     }
+
+    // Tampilkan item review/risky sebagai laporan saja
+    if (skippedReport.length > 0) {
+        console.log(chalk.yellow(`\n[~] ${skippedReport.length} item REVIEW/RISKY (tidak dihapus, hanya dilaporkan):`));
+        const byFile = {};
+        skippedReport.forEach(n => {
+            const rel = path.relative(absolutePath, n.file);
+            if (!byFile[rel]) byFile[rel] = [];
+            byFile[rel].push(n);
+        });
+        for (const [file, nodes] of Object.entries(byFile)) {
+            console.log(`   -> ${file}`);
+            nodes.forEach(n => {
+                const badge = n.status === 'review' ? chalk.yellow('[REVIEW]') : chalk.red('[RISKY]');
+                console.log(`      Line ${n.line}: ${n.type} '${n.name}' ${badge}`);
+            });
+        }
+    }
+
     if (deadFiles.length > 0) {
         console.log(chalk.yellow(`\n[~] File mati/tak terjangkau (${deadFiles.length}):`));
         deadFiles.forEach(f => console.log(`   - ${path.relative(absolutePath, f)}`));

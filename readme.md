@@ -1,203 +1,453 @@
-# Rancang Bangun Alat Eliminasi Dead Code dan Unused Dependency Otomatis untuk Proyek JavaScript
+# ☠️ DeadKiller — Eliminasi Dead Code & Unused Dependency Otomatis untuk JavaScript
 
 ## 📄 Abstrak
-Proyek Tugas Akhir ini mengembangkan alat bantu (tool) berbasis _Command Line Interface_ (CLI) untuk melakukan _static analysis_ mendalam pada kode sumber JavaScript. Alat ini menggunakan pendekatan **Graph-Based Reachability Analysis** untuk memetakan struktur proyek secara akurat, mendeteksi file yang tidak terjangkau (_unreachable files_), variabel mati (_dead code_), serta dependensi yang tidak terpakai (_unused dependencies_). Dilengkapi dengan fitur **Diff View** untuk memvisualisasikan perubahan sebelum dieksekusi demi keamanan kode.
+
+Proyek Tugas Akhir ini mengembangkan alat bantu (tool) berbasis _Command Line Interface_ (CLI) bernama **DeadKiller** untuk melakukan _static analysis_ mendalam pada kode sumber JavaScript. Alat ini menggunakan pendekatan **Graph-Based Reachability Analysis** untuk memetakan struktur proyek secara akurat, mendeteksi file yang tidak terjangkau (_unreachable files_), variabel mati (_dead code_), serta dependensi yang tidak terpakai (_unused dependencies_).
+
+Dilengkapi dengan **Confidence Scoring System** (High/Medium/Low) dan **Safety Classification** (Safe/Review/Risky) untuk memastikan setiap temuan dikategorikan secara akurat, serta fitur **Diff View**, **HTML Dashboard**, dan **Dark Mode** untuk pengalaman developer yang premium.
+
+---
 
 ## 🚀 Fitur Utama
-- **Deep Graph Analysis**: Membangun graf ketergantungan dari _entry point_ (misal `index.js`) untuk membedakan antara file yang _live_ dan file sampah (_dead files_).
-- **Unused Dependency Detection**: Mendeteksi library di `package.json` yang tidak pernah dipanggil di file manapun dalam graf proyek.
-- **Intra-procedural Dead Code Elimination**: Mendeteksi deklarasi variabel/fungsi yang tidak digunakan di dalam file yang aktif (Scope-Aware Analysis).
-- **Interactive Diff Preview**: Menampilkan perbandingan kode **Before vs After** (seperti Github Diff) di terminal sebelum melakukan penghapusan.
-- **Auto-Detection Entry Point**: Otomatis mendeteksi file utama proyek dari `package.json` atau standar umum.
-- **Safe Mode**: Public API (`export`) dilindungi melalui Rule Engine, dan konfirmasi interaktif diwajibkan sebelum perubahan fisik menggunakan Backup otomatis.
+
+| Fitur | Deskripsi |
+|-------|-----------|
+| **Graph-Based Reachability** | Membangun graf ketergantungan dari entry point menggunakan BFS untuk membedakan file _live_ vs _dead_ |
+| **Intra-procedural Dead Code** | Mendeteksi variabel, fungsi, parameter, dan kode yang tidak digunakan (scope-aware) |
+| **Unused Dependency Detection** | Mendeteksi library di `package.json` yang tidak pernah di-import |
+| **Confidence & Safety System** | Setiap temuan diberi label `high`/`medium`/`low` confidence + `safe`/`review`/`risky` status |
+| **Interactive Diff Preview** | Preview perubahan Before vs After (Git-style) sebelum penghapusan |
+| **HTML Dashboard + Graph** | Visualisasi interaktif dengan Cytoscape.js + dagre + orthogonal edge routing |
+| **Dark Mode & Bilingual** | Dashboard mendukung Light/Dark mode dan bahasa Indonesia/English |
+| **Safe Mode** | Export dilindungi, backup otomatis, konfirmasi interaktif, hanya `safe` yang di-auto-fix |
+| **JSON Output** | Output terstruktur untuk integrasi CI/CD |
+| **Watch Mode** | Real-time monitoring file changes + auto-scan |
+| **Reverse Trace** | Lacak "siapa yang meng-import file X?" |
+| **Framework-Aware** | Mode `vanilla` / `react` / `next` — otomatis proteksi direktori framework |
+
+---
 
 ## 📦 Instalasi
 
-1.  Clone repositori ini.
-2.  Install dependensi:
-    ```bash
-    npm install
-    ```
+1. Clone repositori ini.
+2. Install dependensi:
+   ```bash
+   npm install
+   ```
+3. (Opsional) Link global agar bisa dipanggil dari mana saja:
+   ```bash
+   npm link
+   ```
 
-## 📖 Cara Penggunaan (Commands)
+---
 
-DeadKiller dibangun dengan tingkat fleksibilitas super. Anda bisa menjalankannya menggunakan **Menu Interaktif yang ramah pengguna**, atau **Pure Command Line** (cocok untuk automasi CI/CD).
+## 📖 Cara Penggunaan (8 Commands)
 
-### 🌟 1. The Interactive Wizard Mode (Rekomendasi Utama)
-Perintah ini akan membuka layar antar muka UI/UX yang akan memandu Anda (layaknya *installer* program). Sangat dianjurkan bagi pemula!
+DeadKiller menyediakan **Interactive Wizard** dan **8 perintah CLI langsung**.
+
+### 🌟 1. Interactive Wizard Mode (Rekomendasi)
+
 ```bash
 node bin/dce-cli.js
 ```
 
-### 💻 2. Baris Perintah Langsung (Pure CLI)
+Akan membuka menu interaktif yang memandu Anda memilih fitur. Cocok untuk pemula.
 
-- **Mode Pelacakan (Scan)**
-  Hanya membedah dan melacak penyakit kode (*Dry Run*). Sistem mengaudit tanpa menghapus apapun.
-  ```bash
-  node bin/dce-cli.js scan <path_project>
-  ```
+---
 
-- **Mode Sapu Bersih (Fix)**
-  Mendeteksi kode mati, meminta konfirmasi (berupa *checkbox* UI), melaksanakan pembedahan presisi mempertahankan *types* TypeScript, lalu **membuat backup keamanan** secara dinamis.
-  ```bash
-  node bin/dce-cli.js fix <path_project>
-  ```
+### 💻 2. Perintah CLI Langsung
 
-- **Lacak Arsitektur Kode (Visualizer / Traceability)**
-  Menciptakan **Web Dashboard HTML Interaktif** (memuat Diagram Mermaid & Daftar Dependensi) dan akan segera melempar peramban (*Default Browser*) Anda secara paksa untuk menampilkannya!
-  ```bash
-  node bin/dce-cli.js visualize <path_project>
-  ```
+#### `scan` — Pindai Dead Code (Dry Run)
 
-- **Analisis Paket Kosong (Show Dependencies)**
-  Memeriksa manifest `package.json` yang yatim piatu, menguras sumber daya tanpa pernah di-impor (*unused dependencies*).
-  ```bash
-  node bin/dce-cli.js show-deps <path_project>
-  ```
+Mengaudit proyek tanpa menghapus apapun. Menampilkan semua temuan dead code + unused dependency.
 
-> **Tips:** Variabel `<path_project>` bisa Anda isi dengan `./` jika proyek yang dituju ada di direktori Anda berada.
+```bash
+node bin/dce-cli.js scan <path>
+```
 
-## 🧠 Arsitektur dan Alur Kerja Keseluruhan
+**Opsi:**
+- `--json` — Output dalam format JSON (untuk CI/CD pipeline)
 
-### Flowchart Proyek
+```bash
+node bin/dce-cli.js scan <path> --json
+```
+
+**Contoh Output:**
+```
+================================================
+🟢 SAFE TO REMOVE (Aman untuk dihapus)
+================================================
+
+[Unused Variables]  HIGH
+   -> src/utils.js
+      Line 3: 'tempData' [SAFE]
+      Line 12: 'unusedHelper' [SAFE]
+
+[Unreachable Code]  HIGH
+   -> src/handler.js
+      Line 45: 'Unreachable Statement' [SAFE]
+
+================================================
+🟡 NEEDS REVIEW (Butuh peninjauan)
+================================================
+
+[Unused Functions]  MEDIUM
+   -> src/utils.js
+      Line 20: 'formatLegacy' [REVIEW]
+
+[t] Analysis Time: 85 ms
+```
+
+---
+
+#### `fix` — Hapus Dead Code (Dengan Konfirmasi)
+
+Mendeteksi, menampilkan diff preview, meminta konfirmasi, lalu menghapus dead code. **Hanya item berstatus `safe`** yang dapat di-auto-fix.
+
+```bash
+node bin/dce-cli.js fix <path>
+```
+
+Fitur keamanan:
+- Backup otomatis sebelum penghapusan (`backupManager.js`)
+- Diff preview berwarna di terminal sebelum eksekusi
+- Checkbox interaktif untuk memilih item yang dihapus
+- Tipe `DuplicateCondition`, `Parameter`, `ClassMethod` **tidak** pernah di-auto-fix
+
+---
+
+#### `show-deps` — Analisis Dependensi
+
+Memeriksa `package.json` dan menampilkan dependensi yang terpakai vs tidak terpakai.
+
+```bash
+node bin/dce-cli.js show-deps <path>
+```
+
+---
+
+#### `visualize` — HTML Dashboard Interaktif
+
+Menghasilkan dashboard HTML yang berisi:
+- **Dependency Graph** interaktif (Cytoscape.js + dagre layout + orthogonal edge routing)
+- **Dead Code Report** (tabel Safe/Review/Risky + Dead Files)
+- **Used vs Unused Dependencies** sidebar
+- **Dark Mode toggle** 🌓 + **Bilingual** (ID/EN)
+
+```bash
+node bin/dce-cli.js visualize <path>
+```
+
+Output: `code-structure-trace.html` → auto-open di browser default.
+
+---
+
+#### `trace` — Reverse Import Trace
+
+Menjawab pertanyaan: **"Siapa yang meng-import file X?"**
+
+```bash
+node bin/dce-cli.js trace <file>
+```
+
+**Contoh Output:**
+```
+📄 Target: src/utils.js
+
+🔗 Di-import oleh:
+├── src/handler.js  (imports: formatDate, parseInput)
+└── src/index.js    (imports: *)
+
+📦 File ini meng-import:
+└── src/constants.js (imports: DEFAULT_FORMAT)
+```
+
+---
+
+#### `watch` — Real-Time File Monitoring
+
+Memantau perubahan file secara real-time dan menjalankan scan otomatis saat file disimpan.
+
+```bash
+node bin/dce-cli.js watch <dir>
+```
+
+- Menggunakan `fs.watch` bawaan Node.js (zero dependency tambahan)
+- Debounce 500ms untuk menghindari analisis berlebihan
+- Tekan `Ctrl+C` untuk berhenti
+
+---
+
+#### `report` — Generate Laporan (Alias `visualize`)
+
+Alias dari perintah `visualize`. Menghasilkan HTML Dashboard + Dead Code Report yang sama.
+
+```bash
+node bin/dce-cli.js report <path>
+```
+
+---
+
+#### `history` — Riwayat Backup
+
+Menampilkan daftar backup yang dibuat oleh perintah `fix`, dan opsi untuk me-restore file ke kondisi sebelumnya.
+
+```bash
+node bin/dce-cli.js history <path>
+```
+
+---
+
+## ⚙️ Konfigurasi (`.deadkillerrc.json`)
+
+Buat file `.deadkillerrc.json` di root proyek untuk menyesuaikan perilaku DeadKiller:
+
+```json
+{
+  "mode": "vanilla",
+  "ignorePrefixedVariables": "^_",
+  "preserveExports": true,
+  "preserveFiles": [],
+  "ignoreDependencies": [],
+  "entryPoints": []
+}
+```
+
+| Opsi | Tipe | Default | Deskripsi |
+|------|------|---------|-----------|
+| `mode` | `string` | `"vanilla"` | Framework mode: `vanilla`, `react`, atau `next`. Mode `next` otomatis memproteksi `pages/`, `app/`, `api/`. |
+| `ignorePrefixedVariables` | `string` | `"^_"` | Regex untuk skip variabel (misal `_unused` tidak dilaporkan). |
+| `preserveExports` | `boolean` | `true` | Lindungi semua fungsi/variabel yang di-`export`. |
+| `preserveFiles` | `string[]` | `[]` | Daftar file/path yang tidak boleh dihapus. |
+| `ignoreDependencies` | `string[]` | `[]` | Daftar package yang tidak dianggap unused. |
+| `entryPoints` | `string[]` | `[]` | Entry point custom (override auto-detection). |
+
+File contoh tersedia di `.deadkillerrc.example.json`.
+
+---
+
+## 🧠 Arsitektur dan Alur Kerja
+
+### Pipeline 4-Fase
 
 ```mermaid
 flowchart TD
-    classDef cli fill:#2b2b2b,stroke:#00ffcc,stroke-width:2px,color:#fff
-    classDef analyzer fill:#1b3b5c,stroke:#4da6ff,stroke-width:2px,color:#fff
+    classDef phase fill:#1b3b5c,stroke:#4da6ff,stroke-width:2px,color:#fff
     classDef process fill:#4a4a4a,stroke:#ddd,color:#fff
-    classDef decision fill:#6b3e1b,stroke:#ffa500,shape:rhombus,color:#fff
+    classDef decision fill:#6b3e1b,stroke:#ffa500,color:#fff
+    classDef output fill:#2d1b5c,stroke:#b366ff,stroke-dasharray:5 5,color:#fff
     classDef action fill:#1b5c20,stroke:#66ff66,stroke-width:2px,color:#fff
-    classDef warning fill:#5c1b1b,stroke:#ff4d4d,stroke-width:2px,color:#fff
-    classDef output fill:#2d1b5c,stroke:#b366ff,stroke-dasharray: 5 5,color:#fff
 
-    A(["User Input: node bin/dce-cli.js [command] [path]"]):::cli --> B{"Apakah command scan atau fix?"}:::decision
+    INPUT(["User: deadkiller scan/fix/visualize <path>"]):::process --> EP
 
-    B -- "Ya (Scan/Fix)" --> C["projectGraph.js: Mulai Graph Construction"]:::process
-    B -- show-deps --> SD["Tampilkan depencencies dari package.json"]:::output
-    B -- visualize --> VZ["Generate Graph Mermaid project-graph.mmd"]:::output
-
-    subgraph Graph Phase ["Fase 1: Peta Ketergantungan (Reachability)"]
+    subgraph PHASE1 ["Fase 1: Graph Construction (Reachability)"]
         direction TB
-        C --> D["Cari Entry Point (package.json main / index.js)"]:::process
-        D --> E["astParser.js: Parse file menjadi ESTree AST (@typescript-eslint/typescript-estree)"]:::process
-        E --> F["BFS Traversal AST Cari import/require"]:::process
-        F --> G{"Semua file yang bisa dicapai?"}:::decision
-        G -- Belum --> E
-        G -- Selesai --> H[("Daftar Live Files & Used Packages")]:::analyzer
+        EP["entryPointFinder.js: Deteksi Entry Point"] --> PARSE["astParser.js: Parse → ESTree AST"]
+        PARSE --> BFS["projectGraph.js: BFS Traversal"]
+        BFS --> RESOLVE["pathResolver.js + barrelResolver.js: Resolusi path & barrel exports"]
+        RESOLVE --> GRAPH[("Live Files + Used Packages + Edges")]
     end
 
-    H --> I["Cari File Yatim (Dead Files): Semua file di disk (-) Live Files"]:::process
-    H --> J["dependencyAnalyzer.js: Cari Unused Deps"]:::process
-
-    subgraph Analysis Phase ["Fase 2: Analisis Dead Code (Live Files)"]
-        H -- Looping per Live File --> K["deadCodeAnalyzer.js: Analisis Scope & Referensi"]:::analyzer
-        K --> L["Bangun Scope Tree (Global -> Function -> Block)"]:::process
-        L --> M["Deteksi isReference() & Constant Folding (if false)"]:::process
-        M --> N[("Kumpulkan Dead Nodes (Variabel/Fungsi Unused)")]:::analyzer
+    subgraph PHASE2 ["Fase 2: Dead Code Analysis (Per File)"]
+        direction TB
+        SCOPE["Scope Mapping: Bangun Scope Tree (Global → Function → Block)"]
+        SCOPE --> EXPORT["exportAnalyzer.js: Tandai used exports"]
+        EXPORT --> REF["isReference.js + scopeHelpers.js: Resolusi referensi"]
+        REF --> COLLECT["deadCodeAnalyzer.js: Kumpulkan dead nodes"]
+        COLLECT --> BRANCH["branchAnalyzer.js: Unreachable branches"]
+        COLLECT --> CLASS["classAnalyzer.js: Unused class methods"]
+        COLLECT --> LOGIC["logicAnalyzer.js: Duplicate conditions"]
     end
 
-    N --> O{Mode Command?}:::decision
-    I --> O
-    J --> O
-
-    O -- Command 'scan' --> P[/"Cetak Laporan ke Terminal"/]:::output
-    O -- Command 'fix' --> Q["Simulasi Penghapusan & Kalkulasi Metrik (LOC & KB)"]:::process
-
-    subgraph Fix Phase ["Fase 3: Visualisasi & Eksekusi"]
-        Q --> R["diffGenerator.js: Tampilkan Colored Diff Preview"]:::process
-        R --> S{"User konfirmasi hapus? (Inquirer)"}:::decision
-        S -- No --> T[/"Batalkan Eksekusi"/]:::warning
-        S -- Yes --> BM["backupManager.js: Backup File Asli"]:::process
-        BM --> U["dependencyCleaner.js: Hapus dari package.json"]:::action
-        U --> V["Hapus Dead Files dari sistem"]:::action
-        V --> W["codeCleaner.js: Hapus Dead Node utuh mempertahankan tipe TS (magic-string)"]:::action
-        W --> X[/"Tulis kode bersih ke Disk & Tampilkan Impact Metrics"/]:::output
+    subgraph PHASE3 ["Fase 3: Classification & Safety"]
+        direction TB
+        CONF["Confidence Scoring: HIGH / MEDIUM / LOW"]
+        CONF --> STATUS["Safety Status: SAFE / REVIEW / RISKY"]
+        STATUS --> RULE["ruleEngine.js: Framework mode + preserveExports + ignorePatterns"]
     end
+
+    subgraph PHASE4 ["Fase 4: Output & Execution"]
+        direction TB
+        SCAN_OUT[/"Terminal Report (Grouped by status)"/]
+        JSON_OUT[/"JSON Output (--json flag)"/]
+        HTML_OUT[/"HTML Dashboard (visualize)"/]
+        FIX_OUT["Diff Preview → Konfirmasi → Backup → Hapus"]
+    end
+
+    GRAPH --> PHASE2
+    PHASE2 --> PHASE3
+    PHASE3 --> PHASE4
 ```
 
-## 📂 Struktur Direktori Lengkap
+---
+
+## 📂 Struktur Direktori
 
 ```text
 .
 ├── bin/
-│   └── dce-cli.js                    # Entry point CLI — mengatur semua command
+│   └── dce-cli.js                          # Entry point CLI + Interactive Wizard launcher
 ├── src/
 │   ├── parser/
-│   │   └── astParser.js              # Konversi source code → AST (Acorn + TypeScript)
+│   │   ├── astParser.js                    # Source code → ESTree AST (@typescript-eslint)
+│   │   └── parseCache.js                   # In-memory mtime-based AST cache
 │   ├── analyzer/
-│   │   ├── projectGraph.js           # BFS Graph builder — inti reachability analysis
-│   │   ├── graphVisualizer.js        # Generator diagram Mermaid (.mmd)
-│   │   ├── ruleEngine.js             # Mesin aturan keamanan dari .deadkillerrc.json
+│   │   ├── graphVisualizer.js              # Generator HTML Dashboard (Cytoscape.js + dagre)
+│   │   ├── ruleEngine.js                   # Mesin aturan dari .deadkillerrc.json
+│   │   ├── graph/
+│   │   │   ├── projectGraph.js             # BFS Graph builder — inti reachability analysis
+│   │   │   ├── entryPointFinder.js         # Auto-detect entry point dari package.json
+│   │   │   └── pathResolver.js             # Resolusi path import relatif & absolut
 │   │   ├── deadcode/
-│   │   │   ├── branchAnalyzer.js     # Deteksi unreachable branch (after-terminator/constant folding)
-│   │   │   ├── deadCodeAnalyzer.js   # Koordinator analisis dead code utama
-│   │   │   ├── destructuringExtractor.js # Ekstraksi parameter dari object/array pattern
-│   │   │   ├── exportAnalyzer.js     # Analisis export dependencies antar modul
-│   │   │   ├── isReference.js        # Helper isReference() (pengganti utils.js)
-│   │   │   ├── scope.js              # Kelas Scope (Scope Tree chain)
-│   │   │   └── scopeHelpers.js       # Helper resolusi hirarki function scope
+│   │   │   ├── deadCodeAnalyzer.js         # Koordinator analisis + confidence scoring
+│   │   │   ├── scope.js                    # Scope Tree (Global → Function → Block)
+│   │   │   ├── scopeHelpers.js             # Helper resolusi function scope hierarchy
+│   │   │   ├── isReference.js              # Validasi apakah identifier benar-benar dipakai
+│   │   │   ├── exportAnalyzer.js           # Cross-file export usage tracking
+│   │   │   ├── branchAnalyzer.js           # Deteksi unreachable branch + constant folding
+│   │   │   ├── classAnalyzer.js            # Deteksi unused class methods (type inference)
+│   │   │   ├── logicAnalyzer.js            # Deteksi duplicate conditions (AST equality)
+│   │   │   ├── destructuringExtractor.js   # Ekstraksi identifier dari pattern
+│   │   │   └── barrelResolver.js           # Resolusi barrel exports (index.js re-export)
 │   │   └── dependency/
-│   │       └── dependencyAnalyzer.js # Standalone detektor unused dependencies
-│   └── eliminator/
-│       ├── backupManager.js          # Pembuatan file backup checkpoint sebelum mode `fix`
-│       ├── codeCleaner.js            # Hapus dead code dari AST → regenerasi kode
-│       ├── dependencyCleaner.js      # Hapus entry dari package.json
-│       └── diffGenerator.js          # Preview diff berwarna di terminal
+│   │       └── dependencyAnalyzer.js       # Deteksi unused dependencies di package.json
+│   ├── eliminator/
+│   │   ├── backupManager.js                # Backup otomatis sebelum fix
+│   │   ├── codeCleaner.js                  # Hapus dead code (magic-string, preservasi TypeScript)
+│   │   ├── dependencyCleaner.js            # Hapus entry dari package.json
+│   │   ├── diffGenerator.js                # Git-style diff preview di terminal
+│   │   └── restoreManager.js               # Restore file dari backup
+│   ├── commands/
+│   │   ├── scanCommand.js                  # Perintah `scan` + opsi --json
+│   │   ├── fixCommand.js                   # Perintah `fix` (diff + konfirmasi + hapus)
+│   │   ├── showDepsCommand.js              # Perintah `show-deps`
+│   │   ├── visualizeCommand.js             # Perintah `visualize` (HTML Dashboard)
+│   │   ├── traceCommand.js                 # Perintah `trace` (reverse import)
+│   │   ├── watchCommand.js                 # Perintah `watch` (real-time monitoring)
+│   │   ├── reportCommand.js                # Perintah `report` (alias visualize)
+│   │   ├── historyCommand.js               # Perintah `history` (backup management)
+│   │   └── commandHelpers.js               # Shared helper (interactive fallback)
+│   └── ui/
+│       ├── wizard.js                       # Interactive Wizard (menu utama)
+│       ├── theme.js                        # Tema warna terminal (chalk)
+│       └── Logo.png                        # Logo DeadKiller (Base64 di HTML)
+├── test/
+│   └── scenarios/                          # Test scenarios untuk berbagai jenis proyek
+│       ├── dead-code-categories/           # Skenario: unused var, import, unreachable
+│       ├── vanilla-html/                   # Skenario: proyek HTML + JS biasa
+│       ├── nextjs-project/                 # Skenario: proyek Next.js
+│       └── webpack-project/                # Skenario: proyek dengan webpack
+├── .deadkillerrc.example.json              # Template konfigurasi
+├── package.json
+└── readme.md
 ```
 
-### 🕸️ Peta Ketergantungan Internal (Dependency Graph)
-Berikut adalah visualisasi keterhubungan antarmodul dalam program, dipetakan secara statis menggunakan perintah `visualize`:
+---
+
+## 🕸️ Peta Ketergantungan Internal
+
+Berikut visualisasi antarmodul dalam program, dipetakan secara statis:
 
 ```mermaid
 graph TD
-    N0["📄 bin/dce-cli.js"]
-    N1["📄 index.js"]
-    N2["📄 src/analyzer/deadcode/deadCodeAnalyzer.js"]
-    N3["📄 src/analyzer/deadcode/scope.js"]
-    N4["📄 src/analyzer/deadcode/utils.js"]
-    N5["📄 src/analyzer/dependencyAnalyzer.js"]
-    N6["📄 src/analyzer/graphVisualizer.js"]
-    N7["📄 src/analyzer/projectGraph.js"]
-    N8["📄 src/eliminator/codeCleaner.js"]
-    N9["📄 src/eliminator/dependencyCleaner.js"]
-    N10["📄 src/eliminator/diffGenerator.js"]
-    N11["📄 src/parser/astParser.js"]
-    N1 --> N11
-    N1 --> N8
-    N0 --> N11
-    N0 --> N5
-    N0 --> N2
-    N0 --> N8
-    N0 --> N9
-    N0 --> N7
-    N0 --> N10
-    N0 --> N6
-    N5 --> N11
-    N2 --> N3
-    N2 --> N4
-    N7 --> N11
+    CLI["bin/dce-cli.js"]
+    WIZARD["ui/wizard.js"]
+
+    SCAN["commands/scanCommand.js"]
+    FIX["commands/fixCommand.js"]
+    VIS["commands/visualizeCommand.js"]
+    DEPS["commands/showDepsCommand.js"]
+    TRACE["commands/traceCommand.js"]
+    WATCH["commands/watchCommand.js"]
+    REPORT["commands/reportCommand.js"]
+    HIST["commands/historyCommand.js"]
+    HELPER["commands/commandHelpers.js"]
+
+    GRAPH["graph/projectGraph.js"]
+    EPF["graph/entryPointFinder.js"]
+    PR["graph/pathResolver.js"]
+
+    DCA["deadcode/deadCodeAnalyzer.js"]
+    SCOPE["deadcode/scope.js"]
+    ISREF["deadcode/isReference.js"]
+    BRANCH["deadcode/branchAnalyzer.js"]
+    CLASSAZ["deadcode/classAnalyzer.js"]
+    LOGICAZ["deadcode/logicAnalyzer.js"]
+    EXPORT["deadcode/exportAnalyzer.js"]
+    DESTR["deadcode/destructuringExtractor.js"]
+    BARREL["deadcode/barrelResolver.js"]
+
+    PARSER["parser/astParser.js"]
+    CACHE["parser/parseCache.js"]
+
+    DA["dependency/dependencyAnalyzer.js"]
+    RULE["analyzer/ruleEngine.js"]
+    GVIS["analyzer/graphVisualizer.js"]
+
+    CC["eliminator/codeCleaner.js"]
+    DC["eliminator/dependencyCleaner.js"]
+    BM["eliminator/backupManager.js"]
+    DIFF["eliminator/diffGenerator.js"]
+    RM["eliminator/restoreManager.js"]
+
+    CLI --> SCAN & FIX & VIS & DEPS & TRACE & WATCH & REPORT & HIST
+    CLI --> WIZARD
+
+    SCAN & FIX --> HELPER --> GRAPH
+    SCAN & FIX --> PARSER & CACHE & DCA & DA & RULE
+    FIX --> CC & DC & BM & DIFF
+
+    VIS --> GVIS & GRAPH & PARSER & DCA & RULE
+    REPORT --> VIS
+    TRACE --> GRAPH
+    WATCH --> PARSER & DCA & RULE
+    HIST --> RM & BM
+
+    GRAPH --> EPF & PR & PARSER & BARREL
+    DCA --> SCOPE & ISREF & BRANCH & CLASSAZ & LOGICAZ & EXPORT & DESTR
 ```
 
-## 📋 Penjelasan Modul Inti
+---
 
-### `src/analyzer/projectGraph.js` (Graph Builder)
-Membangun peta ketergantungan seluruh proyek dari entry point menggunakan Breadth-First Search (BFS). Menentukan file mana yang "hidup" (live) dan mana yang tidak terjangkau (dead). Algoritma ini memiliki 3 fase penting: Mendeteksi _Bailout Heuristics_ (kode statis dinamis tak aman seperti `eval`), _Import Tracking_, dan pendeteksian komponen Skalabel.
+## 📊 Sistem Confidence & Safety
 
-### `src/analyzer/ruleEngine.js` (Engine Validasi Kebijakan)
-Mesin regex yang menyeleksi sebuah file/dead code aman dihapus atau diselamatkan. Dikonfigurasi melalui file lokal `.deadkillerrc.json` (Misalnya opsi menolak menghapus semua fitur _export_ menggunakan `preserveExports`).
+Setiap temuan dead code diberi dua label:
 
-### `src/analyzer/deadcode/` (Kluster Analisa Spesifik)
-Bertugas menemukan semua *dead code* dalam satu file dengan bantuan AST dan pohon `scope.js`. Diorkestrasikan oleh koordinator utama bernama `deadCodeAnalyzer.js` yang memanggil `branchAnalyzer.js` (untuk kode jalur buntu statis), `isReference.js` (memvalidasi keterpakaian variabel), serta mengutamakan pemeriksaan ekspor global melalui `exportAnalyzer.js`.
+### Confidence Level
 
-### `src/eliminator/backupManager.js` (Pencatat Cadangan)
-Mekanisme safe-layer. Menggandakan titik penyimpanan sistem file origin pada skema `.deadkiller_backup/backup_{timestamp}/` sehingga file tidak rusak saat operasi eksekusi mode `fix` dijalankan.
+| Level | Artinya | Contoh |
+|-------|---------|--------|
+| **HIGH** | 99%+ pasti unused | Unused local variable, unreachable code setelah `return` |
+| **MEDIUM** | Kemungkinan besar unused, perlu cek | Unused function (mungkin ada side-effect) |
+| **LOW** | Berisiko, mungkin dipakai secara dinamis | Unused parameter, class method |
 
-### `src/eliminator/codeCleaner.js` & `src/eliminator/dependencyCleaner.js`
-Algojo eksekusi langsung. *codeCleaner.js* bekerja sangat presisi memotong teks mati (`magic-string`) berdasarkan koordinat AST tanpa merusak spasi atau *type annotations* TypeScript. Sementara *dependencyCleaner.js* membersihkan modul sisa di `package.json`.
+### Safety Status
 
-## 🔗 Dependensi Pokok
-- **@typescript-eslint/typescript-estree**: *Engine* utama yang mengubah kode JavaScript/TypeScript menjadi format pohon *ESTree* berakurasi standar perusahaan.
-- **Estraverse**: Alat jelajah (*traversal*) dan pelacak setiap percabangan dalam *Scope tree*.
-- **Magic-string**: *Surgical tool* atau *algojo string* untuk memotong dead-code secara langsung (menjamin keaslian kode TypeScript tak terbuang percuma).
-- **Commander.js** & **Inquirer**: Menyusun rangka arsitektur antarmuka CLI.
+| Status | Artinya | Auto-fix? |
+|--------|---------|-----------|
+| **SAFE** | Aman dihapus | ✅ Ya |
+| **REVIEW** | Butuh peninjauan manual | ❌ Tidak |
+| **RISKY** | Berisiko tinggi (callback, event, inheritance) | ❌ Tidak |
+
+---
+
+## 🔗 Dependensi Utama
+
+| Package | Kegunaan |
+|---------|----------|
+| **@typescript-eslint/typescript-estree** | Parser JavaScript/TypeScript → ESTree AST |
+| **estraverse** | AST traversal engine untuk scope analysis |
+| **magic-string** | Surgical string manipulation (hapus dead code tanpa rusak format) |
+| **commander** | Framework CLI commands |
+| **inquirer** | Interactive prompts (wizard, konfirmasi fix) |
+| **chalk** | Terminal color output |
+| **ora** | Spinner/loading indicator |
+| **fast-glob** | File discovery (glob patterns) |
+| **fs-extra** | Enhanced filesystem operations |
+| **diff** | Diff generation untuk preview |
+
+---
+
+## 📝 Lisensi
+
+ISC

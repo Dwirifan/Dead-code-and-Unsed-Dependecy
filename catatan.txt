@@ -440,58 +440,7 @@ B — TINDAKAN (Write + Backup Otomatis)
 C — PEMULIHAN (Safety Net)
     history <folder>  : lihat/restore/hapus checkpoint backup
 
-================================================
-TO-DO / FOKUS SELANJUTNYA
-================================================
 
-PRIORITAS TINGGI:
-[x] 1. SELESAI — Perbaiki menu Wizard (3 kelompok fitur + separator)
-        - Separator: "─── Analisis (Read-Only) ───", "─── Tindakan (Write + Backup) ───",
-          "─── Pemulihan (Safety Net) ───"
-        - Setelah scan, ada prompt "Mau langsung fix sekarang?" (jika user pilih Yes,
-          langsung jalankan fix pada direktori yang sama)
-[x] 2. SELESAI — Test pada proyek React/JSX
-        - Dibuat proyek dummy: test/react-jsx/ (6 file JSX/JS)
-        - Hasil verifikasi:
-          ✅ Dead files terdeteksi benar (Footer.jsx, api.js)
-          ✅ Unused deps terdeteksi benar (lodash, moment, vite)
-          ✅ Live deps TIDAK salah masuk dead (react, react-dom, axios)
-          ✅ Dead code per-file terdeteksi (debugApp, MAX_RETRIES, internalLog, dll)
-          ✅ JSX parsing berhasil tanpa error
-        - FIX: Ditambahkan .jsx ke glob pattern (scanCommand, fixCommand)
-          dan ke daftar tryExtensions di projectGraph.js
-        - CATATAN: `import React` terdeteksi dead di file JSX karena scope analysis
-          tidak tahu bahwa JSX membutuhkan React di scope. Ini expected behavior
-          untuk React 17+ (JSX Transform otomatis). Bukan bug.
-[x] 3. SELESAI — Refactor dependencyAnalyzer.js → modul resmi terintegrasi
-        - DIKEMBALIKAN: src/analyzer/dependency/dependencyAnalyzer.js
-        - Ditulis ulang sebagai modul resmi dengan fungsi:
-          • getDeclaredDependencies(projectRoot) → baca semua deps dari package.json
-          • findUnusedDependencies(projectRoot, usedPackages) → bandingkan declared vs used
-        - scanCommand.js dan fixCommand.js sekarang memanggil modul ini
-          (bukan lagi logika inline)
-        - Arsitektur pipeline lengkap sesuai judul TA:
-          projectGraph (BFS → usedPackages) → dependencyAnalyzer (analisis)
-          → dependencyCleaner (eliminasi dari package.json)
-[ ] 4. Peningkatan Safety & Confidence (Hasil Audit 2026-05-04)
-        - Implementasi 'Confidence Score' (High/Medium/Low) pada laporan.
-        - Berikan label Status (Safe / Review / Risky) di terminal.
-        - Tambahkan sistem 'Bailout Warning' eksplisit untuk file unsafe (eval, dll).
-        - Pastikan auto-fix hanya menyentuh temuan berkategori 'Safe'.
-
-PRIORITAS SEDANG:
-[ ] 5. Config file .deadkillerrc.json
-        - Dokumen format opsi yang tersedia (ignore patterns, entry overrides)
-[ ] 6. Output JSON mode
-        - Tambahkan flag --json untuk scan agar bisa dipakai di CI/CD pipeline
-[ ] 7. Perbaiki tampilan diff di terminal
-        - Diff saat ini menggunakan warna chalk, tapi format bisa lebih rapi
-
-PRIORITAS RENDAH (untuk pengembangan lebih lanjut):
-[ ] 7. Reverse trace: "siapa yang mengimport file X?"
-        - Data sudah ada di graph.edges, tinggal query & tampilkan
-[ ] 8. Watch mode: auto-scan saat file berubah (gunakan chokidar)
-[ ] 9. Laporan HTML ringkasan dari scan (beda dengan visualize)
 
 ================================================
 IDE / JURNAL BEBAS / BUG YANG DITEMUKAN

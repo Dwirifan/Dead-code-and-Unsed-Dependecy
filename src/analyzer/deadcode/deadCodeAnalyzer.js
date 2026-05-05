@@ -8,9 +8,79 @@ import { findUnreachableBranches } from './branchAnalyzer.js';
 import { markUsedExports } from './exportAnalyzer.js';
 import { findDuplicateConditions } from './logicAnalyzer.js';
 import { findUnusedClassMethods } from './classAnalyzer.js';
+import { findRedundantCode } from './redundancyAnalyzer.js';
+import { buildCFG, analyzePathSensitive } from './flowAnalyzer.js';
 
 // Gabungkan Visitor Keys ESTree standar dengan ekstrasi TypeScript/JSX
 const visitorKeys = { ...estraverse.VisitorKeys, ...tsVisitorKeys };
+
+/**
+ * Sistem Klasifikasi Kepercayaan (Confidence Scoring)
+ * 
+ * Setiap temuan dead code diberi label:
+ *   - confidence: 'high' | 'medium' | 'low'
+ *   - status:     'safe' | 'review' | 'risky'
+ * 
+ * Aturan Penentuan:
+ *   HIGH  + SAFE   → Unused local variable, unused import (99% aman dihapus)
+ *   HIGH  + SAFE   → Unreachable code setelah return/throw (100% aman)
+ *   MEDIUM + REVIEW → Unused function, write-only variable (perlu cek side-effect)
+ *   MEDIUM + REVIEW → Duplicate condition (logika mungkin sengaja)
+ *   LOW   + RISKY  → Class method, parameter (risiko rusak API/callback)
+ */
+function classifyConfidence(type, info = {}) {
+    switch (type) {
+        // === HIGH CONFIDENCE (Aman dihapus) ===
+        case 'Variable':
+            // Import yang tidak dipakai = high confidence
+            if (info.isImport) return { confidence: 'high', status: 'safe' };
+            // Variable lokal biasa = high confidence
+            return { confidence: 'high', status: 'safe' };
+
+        case 'UnusedType':
+            // Interface/Type/Enum TypeScript yang tidak dipakai
+            return { confidence: 'high', status: 'safe' };
+
+        case 'WriteOnly':
+            // Variable yang hanya ditulis tapi tidak pernah dibaca
+            return { confidence: 'medium', status: 'review' };
+
+        case 'Function':
+            // Fungsi yang tidak dipanggil di scope manapun
+            return { confidence: 'medium', status: 'review' };
+
+        // === HIGH CONFIDENCE (Pasti tidak tereksekusi) ===
+        case 'DeadCode':
+        case 'DeadBranch':
+            return { confidence: 'high', status: 'safe' };
+
+        // === MEDIUM CONFIDENCE (Butuh peninjauan) ===
+        case 'DuplicateCondition':
+            return { confidence: 'medium', status: 'review' };
+
+        case 'EmptyBlock':
+            return { confidence: 'medium', status: 'review' };
+
+        case 'DuplicateImport':
+            return { confidence: 'high', status: 'safe' };
+
+        case 'RedundantCode':
+            return { confidence: 'medium', status: 'review' };
+
+        case 'PathWarning':
+            return { confidence: 'low', status: 'risky' };
+
+        // === LOW CONFIDENCE (Berisiko tinggi) ===
+        case 'ClassMethod':
+            return { confidence: 'low', status: 'risky' };
+
+        case 'Parameter':
+            return { confidence: 'low', status: 'risky' };
+
+        default:
+            return { confidence: 'medium', status: 'review' };
+    }
+}
 
 // Logika Analisis Utama
 function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, ruleEngine = null) {
@@ -108,23 +178,36 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, rul
             }
 
             // Pendataan Deklarasi Impor
+            // PENTING: Side-effect imports (tanpa specifier) TIDAK didaftarkan ke scope
+            // karena memang tidak mendeklarasikan variabel apapun.
+            // Contoh: import './polyfill.js' atau import 'reflect-metadata'
             if (node.type === 'ImportDeclaration' && node.specifiers) {
+                // Skip side-effect imports — mereka punya efek samping (polyfill, CSS, etc)
+                if (node.specifiers.length === 0) {
+                    // Ini adalah side-effect import: import './something'
+                    // Jangan masukkan ke scope apapun — ini BUKAN dead code.
+                    return;
+                }
+                const isTypeImport = node.importKind === 'type';
+                
                 node.specifiers.forEach(spec => {
                     if (spec.local && spec.local.type === 'Identifier') {
-                        currentScope.addDeclaration(spec.local.name, 'Variable', spec.loc.start.line, spec.local);
+                        const isSpecifierTypeImport = spec.importKind === 'type' || isTypeImport;
+                        const declarationType = isSpecifierTypeImport ? 'UnusedType' : 'Variable';
+                        currentScope.addDeclaration(spec.local.name, declarationType, spec.loc.start.line, spec.local, { isImport: true });
                     }
                 });
             }
 
             // Pendataan TypeScript-only Deklarasi (Interface, Type Alias, Enum)
             if (node.type === 'TSInterfaceDeclaration' && node.id) {
-                currentScope.addDeclaration(node.id.name, 'Variable', node.loc.start.line, node);
+                currentScope.addDeclaration(node.id.name, 'UnusedType', node.loc.start.line, node);
             }
             if (node.type === 'TSTypeAliasDeclaration' && node.id) {
-                currentScope.addDeclaration(node.id.name, 'Variable', node.loc.start.line, node);
+                currentScope.addDeclaration(node.id.name, 'UnusedType', node.loc.start.line, node);
             }
             if (node.type === 'TSEnumDeclaration' && node.id) {
-                currentScope.addDeclaration(node.id.name, 'Variable', node.loc.start.line, node);
+                currentScope.addDeclaration(node.id.name, 'UnusedType', node.loc.start.line, node);
             }
 
             // Pelacakan Referensi Penggunaan (Read vs Write Differentiation)
@@ -238,31 +321,122 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, rul
                    }
                }
 
-               // Tentukan tipe: apakah Write-Only atau benar-benar tidak pernah disentuh
-               const effectiveType = (info.writeCount > 0 && info.readCount === 0)
-                   ? 'WriteOnly'
-                   : info.type;
+                // Tentukan tipe: apakah Write-Only atau benar-benar tidak pernah disentuh
+                const effectiveType = (info.writeCount > 0 && info.readCount === 0)
+                    ? 'WriteOnly'
+                    : info.type;
 
-               deadCode.push({
-                   name,
-                   type: effectiveType,
-                   line: info.line,
-                   node: targetNode
-               });
+                // Tentukan apakah ini deklarasi import
+                const isImport = info.node && (
+                    info.node.type === 'ImportSpecifier' ||
+                    info.node.type === 'ImportDefaultSpecifier' ||
+                    info.node.type === 'ImportNamespaceSpecifier' ||
+                    (info.node.type === 'Identifier' && info.parentNode && info.parentNode.type === 'ImportDeclaration')
+                );
+
+                const { confidence, status } = classifyConfidence(effectiveType, { isImport });
+
+                deadCode.push({
+                    name,
+                    type: effectiveType,
+                    line: info.line,
+                    node: targetNode,
+                    confidence,
+                    status
+                });
            }
        });
     });
 
     const unreachableNodes = findUnreachableBranches(ast);
+    unreachableNodes.forEach(node => {
+        const { confidence, status } = classifyConfidence(node.type);
+        node.confidence = confidence;
+        node.status = status;
+    });
     deadCode.push(...unreachableNodes);
 
     // Phase 5: Analisis Logika (Duplicate Conditions)
     const duplicateConditions = findDuplicateConditions(ast);
+    duplicateConditions.forEach(node => {
+        const { confidence, status } = classifyConfidence(node.type);
+        node.confidence = confidence;
+        node.status = status;
+    });
     deadCode.push(...duplicateConditions);
 
     // Phase 6: Simple Type Inference — Unused Class Methods
     const unusedMethods = findUnusedClassMethods(ast, globalRegistry);
+    unusedMethods.forEach(node => {
+        const { confidence, status } = classifyConfidence(node.type);
+        node.confidence = confidence;
+        node.status = status;
+    });
     deadCode.push(...unusedMethods);
+
+    // Phase 7: Duplicate Import Detection
+    // Mendeteksi import yang sama dari modul yang sama dideklarasikan lebih dari sekali.
+    // Contoh: import { foo } from './lib'; import { foo } from './lib'; → duplikat
+    const importMap = new Map(); // key: 'modulePath::specifierName'
+    for (const node of (ast.body || [])) {
+        if (node.type === 'ImportDeclaration' && node.specifiers && node.source) {
+            const modulePath = node.source.value;
+            for (const spec of node.specifiers) {
+                const localName = spec.local ? spec.local.name : null;
+                if (!localName) continue;
+                const key = `${modulePath}::${localName}`;
+                if (importMap.has(key)) {
+                    const { confidence, status } = classifyConfidence('DuplicateImport');
+                    deadCode.push({
+                        name: `Duplicate import '${localName}' from '${modulePath}'`,
+                        type: 'DuplicateImport',
+                        line: spec.loc ? spec.loc.start.line : node.loc.start.line,
+                        node: node,
+                        confidence,
+                        status
+                    });
+                } else {
+                    importMap.set(key, true);
+                }
+            }
+        }
+    }
+
+    // Phase 8: Redundant Code Detection
+    const redundantNodes = findRedundantCode(ast);
+    redundantNodes.forEach(node => {
+        const { confidence, status } = classifyConfidence(node.type);
+        node.confidence = confidence;
+        node.status = status;
+    });
+    deadCode.push(...redundantNodes);
+
+    // Phase 9: CFG-Based Unreachable Block Detection
+    // Membangun Control Flow Graph dan mendeteksi blok tanpa predecessor.
+    const programBody = ast.body || [];
+    const cfg = buildCFG(programBody);
+    for (const block of cfg.unreachableBlocks) {
+        for (const stmt of block.statements) {
+            const { confidence, status } = classifyConfidence('DeadCode');
+            deadCode.push({
+                name: 'CFG Unreachable Block',
+                type: 'DeadCode',
+                line: stmt.loc ? stmt.loc.start.line : 0,
+                node: stmt,
+                confidence,
+                status
+            });
+        }
+    }
+
+    // Phase 10: Path-Sensitive Analysis
+    const pathFindings = analyzePathSensitive(ast);
+    pathFindings.forEach(node => {
+        const { confidence, status } = classifyConfidence(node.type);
+        node.confidence = confidence;
+        node.status = status;
+    });
+    deadCode.push(...pathFindings);
 
     return deadCode;
 }

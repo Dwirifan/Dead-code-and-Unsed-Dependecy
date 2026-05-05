@@ -9,18 +9,23 @@ export function markUsedExports(ast, globalScope, fileName, globalRegistry, rule
         fallback: 'iteration',
         enter: function(node) {
              const checkUsage = (name) => {
+                 const rules = ruleEngine && ruleEngine.rules;
+                 
                  // Hybrid Rules: Jika di-export dan preserveExports ON, maka selamatkan.
-                 if (ruleEngine && ruleEngine.rules && ruleEngine.rules.preserveExports) {
+                 if (rules && rules.preserveExports === true) {
                      return true;
                  }
+                 // Jika preserveExports === 'strict', lanjut ke pengecekan cross-file (globalRegistry)
 
                  if (!globalRegistry) return true; // Default konservatif: Jika tidak ada registri graf global, asumsikan dipakai
+                 
                  // Evaluasi Silang File Berbasis Call Graph (Ekspor -> Impor):
                  if (globalRegistry.usedExports && fileName) {
                      const fileUsed = globalRegistry.usedExports.get(fileName);
                      if (fileUsed && (fileUsed.has(name) || fileUsed.has('*'))) {
-                         return true;
+                         return true; // Ada file lain yang meng-import
                      }
+                     // Dalam mode strict, kita sengaja tidak me-return true jika tidak ada yang import.
                      return false;
                  }
                  // Fallback metodologi usang (Global registry lama)

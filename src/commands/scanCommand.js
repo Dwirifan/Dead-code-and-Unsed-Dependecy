@@ -5,6 +5,7 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { performance } from 'perf_hooks';
 import { parseCode } from '../parser/astParser.js';
+import { ParseCache } from '../parser/parseCache.js';
 import { findDeadCode } from '../analyzer/deadcode/deadCodeAnalyzer.js';
 import { findUnusedDependencies } from '../analyzer/dependency/dependencyAnalyzer.js';
 import { RuleEngine } from '../analyzer/ruleEngine.js';
@@ -18,8 +19,10 @@ export function registerScanCommand(program) {
     program
         .command('scan')
         .argument('<path>', 'Path ke file tunggal atau direktori proyek')
+        .option('--json', 'Output hasil analisis dalam format JSON (untuk integrasi CI/CD)')
         .description('Pindai dead code dan dependensi tidak terpakai tanpa mengubah file')
-        .action(async (targetPath) => {
+        .action(async (targetPath, options) => {
+            const jsonMode = options.json || false;
             const absolutePath = path.resolve(targetPath);
             if (!fs.existsSync(absolutePath)) {
                 console.error(`[ERROR] Path '${absolutePath}' tidak ditemukan.`);
@@ -34,8 +37,20 @@ export function registerScanCommand(program) {
                 console.log(`\n[>] Scanning file tunggal: ${path.basename(absolutePath)}`);
                 try {
                     const code     = await fs.readFile(absolutePath, 'utf-8');
-                    const ast      = parseCode(code, file);
+                    const ast      = parseCode(code, absolutePath);
                     const deadNodes = findDeadCode(ast);
+
+                    if (jsonMode) {
+                        const jsonResult = {
+                            mode: 'single-file',
+                            file: absolutePath,
+                            deadCode: deadNodes.map(n => ({ name: n.name, type: n.type, line: n.line, confidence: n.confidence || 'medium', status: n.status || 'review' })),
+                            totalIssues: deadNodes.length,
+                            analysisTime: `${(performance.now() - startTime).toFixed(2)} ms`
+                        };
+                        console.log(JSON.stringify(jsonResult, null, 2));
+                        return;
+                    }
 
                     if (deadNodes.length > 0) {
                         console.log(`\n[!] Dead Code ditemukan:`);
@@ -113,16 +128,28 @@ export function registerScanCommand(program) {
 
             // Dead code di live files — dikategorisasi berdasarkan tipe
             const scanSpinner = ora('Melacak Dead Code di seluruh File Aktif...').start();
+            const cache = new ParseCache();
 
             const allDeadNodes = []; // { file, node }
             for (const file of graph.liveFiles) {
-                // Skip file JSON, CSS dan node_modules (tidak bisa di-parse sebagai JS/TS)
-                const ext = path.extname(file);
-                if (ext === '.json' || ext === '.css' || ext === '.scss' || ext === '.sass' || ext === '.less' || file.includes('node_modules')) continue;
+                // Skip file yang bukan JavaScript/TypeScript (tidak bisa di-parse)
+                const PARSEABLE_EXTENSIONS = new Set(['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts']);
+                const ext = path.extname(file).toLowerCase();
+                if (!PARSEABLE_EXTENSIONS.has(ext) || file.includes('node_modules')) continue;
 
                 try {
-                    const code     = await fs.readFile(file, 'utf-8');
-                    const ast      = parseCode(code, file);
+                    // Cek cache terlebih dahulu
+                    let code, ast;
+                    const cached = await cache.get(file);
+                    if (cached) {
+                        code = cached.code;
+                        ast  = cached.ast;
+                    } else {
+                        code = await fs.readFile(file, 'utf-8');
+                        ast  = parseCode(code, file);
+                        await cache.set(file, ast, code);
+                    }
+
                     const deadNodes = findDeadCode(ast, file, graph.globalRegistry, ruleEngine);
                     deadNodes.forEach(n => allDeadNodes.push({ file, ...n }));
                 } catch (err) {
@@ -131,31 +158,37 @@ export function registerScanCommand(program) {
             }
             scanSpinner.stop();
 
-            // Kategorisasi berdasarkan tingkat kepastian (Confidence Level)
-            const categories = {
-                'Variable':             { label: '[Unused Variables]',        color: chalk.red,     severity: 'high',   group: 'definitely' },
-                'Function':             { label: '[Unused Functions]',        color: chalk.red,     severity: 'high',   group: 'definitely' },
-                'Import':               { label: '[Unused Imports]',          color: chalk.red,     severity: 'high',   group: 'definitely' },
-                'WriteOnly':            { label: '[Write-Only Variables]',    color: chalk.red,     severity: 'high',   group: 'definitely' },
-                'DeadCode':             { label: '[Unreachable Code]',        color: chalk.magenta, severity: 'high',   group: 'definitely' },
-                'DeadBranch':           { label: '[Unreachable Branch]',      color: chalk.magenta, severity: 'high',   group: 'definitely' },
-                'DuplicateCondition':   { label: '[Duplicate Conditions]',    color: chalk.magenta, severity: 'medium', group: 'definitely' },
-                'ClassMethod':          { label: '[Unused Class Methods]',    color: chalk.red,     severity: 'medium', group: 'possibly' },
-                'Parameter':            { label: '[Unused Parameters]',       color: chalk.yellow,  severity: 'low',    group: 'possibly' },
+            // Tampilkan statistik cache
+            const cacheStats = cache.getStats();
+            if (cacheStats.hits > 0) {
+                console.log(chalk.gray(`   [cache] ${cacheStats.hits} hits, ${cacheStats.misses} misses (${cacheStats.hitRate} hit rate)`));
+            }
+
+            // Kategorisasi berdasarkan status keamanan (dari analyzer)
+            const typeLabels = {
+                'Variable':             { label: '[Unused Variables]',        color: chalk.red },
+                'Function':             { label: '[Unused Functions]',        color: chalk.red },
+                'Import':               { label: '[Unused Imports]',          color: chalk.red },
+                'WriteOnly':            { label: '[Write-Only Variables]',    color: chalk.red },
+                'DeadCode':             { label: '[Unreachable Code]',        color: chalk.magenta },
+                'DeadBranch':           { label: '[Unreachable Branch]',      color: chalk.magenta },
+                'DuplicateCondition':   { label: '[Duplicate Conditions]',    color: chalk.magenta },
+                'ClassMethod':          { label: '[Unused Class Methods]',    color: chalk.yellow },
+                'Parameter':            { label: '[Unused Parameters]',       color: chalk.yellow },
             };
 
-            const groupedItems = { definitely: [], possibly: [], other: [] };
+            // Kelompokkan berdasarkan status (safe/review/risky)
+            const groupedItems = { safe: [], review: [], risky: [], other: [] };
 
             for (const node of allDeadNodes) {
-                const cat = categories[node.type];
-                if (cat) {
-                    groupedItems[cat.group].push({ ...node, meta: cat });
+                const group = node.status || 'other';
+                if (groupedItems[group]) {
+                    groupedItems[group].push(node);
                 } else {
                     groupedItems.other.push(node);
                 }
             }
-
-            const printGroup = (title, description, items) => {
+               const printGroup = (title, description, items) => {
                 if (items.length === 0) return false;
                 
                 console.log(`\n================================================`);
@@ -163,19 +196,22 @@ export function registerScanCommand(program) {
                 console.log(chalk.gray(description));
                 console.log(`================================================`);
                 
-                // Urutkan berdasarkan tipe (label)
+                // Kelompokkan berdasarkan tipe
                 const itemsByType = {};
                 items.forEach(n => {
-                    const label = n.meta.label;
-                    if (!itemsByType[label]) itemsByType[label] = { meta: n.meta, nodes: [] };
+                    const meta = typeLabels[n.type] || { label: `[${n.type}]`, color: chalk.gray };
+                    const label = meta.label;
+                    if (!itemsByType[label]) itemsByType[label] = { meta, nodes: [] };
                     itemsByType[label].nodes.push(n);
                 });
 
                 for (const [label, data] of Object.entries(itemsByType)) {
-                    const severityBadge = data.meta.severity === 'high' ? chalk.bgRed.white(` ${data.meta.severity.toUpperCase()} `) :
-                                          data.meta.severity === 'medium' ? chalk.bgYellow.black(` ${data.meta.severity.toUpperCase()} `) :
-                                          chalk.bgGray.white(` ${data.meta.severity.toUpperCase()} `);
-                    console.log(`\n${data.meta.color(label)} ${severityBadge}`);
+                    // Ambil confidence dari node pertama di grup ini
+                    const sampleConfidence = data.nodes[0]?.confidence || 'medium';
+                    const confidenceBadge = sampleConfidence === 'high' ? chalk.bgRed.white(' HIGH ') :
+                                            sampleConfidence === 'medium' ? chalk.bgYellow.black(' MEDIUM ') :
+                                            chalk.bgGray.white(' LOW ');
+                    console.log(`\n${data.meta.color(label)} ${confidenceBadge}`);
                     
                     const byFile = {};
                     data.nodes.forEach(n => {
@@ -185,7 +221,12 @@ export function registerScanCommand(program) {
                     });
                     for (const [file, nodes] of Object.entries(byFile)) {
                         console.log(`   -> ${file}`);
-                        nodes.forEach(n => console.log(`      Line ${n.line}: '${n.name}'`));
+                        nodes.forEach(n => {
+                            const statusIcon = n.status === 'safe' ? chalk.green('[SAFE]') :
+                                               n.status === 'review' ? chalk.yellow('[REVIEW]') :
+                                               chalk.red('[RISKY]');
+                            console.log(`      Line ${n.line}: '${n.name}' ${statusIcon}`);
+                        });
                     }
                 }
                 return true;
@@ -193,14 +234,31 @@ export function registerScanCommand(program) {
 
             let printedAny = false;
             
-            if (printGroup('🔴 DEFINITELY UNUSED (Aman untuk dihapus)', 'Kode ini dipastikan 100% tidak pernah dieksekusi atau dipanggil di lingkup manapun.', groupedItems.definitely)) {
+            if (printGroup(
+                '\u{1F7E2} SAFE TO REMOVE (Aman untuk dihapus)',
+                'Kode ini dipastikan tidak pernah dieksekusi atau dipanggil. Auto-fix akan menghapus item ini.',
+                groupedItems.safe
+            )) {
                 printedAny = true;
-                totalIssues += groupedItems.definitely.length;
+                totalIssues += groupedItems.safe.length;
             }
 
-            if (printGroup('⚠️ POSSIBLY UNUSED (Butuh Peninjauan Manual)', 'Kode ini mungkin tidak dipakai, tapi menghapusnya berisiko mengubah API Signature (seperti Callback/Event).', groupedItems.possibly)) {
+            if (printGroup(
+                '\u{1F7E1} NEEDS REVIEW (Butuh Peninjauan Manual)',
+                'Kode ini kemungkinan tidak dipakai, tapi ada risiko side-effect. Periksa sebelum menghapus.',
+                groupedItems.review
+            )) {
                 printedAny = true;
-                totalIssues += groupedItems.possibly.length;
+                totalIssues += groupedItems.review.length;
+            }
+
+            if (printGroup(
+                '\u{1F534} RISKY (Berisiko Tinggi)',
+                'Kode ini mungkin dipanggil secara dinamis (callback, event, inheritance). JANGAN hapus tanpa pengecekan.',
+                groupedItems.risky
+            )) {
+                printedAny = true;
+                totalIssues += groupedItems.risky.length;
             }
 
             if (groupedItems.other.length > 0) {
@@ -213,6 +271,56 @@ export function registerScanCommand(program) {
             }
             if (!printedAny) console.log('\n   [ok] Tidak ada dead code yang tertinggal!');
 
-            console.log(`\n[t] Analysis Time: ${(performance.now() - startTime).toFixed(2)} ms`);
+            const duration = (performance.now() - startTime).toFixed(2);
+            
+            // Tampilkan Summary Statistics Box
+            if (!jsonMode) {
+                console.log('\n┌──────────────────────────────────────────────┐');
+                console.log('│ ' + chalk.bold('📊 SCAN SUMMARY STATISTICS') + '                   │');
+                console.log('├──────────────────────────────────────────────┤');
+                console.log(`│ Total Files Analyzed : ${String(graph.liveFiles.size).padEnd(21)} │`);
+                console.log(`│ Dead Files Found     : ${String(deadFiles.length).padEnd(21)} │`);
+                console.log(`│ Total Issues         : ${String(totalIssues).padEnd(21)} │`);
+                console.log('├──────────────────────────────────────────────┤');
+                console.log(`│ 🟢 Safe to Remove    : ${String(groupedItems.safe.length).padEnd(21)} │`);
+                console.log(`│ 🟡 Needs Review      : ${String(groupedItems.review.length).padEnd(21)} │`);
+                console.log(`│ 🔴 Risky Actions     : ${String(groupedItems.risky.length).padEnd(21)} │`);
+                console.log('├──────────────────────────────────────────────┤');
+                console.log(`│ ⏱️  Scan Time        : ${String(duration + ' ms').padEnd(21)} │`);
+                console.log('└──────────────────────────────────────────────┘\n');
+            }
+
+            // === JSON MODE: Output terstruktur untuk CI/CD ===
+            if (jsonMode) {
+                const jsonResult = {
+                    mode: 'directory',
+                    projectRoot: absolutePath,
+                    summary: {
+                        liveFiles: graph.liveFiles.size,
+                        totalIssues,
+                        analysisTime: `${(performance.now() - startTime).toFixed(2)} ms`
+                    },
+                    unsafeFiles: graph.unsafeFiles ? [...graph.unsafeFiles].map(f => path.relative(absolutePath, f)) : [],
+                    unusedDependencies: [],
+                    deadFiles: deadFiles.map(f => path.relative(absolutePath, f)),
+                    deadCode: allDeadNodes.map(n => ({
+                        file: path.relative(absolutePath, n.file),
+                        name: n.name,
+                        type: n.type,
+                        line: n.line,
+                        confidence: n.confidence || 'medium',
+                        status: n.status || 'review'
+                    }))
+                };
+                // Tambahkan data unused deps jika ada
+                try {
+                    const depReport = await findUnusedDependencies(absolutePath, graph.usedPackages);
+                    jsonResult.unusedDependencies = depReport.unused;
+                } catch (_) {}
+
+                // Output JSON (tanpa menghapus terminal — biarkan user lihat warning sebelumnya)
+                console.log('\n--- JSON OUTPUT ---');
+                console.log(JSON.stringify(jsonResult, null, 2));
+            }
         });
 }
