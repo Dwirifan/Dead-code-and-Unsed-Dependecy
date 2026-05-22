@@ -114,3 +114,5 @@ function consumeNewline(code, pos) {
     if (pos < code.length && code[pos] === '\n') pos++;
     return pos;
 }
+
+// PXP: Pengembangan Modul Eksekusi dan Modifikasi (Eliminator)
