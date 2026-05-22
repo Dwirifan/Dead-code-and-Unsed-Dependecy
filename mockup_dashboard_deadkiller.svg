@@ -1,0 +1,227 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1580" width="1200" height="1580">
+  <style>
+    text { font-family: 'Comic Sans MS', 'Chalkboard SE', 'Segoe Print', sans-serif; fill: #333333; }
+    .bg { fill: #ffffff; }
+    
+    /* Low-Fidelity Wireframe Styles */
+    .wire-box { fill: #ffffff; stroke: #333333; stroke-width: 2; }
+    .wire-box-gray { fill: #f0f0f0; stroke: #333333; stroke-width: 2; }
+    .wire-line { stroke: #333333; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .wire-line-light { stroke: #cccccc; stroke-width: 2; }
+    .wire-fill { fill: #333333; }
+    .wire-text { fill: #333333; }
+    .wire-placeholder { fill: #e0e0e0; }
+
+    .title { font-size: 24px; font-weight: bold; }
+    .subtitle { font-size: 14px; fill: #666666; }
+    
+    .stat-num { font-size: 32px; font-weight: bold; }
+    .stat-label { font-size: 12px; font-weight: bold; }
+    
+    .badge-bg { fill: #ffffff; stroke: #333333; stroke-width: 1.5; rx: 4; ry: 4; }
+    .badge-text { font-size: 12px; font-weight: bold; }
+    
+    .graph-node { fill: #ffffff; stroke: #333333; stroke-width: 2; rx: 0; ry: 0; }
+    .graph-text { font-size: 14px; }
+    
+    .table-head { font-weight: bold; font-size: 12px; }
+    .table-row { font-size: 13px; }
+    
+    .section-title { font-size: 18px; font-weight: bold; }
+  </style>
+
+  <!-- Background -->
+  <rect x="0" y="0" width="1200" height="1580" class="bg" />
+  
+  <!-- Main Browser Container -->
+  <rect class="wire-box" x="40" y="40" width="1120" height="1500" />
+  
+  <!-- Browser Header -->
+  <rect class="wire-box" x="40" y="40" width="1120" height="40" />
+  <circle cx="65" cy="60" r="6" class="wire-box" />
+  <circle cx="85" cy="60" r="6" class="wire-box" />
+  <circle cx="105" cy="60" r="6" class="wire-box" />
+  
+  <!-- URL Bar Placeholder -->
+  <rect x="135" y="50" width="850" height="20" class="wire-box" />
+  <text x="145" y="64" font-size="11" fill="#666">http://localhost:3000</text>
+  
+  <!-- Top Bar Actions Placeholder -->
+  <rect x="1000" y="50" width="90" height="20" class="wire-box" />
+  <line x1="1045" y1="50" x2="1045" y2="70" class="wire-line" />
+
+  <!-- PAGE HEADER -->
+  <rect class="wire-box" x="70" y="110" width="1060" height="110" />
+  
+  <!-- Logo Placeholder (Crossed Box) -->
+  <rect class="wire-box" x="90" y="125" width="80" height="80" />
+  <line x1="90" y1="125" x2="170" y2="205" class="wire-line" />
+  <line x1="170" y1="125" x2="90" y2="205" class="wire-line" />
+  
+  <rect x="190" y="130" width="300" height="24" class="wire-placeholder" />
+  <rect x="190" y="160" width="200" height="14" class="wire-placeholder" />
+  
+  <!-- Badges Placeholders -->
+  <rect x="190" y="185" width="100" height="20" class="badge-bg" />
+  <text x="210" y="199" class="badge-text">Label A</text>
+  
+  <rect x="300" y="185" width="100" height="20" class="badge-bg" />
+  <text x="320" y="199" class="badge-text">Label B</text>
+  
+  <rect x="410" y="185" width="100" height="20" class="badge-bg" />
+  <text x="430" y="199" class="badge-text">Label C</text>
+
+  <!-- STATS STRIP -->
+  <rect class="wire-box" x="70" y="240" width="340" height="90" />
+  <text class="stat-num" x="90" y="285">XX</text>
+  <text class="stat-label" x="90" y="315">DATA STATISTIK 1</text>
+  
+  <rect class="wire-box" x="430" y="240" width="340" height="90" />
+  <text class="stat-num" x="450" y="285">XX</text>
+  <text class="stat-label" x="450" y="315">DATA STATISTIK 2</text>
+  
+  <rect class="wire-box" x="790" y="240" width="340" height="90" />
+  <text class="stat-num" x="810" y="285">XX</text>
+  <text class="stat-label" x="810" y="315">DATA STATISTIK 3</text>
+
+  <!-- MAIN LAYOUT -->
+  <!-- Graph Panel -->
+  <rect class="wire-box" x="70" y="350" width="700" height="580" />
+  <!-- Graph Header -->
+  <rect class="wire-box" x="70" y="350" width="700" height="40" />
+  <text x="90" y="375" class="section-title">Judul Panel Visualisasi</text>
+  
+  <!-- Toolbar Placeholders -->
+  <rect class="wire-box" x="70" y="390" width="700" height="35" />
+  <rect x="580" y="396" width="28" height="22" class="wire-box" />
+  <rect x="615" y="396" width="28" height="22" class="wire-box" />
+  <rect x="650" y="396" width="50" height="22" class="wire-box" />
+  
+  <!-- Graph Edges -->
+  <path d="M 370 480 Q 370 510 240 510 T 240 560" class="wire-line" />
+  <path d="M 470 480 Q 470 510 600 510 T 600 560" class="wire-line" />
+  <path d="M 240 600 Q 240 630 150 630 T 150 700" class="wire-line" />
+  <path d="M 240 600 Q 240 630 330 630 T 330 700" class="wire-line" />
+  <path d="M 600 600 Q 600 630 510 630 T 510 700" class="wire-line" />
+  <path d="M 600 600 Q 600 630 690 630 T 690 700" class="wire-line" />
+  
+  <!-- Graph Nodes -->
+  <rect class="graph-node" x="360" y="460" width="120" height="40" /> <text x="385" y="485" class="graph-text">Node A</text>
+  <rect class="graph-node" x="180" y="560" width="120" height="40" /> <text x="205" y="585" class="graph-text">Node B</text>
+  <rect class="graph-node" x="540" y="560" width="120" height="40" /> <text x="565" y="585" class="graph-text">Node C</text>
+  <rect class="graph-node" x="90" y="700" width="120" height="40" /> <text x="115" y="725" class="graph-text">Node D</text>
+  <rect class="graph-node" x="270" y="700" width="120" height="40" /> <text x="295" y="725" class="graph-text">Node E</text>
+  <rect class="graph-node" x="450" y="700" width="120" height="40" /> <text x="475" y="725" class="graph-text">Node F</text>
+  <rect class="graph-node" x="630" y="700" width="120" height="40" /> <text x="655" y="725" class="graph-text">Node G</text>
+
+  <!-- SIDEBAR -->
+  <!-- Legend -->
+  <rect class="wire-box" x="790" y="350" width="340" height="190" />
+  <rect class="wire-box" x="790" y="350" width="340" height="40" />
+  <text x="810" y="375" class="section-title">Judul Legend</text>
+  
+  <rect x="815" y="410" width="12" height="12" class="wire-box" /> <rect x="840" y="412" width="100" height="8" class="wire-placeholder" />
+  <rect x="815" y="440" width="12" height="12" class="wire-box" /> <rect x="840" y="442" width="120" height="8" class="wire-placeholder" />
+  <rect x="815" y="470" width="12" height="12" class="wire-box" /> <rect x="840" y="472" width="90" height="8" class="wire-placeholder" />
+  <rect x="815" y="500" width="12" height="12" class="wire-box" /> <rect x="840" y="502" width="110" height="8" class="wire-placeholder" />
+
+  <!-- Used Deps -->
+  <rect class="wire-box" x="790" y="560" width="340" height="200" />
+  <rect class="wire-box" x="790" y="560" width="340" height="40" />
+  <text x="810" y="585" class="section-title">List Data A (X)</text>
+  
+  <circle cx="820" cy="625" r="3" class="wire-fill" /> <rect x="835" y="621" width="80" height="8" class="wire-placeholder" />
+  <circle cx="820" cy="650" r="3" class="wire-fill" /> <rect x="835" y="646" width="100" height="8" class="wire-placeholder" />
+  <circle cx="820" cy="675" r="3" class="wire-fill" /> <rect x="835" y="671" width="90" height="8" class="wire-placeholder" />
+  <circle cx="820" cy="700" r="3" class="wire-fill" /> <rect x="835" y="696" width="120" height="8" class="wire-placeholder" />
+  <circle cx="820" cy="725" r="3" class="wire-fill" /> <rect x="835" y="721" width="70" height="8" class="wire-placeholder" />
+
+  <!-- Unused Deps -->
+  <rect class="wire-box" x="790" y="780" width="340" height="150" />
+  <rect class="wire-box" x="790" y="780" width="340" height="40" />
+  <text x="810" y="805" class="section-title">List Data B (Y)</text>
+  
+  <circle cx="820" cy="845" r="3" class="wire-fill" /> <rect x="835" y="841" width="110" height="8" class="wire-placeholder" />
+  <circle cx="820" cy="870" r="3" class="wire-fill" /> <rect x="835" y="866" width="90" height="8" class="wire-placeholder" />
+  <circle cx="820" cy="895" r="3" class="wire-fill" /> <rect x="835" y="891" width="100" height="8" class="wire-placeholder" />
+
+  <!-- REPORT SECTION -->
+  <rect x="70" y="960" width="300" height="24" class="wire-placeholder" />
+  <line x1="70" y1="995" x2="1130" y2="995" class="wire-line" />
+
+  <!-- Report Stats -->
+  <rect class="wire-box" x="70" y="1020" width="250" height="80" />
+  <text x="195" y="1055" class="stat-num" text-anchor="middle">X</text>
+  <rect x="145" y="1070" width="100" height="10" class="wire-placeholder" />
+
+  <rect class="wire-box" x="340" y="1020" width="250" height="80" />
+  <text x="465" y="1055" class="stat-num" text-anchor="middle">Y</text>
+  <rect x="415" y="1070" width="100" height="10" class="wire-placeholder" />
+
+  <rect class="wire-box" x="610" y="1020" width="250" height="80" />
+  <text x="735" y="1055" class="stat-num" text-anchor="middle">Z</text>
+  <rect x="685" y="1070" width="100" height="10" class="wire-placeholder" />
+
+  <rect class="wire-box" x="880" y="1020" width="250" height="80" />
+  <text x="1005" y="1055" class="stat-num" text-anchor="middle">W</text>
+  <rect x="955" y="1070" width="100" height="10" class="wire-placeholder" />
+
+  <!-- TABLES -->
+  <!-- Table 1 -->
+  <rect class="wire-box" x="70" y="1120" width="1060" height="145" />
+  <rect class="wire-box" x="70" y="1120" width="1060" height="40" />
+  <text x="90" y="1145" class="section-title">Judul Tabel Data 1</text>
+  
+  <!-- Table Header -->
+  <rect class="wire-box-gray" x="70" y="1160" width="1060" height="36" />
+  <text class="table-head" x="90" y="1182">KOLOM 1</text>
+  <text class="table-head" x="400" y="1182">KOLOM 2</text>
+  <text class="table-head" x="500" y="1182">KOLOM 3</text>
+  <text class="table-head" x="700" y="1182">KOLOM 4</text>
+  <text class="table-head" x="900" y="1182">STATUS</text>
+  
+  <!-- Row 1 -->
+  <text class="table-row" x="90" y="1218">path/to/item_A</text>
+  <text class="table-row" x="400" y="1218">00</text>
+  <text class="table-row" x="500" y="1218">ItemName_A</text>
+  <text class="table-row" x="700" y="1218">Type_A</text>
+  <rect class="badge-bg" x="900" y="1203" width="60" height="20" /> <text x="910" y="1217" class="badge-text">STATUS</text>
+  
+  <line x1="70" y1="1230" x2="1130" y2="1230" class="wire-line-light" />
+  
+  <!-- Row 2 -->
+  <text class="table-row" x="90" y="1253">path/to/item_B</text>
+  <text class="table-row" x="400" y="1253">00</text>
+  <text class="table-row" x="500" y="1253">ItemName_B</text>
+  <text class="table-row" x="700" y="1253">Type_B</text>
+  <rect class="badge-bg" x="900" y="1238" width="60" height="20" /> <text x="910" y="1252" class="badge-text">STATUS</text>
+
+  <!-- Table 2 -->
+  <rect class="wire-box" x="70" y="1295" width="1060" height="110" />
+  <rect class="wire-box" x="70" y="1295" width="1060" height="40" />
+  <text x="90" y="1320" class="section-title">Judul Tabel Data 2</text>
+  
+  <!-- Table Header -->
+  <rect class="wire-box-gray" x="70" y="1335" width="1060" height="36" />
+  <text class="table-head" x="90" y="1357">KOLOM 1</text>
+  <text class="table-head" x="400" y="1357">KOLOM 2</text>
+  <text class="table-head" x="500" y="1357">KOLOM 3</text>
+  <text class="table-head" x="700" y="1357">KOLOM 4</text>
+  <text class="table-head" x="900" y="1357">STATUS</text>
+
+  <!-- Row 1 -->
+  <text class="table-row" x="90" y="1393">path/to/item_C</text>
+  <text class="table-row" x="400" y="1393">00</text>
+  <text class="table-row" x="500" y="1393">ItemName_C</text>
+  <text class="table-row" x="700" y="1393">Type_C</text>
+  <rect class="badge-bg" x="900" y="1378" width="60" height="20" /> <text x="910" y="1392" class="badge-text">STATUS</text>
+
+  <!-- Dead Files List -->
+  <rect class="wire-box" x="70" y="1425" width="1060" height="105" />
+  <rect class="wire-box" x="70" y="1425" width="1060" height="40" />
+  <text x="90" y="1450" class="section-title">Judul Daftar Item C</text>
+  
+  <rect x="90" y="1480" width="15" height="15" class="wire-box" /> <text class="table-row" x="115" y="1493">path/to/unreachable_item_1</text>
+  <rect x="90" y="1505" width="15" height="15" class="wire-box" /> <text class="table-row" x="115" y="1518">path/to/unreachable_item_2</text>
+
+</svg>

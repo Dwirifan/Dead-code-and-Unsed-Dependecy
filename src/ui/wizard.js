@@ -22,10 +22,9 @@ export async function launchWizard() {
                 message: 'Apa yang ingin Anda lakukan hari ini?',
                 loop: false,
                 choices: [
-                    { name: '[>] Analisis Proyek          (scan)',      value: 'scan' },
+                    { name: '[>] Analisis & Eksekusi       (scan & fix)', value: 'scan' },
                     { name: '[+] Lihat Dependensi          (show-deps)', value: 'show-deps' },
                     { name: '[~] Buat Diagram Visualisasi  (visualize)', value: 'visualize' },
-                    { name: '[*] Bersihkan Proyek          (fix)',       value: 'fix' },
                     { name: '[H] Riwayat & Restore Backup  (history)',   value: 'history' },
                     { name: '[x] Keluar', value: 'exit' },
                 ]
@@ -81,7 +80,7 @@ export async function launchWizard() {
                 {
                     type: 'confirm',
                     name: 'wantFix',
-                    message: 'Mau langsung fix (bersihkan dead code) sekarang?',
+                    message: 'Mau langsung eksekusi fix (bersihkan dead code & unused dependencies)?',
                     default: false
                 }
             ]);
