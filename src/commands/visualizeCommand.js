@@ -3,7 +3,7 @@ import fs from 'fs-extra';
 import glob from 'fast-glob';
 import chalk from 'chalk';
 import ora from 'ora';
-import { generateMermaidGraph } from '../analyzer/graphVisualizer.js';
+import { generateMermaidGraph } from '../ui/graphVisualizer.js';
 import { parseCode } from '../parser/astParser.js';
 import { findDeadCode } from '../analyzer/deadcode/deadCodeAnalyzer.js';
 import { RuleEngine } from '../analyzer/ruleEngine.js';

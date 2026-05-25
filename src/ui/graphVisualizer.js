@@ -18,7 +18,7 @@ export function generateMermaidGraph(graph, rootDir, pkgData = { dependencies: {
 
     // === Baca Logo (encode Base64 agar HTML mandiri) ===
     let logoImgHtml = '';
-    const logoPath = path.resolve(__dirname, '../ui/Logo.png');
+    const logoPath = path.resolve(__dirname, 'Logo.png');
     if (fs.existsSync(logoPath)) {
         try {
             const logoBase64 = `data:image/png;base64,${fs.readFileSync(logoPath).toString('base64')}`;
