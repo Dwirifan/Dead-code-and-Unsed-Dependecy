@@ -3,7 +3,7 @@ import path from 'path';
 import { parseCode } from '../../parser/astParser.js';
 import estraverse from 'estraverse';
 import { visitorKeys as tsVisitorKeys } from '@typescript-eslint/visitor-keys';
-import { resolveBarrelExports } from '../deadcode/barrelResolver.js';
+import { resolveBarrelExports } from '../deadcode/core/barrelResolver.js';
 import { resolvePath } from './pathResolver.js';
 import { findEntryPoints } from './entryPointFinder.js';
 

@@ -1,6 +1,6 @@
 import fs from 'fs-extra';
 import path from 'path';
-import { parseCode } from '../../parser/astParser.js';
+import { parseCode } from '../../../parser/astParser.js';
 import estraverse from 'estraverse';
 
 /**
