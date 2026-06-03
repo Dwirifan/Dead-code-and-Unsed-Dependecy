@@ -1,15 +1,16 @@
 import estraverse from 'estraverse';
 import { visitorKeys as tsVisitorKeys } from '@typescript-eslint/visitor-keys';
-import { Scope } from './scope.js';
-import { isReference } from './isReference.js';
-import { extractIdentifiers } from './destructuringExtractor.js';
-import { findFunctionScope } from './scopeHelpers.js';
-import { findUnreachableBranches } from './branchAnalyzer.js';
-import { markUsedExports } from './exportAnalyzer.js';
-import { findDuplicateConditions } from './logicAnalyzer.js';
-import { findUnusedClassMethods } from './classAnalyzer.js';
-import { findRedundantCode } from './redundancyAnalyzer.js';
-import { buildCFG, analyzePathSensitive } from './flowAnalyzer.js';
+import { Scope } from './core/scope.js';
+import { isReference } from './core/isReference.js';
+import { extractIdentifiers } from './core/destructuringExtractor.js';
+import { findFunctionScope } from './core/scopeHelpers.js';
+import { findUnreachableBranches } from './core/branchAnalyzer.js';
+import { markUsedExports } from './typescript/exportAnalyzer.js';
+import { findDuplicateConditions } from './core/logicAnalyzer.js';
+import { findUnusedClassMethods } from './typescript/classAnalyzer.js';
+import { findRedundantCode } from './core/redundancyAnalyzer.js';
+import { buildCFG, analyzePathSensitive } from './core/flowAnalyzer.js';
+import { analyzeReactSmells } from './react/reactAnalyzer.js';
 
 // Gabungkan Visitor Keys ESTree standar dengan ekstrasi TypeScript/JSX
 const visitorKeys = { ...estraverse.VisitorKeys, ...tsVisitorKeys };
@@ -437,6 +438,18 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, rul
         node.status = status;
     });
     deadCode.push(...pathFindings);
+
+    // Phase 11: React Bad Smells — hanya untuk file .jsx dan .tsx
+    const reactExtensions = new Set(['.jsx', '.tsx']);
+    const fileExt = fileName ? '.' + fileName.split('.').pop().toLowerCase() : '';
+    if (reactExtensions.has(fileExt)) {
+        const reactFindings = analyzeReactSmells(ast);
+        reactFindings.forEach(node => {
+            node.confidence = 'medium';
+            node.status = 'review';
+        });
+        deadCode.push(...reactFindings);
+    }
 
     return deadCode;
 }

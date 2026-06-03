@@ -214,17 +214,15 @@ PRIORITAS TINGGI (SELESAI):
         - SELESAI: Export yang tidak pernah di-import oleh file manapun dalam project ditandai 'review'
         - SELESAI: Tetap memproteksi export di mode library (`preserveExports: true`)
         - SELESAI: 1 Test Case (TC-130) PASS
+Tidak ada node JSXElement yang dideteksi di kode manapun di src/
+Tidak ada modul reactAnalyzer.js
+
 
 [ ] 41. Summary Statistics Box di Akhir Scan
 [ ] 42. Perintah `init` — Generate .deadkillerrc.json Interaktif
 [ ] 43. Perbaiki Output `--json` agar Lengkap
 [ ] 44. Performance Benchmark & Optimization
-[ ] 45. Export CSV/Markdown
-[ ] 46. Summary Statistics Box di Akhir Scan
-[ ] 47. Perintah `init` — Generate .deadkillerrc.json Interaktif
-[ ] 48. Perbaiki Output `--json` agar Lengkap
-[ ] 49. Performance Benchmark & Optimization
-[ ] 50. Export CSV/Markdown
+
 
 
 ================================================
