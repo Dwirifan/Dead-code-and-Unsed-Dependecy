@@ -210,6 +210,9 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, rul
             if (node.type === 'TSEnumDeclaration' && node.id) {
                 currentScope.addDeclaration(node.id.name, 'UnusedType', node.loc.start.line, node);
             }
+            if (node.type === 'TSModuleDeclaration' && node.id) {
+                currentScope.addDeclaration(node.id.name, 'Variable', node.loc.start.line, node);
+            }
 
             // Pelacakan Referensi Penggunaan (Read vs Write Differentiation)
             if (node.type === 'Identifier' || node.type === 'JSXIdentifier') {

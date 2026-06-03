@@ -68,6 +68,7 @@ export function isReference(node, parent, grandParent) {
     if (parent.type === 'TSInterfaceDeclaration' && parent.id === node) return false;
     if (parent.type === 'TSTypeAliasDeclaration' && parent.id === node) return false;
     if (parent.type === 'TSEnumDeclaration' && parent.id === node) return false;
+    if (parent.type === 'TSModuleDeclaration' && parent.id === node) return false;
     if (parent.type === 'ClassExpression' && parent.id === node) return false;
 
     // TypeScript: Nama properti di TSEnumMember bukan referensi

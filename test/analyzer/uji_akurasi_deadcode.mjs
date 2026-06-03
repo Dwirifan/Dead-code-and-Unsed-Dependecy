@@ -106,6 +106,10 @@ function analisis(kode, namaFile) {
                 if (node.type === 'TSEnumDeclaration' && node.id) {
                     currentScope.addDeclaration(node.id.name, 'UnusedType', node.loc?.start.line, node);
                 }
+                // TypeScript: Namespace/Module
+                if (node.type === 'TSModuleDeclaration' && node.id) {
+                    currentScope.addDeclaration(node.id.name, 'Variable', node.loc?.start.line, node);
+                }
                 // Referensi — kompatibel dengan dua versi Scope API
                 if (node.type === 'Identifier' || node.type === 'JSXIdentifier') {
                     const gp = parentStack.length >= 3 ? parentStack[parentStack.length - 3] : null;
