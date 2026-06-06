@@ -6,6 +6,8 @@ Dalam merancang alat yang secara aktif memodifikasi kode sumber (*source code*),
 
 ## Perencanaan Iterasi & TaskPriorityList
 
+Untuk merealisasikan arsitektur Lapisan Antarmuka dan Modul Eliminator yang aman, berikut adalah rincian perencanaan (*Task Priority List*) yang akan dieksekusi secara berurutan:
+
 | Prioritas | ID Task | Deskripsi Task |
 |-----------|---------|----------------|
 | 1 | T3-01 | Pembangunan Lapisan Antarmuka CLI (`scan` dan `fix`) serta pembaca konfigurasi (`.deadkillerrc.json`). |
@@ -124,6 +126,8 @@ Keberhasilan absolut ini dibuktikan dari tuntasnya seluruh *test suite* Modul El
 ---
 
 ## Ringkasan Penyelesaian Task Iterasi 3
+
+Sebagai penutup iterasi ketiga, berikut adalah rekapitulasi lengkap dari seluruh penugasan (*tasks*) yang telah diselesaikan secara komprehensif dari tahap *Development* hingga *Refactor*:
 
 | ID Task | Deskripsi | Status | Baseline |
 |---------|-----------|--------|----------|

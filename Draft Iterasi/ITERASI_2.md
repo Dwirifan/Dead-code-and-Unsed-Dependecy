@@ -4,6 +4,8 @@ Iterasi kedua membangun dua komponen analitik sentral: **Graph Builder** (Mesin 
 
 ## Perencanaan Iterasi & TaskPriorityList
 
+Untuk merealisasikan sistem analisis *dead code* yang terintegrasi, berikut adalah rincian perencanaan (*Task Priority List*) yang akan dieksekusi secara berurutan:
+
 | Prioritas | ID Task | Deskripsi Task |
 |-----------|---------|----------------|
 | 1 | T2-01 | Implementasi algoritma *Lexical Scoping* dasar untuk *intra-file analysis* |
