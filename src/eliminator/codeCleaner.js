@@ -10,25 +10,51 @@ import MagicString from 'magic-string';
  *                            Setiap node wajib memiliki properti `range` bertipe [start, end].
  * @returns {string} String kode sumber yang telah suci dari dead code.
  */
-export function removeDeadCode(codeString, deadNodes) {
-    if (!deadNodes || deadNodes.length === 0) {
+export function removeDeadCode(codeString, deadNodes, lacunaLevel = 3) {
+    // Level 0 (Dry-Run): Jangan ubah file fisik sama sekali
+    if (lacunaLevel === 0 || !deadNodes || deadNodes.length === 0) {
         return codeString;
     }
 
     const ms = new MagicString(codeString);
 
-    // Sortir deadNodes berdasarkan posisi range[0] secara menurun (dari belakang ke depan)
-    // agar penghapusan tidak menggeser indeks node yang belum dihapus.
-    // PENTING: Jangan hapus 'DuplicateCondition' (mencegah syntax error 'else' menggantung),
-    //          'Parameter' (menghapus parameter bisa merusak API signature / callback contract),
-    //          dan 'ClassMethod' (method mungkin dipanggil via inheritance atau dynamic dispatch).
-    const UNFIXABLE_TYPES = new Set(['DuplicateCondition', 'Parameter', 'ClassMethod']);
+    // Filter node yang benar-benar tidak boleh dihapus secara struktural
+    // (misal: else if gantung)
+    const STRUCTURAL_UNFIXABLE = new Set(['DuplicateCondition']);
+    
+    // Sortir dari belakang ke depan agar index tidak bergeser
     const sortedNodes = [...deadNodes]
-        .filter(d => d.node && d.node.range && !UNFIXABLE_TYPES.has(d.type))
+        .filter(d => d.node && d.node.range && !STRUCTURAL_UNFIXABLE.has(d.type))
         .sort((a, b) => b.node.range[0] - a.node.range[0]);
 
     for (const dead of sortedNodes) {
         const [start, end] = dead.node.range;
+
+        // Level 1: Lazy Load (React Components)
+        // Saat ini dilewatkan sebagai perlindungan awal (Safe skip)
+        if (lacunaLevel <= 1 && dead.type === 'ReactComponent') {
+            continue; 
+        }
+
+        // Level 2 & 3: Empty Body untuk API Publik (Parameter & ClassMethod)
+        // Kita TIDAK PERNAH menghapus utuh API Signature, meskipun di Level 3
+        if (dead.type === 'ClassMethod' || dead.type === 'Parameter' || dead.type === 'FunctionDeclaration') {
+            if (lacunaLevel >= 2) {
+                if (dead.node.value && dead.node.value.body && dead.node.value.body.range) {
+                    const bodyStart = dead.node.value.body.range[0];
+                    const bodyEnd = dead.node.value.body.range[1];
+                    ms.overwrite(bodyStart, bodyEnd, '{}');
+                } else if (dead.type === 'Parameter') {
+                    const paramText = codeString.substring(start, end);
+                    if (!paramText.startsWith('_')) {
+                        ms.prependRight(start, '_');
+                    }
+                }
+            }
+            continue; // Skip dari aggressive delete
+        }
+
+        // Level 3 (Aggressive Delete) berjalan di bawah ini:
 
         // Tentukan batas baris penuh untuk node ini
         const lineStart = findLineStart(codeString, start);

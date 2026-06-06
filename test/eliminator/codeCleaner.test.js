@@ -67,27 +67,30 @@ describe('Code Cleaner — Penghapusan Dead Code', () => {
     });
 
     // Test 38
-    it('TC-38: Proteksi Parameter — TIDAK dihapus', () => {
+    it('TC-38: Proteksi Parameter — Diubah menjadi _ (Level 3 Default)', () => {
         const deadNodes = [{
             name: 'unused',
             type: 'Parameter',
-            node: { range: [0, 5] }
+            node: { range: [11, 17] } // 'unused'
         }];
         const code = `function f(unused) {}`;
         const result = removeDeadCode(code, deadNodes);
-        assert.strictEqual(result, code, 'Parameter tidak boleh dihapus');
+        assert.strictEqual(result, `function f(_unused) {}`, 'Parameter diberi awalan _');
     });
 
     // Test 39
-    it('TC-39: Proteksi ClassMethod — TIDAK dihapus', () => {
+    it('TC-39: Proteksi ClassMethod — Body dikosongkan (Level 3 Default)', () => {
         const deadNodes = [{
             name: 'unused',
             type: 'ClassMethod',
-            node: { range: [0, 5] }
+            node: { 
+                range: [12, 31], 
+                value: { body: { range: [21, 31] } } 
+            }
         }];
-        const code = `class Foo { unused() {} }`;
+        const code = `class Foo { unused() { let x; } }`;
         const result = removeDeadCode(code, deadNodes);
-        assert.strictEqual(result, code, 'ClassMethod tidak boleh dihapus');
+        assert.strictEqual(result, `class Foo { unused() {} }`, 'ClassMethod diubah menjadi {}');
     });
 
     // Test 40
@@ -112,6 +115,39 @@ describe('Code Cleaner — Penghapusan Dead Code', () => {
         assert.ok(!cleaned.includes('const a'));
         assert.ok(!cleaned.includes('const b'));
         assert.ok(!cleaned.includes('const c'));
+    });
+
+    // Test 42
+    it('TC-42: Lacuna Level 0 (Dry-Run) tidak memodifikasi kode', () => {
+        const code = `const a = 1;\n`;
+        const deadNodes = [{ name: 'a', type: 'VariableDeclarator', node: { range: [0, 12] } }];
+        const cleaned = removeDeadCode(code, deadNodes, 0); // Level 0
+        assert.strictEqual(cleaned, code, 'Level 0 tidak boleh menghapus apapun');
+    });
+
+    // Test 43
+    it('TC-43: Lacuna Level 2 (Empty Body) mengosongkan fungsi, bukan menghapus', () => {
+        const code = `class Foo { unusedMethod() { console.log("mati"); } }`;
+        const deadNodes = [{ 
+            name: 'unusedMethod', 
+            type: 'ClassMethod', 
+            node: { 
+                range: [12, 51], 
+                value: { body: { range: [27, 51] } } 
+            } 
+        }];
+        const cleaned = removeDeadCode(code, deadNodes, 2); // Level 2
+        assert.ok(cleaned.includes('unusedMethod() {}'), 'Body fungsi harus dikosongkan menjadi {}');
+        assert.ok(!cleaned.includes('console.log'), 'Isi fungsi harus hilang');
+    });
+
+    // Test 44
+    it('TC-44: Lacuna Level 3 (Aggressive) menghapus variabel secara total', () => {
+        const code = `const a = 1, b = 2;`;
+        const deadNodes = [{ name: 'a', type: 'VariableDeclarator', node: { range: [6, 11] } }];
+        const cleaned = removeDeadCode(code, deadNodes, 3); // Level 3
+        assert.ok(!cleaned.includes('a = 1'), 'Variabel mati harus diamputasi penuh di Level 3');
+        assert.ok(cleaned.includes('b = 2'), 'Variabel lain tidak terpengaruh');
     });
 });
 
