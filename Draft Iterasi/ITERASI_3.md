@@ -97,7 +97,7 @@ Validasi yang dilakukan dengan mesin *compiler* (*tsc*) membuktikan dua pencapai
 1. **Bebas Galat (*Syntax Error Free*):** Tidak ditemukan anomali *trailing comma* maupun residu *keyword* deklarasi berkat utilitas baris di tahap *Refactor*.
 2. **Preservasi Tata Letak Presisi:** Jarak spasi vertikal/horizontal dan komentar dokumentasi (JSDoc) asli *programmer* tidak tergeser sedikit pun, mengukuhkan dominasi *Hybrid String Manipulation* atas *AST Rewriting* konvensional.
 
-Keberhasilan absolut ini dibuktikan dari tuntasnya seluruh *test suite* Modul Eliminator yang menguji skenario pemangkasan aman (*Safe Deletion*):
+Keberhasilan absolut ini dibuktikan dari tuntasnya seluruh *test suite* Modul Eliminator yang menguji skenario pemangkasan aman (*Safe Deletion*) beserta Teori Lacuna:
 
 ```text
 ▶ Code Cleaner — Penghapusan Dead Code
@@ -105,12 +105,15 @@ Keberhasilan absolut ini dibuktikan dari tuntasnya seluruh *test suite* Modul El
   ✔ TC-35: Tidak menghapus apapun jika deadNodes kosong 
   ✔ TC-36: Tidak menghapus apapun jika deadNodes null 
   ✔ TC-37: Proteksi DuplicateCondition — TIDAK dihapus 
-  ✔ TC-38: Proteksi Parameter — TIDAK dihapus 
-  ✔ TC-39: Proteksi ClassMethod — TIDAK dihapus 
+  ✔ TC-38: Proteksi Parameter — Diubah menjadi _ (Level 3 Default) 
+  ✔ TC-39: Proteksi ClassMethod — Body dikosongkan (Level 3 Default) 
   ✔ TC-40: Menghapus tanpa merusak kode lain di file yang sama 
   ✔ TC-41: Menghapus multiple dead nodes tanpa konflik posisi 
+  ✔ TC-42: Lacuna Level 0 (Dry-Run) tidak memodifikasi kode 
+  ✔ TC-43: Lacuna Level 2 (Empty Body) mengosongkan fungsi, bukan menghapus 
+  ✔ TC-44: Lacuna Level 3 (Aggressive) menghapus variabel secara total 
 
-✔ Code Cleaner — Penghapusan Dead Code (8/8 Passed)
+✔ Code Cleaner — Penghapusan Dead Code (11/11 Passed)
 ```
 
 ### B. Kesimpulan Iterasi 3
