@@ -6,8 +6,8 @@ import { parseCode, ParseError } from '../../src/parser/astParser.js';
 import { findDeadCode } from '../../src/analyzer/deadcode/deadCodeAnalyzer.js';
 import { removeDeadCode } from '../../src/eliminator/codeCleaner.js';
 import { RuleEngine } from '../../src/analyzer/ruleEngine.js';
-import { Scope } from '../../src/analyzer/deadcode/scope.js';
-import { buildCFG, buildCallGraph, analyzePathSensitive } from '../../src/analyzer/deadcode/flowAnalyzer.js';
+import { Scope } from '../../src/analyzer/deadcode/core/scope.js';
+import { buildCFG, buildCallGraph, analyzePathSensitive } from '../../src/analyzer/deadcode/core/flowAnalyzer.js';
 
 // ─── Helper ─────────────────────────────────────────────────────────────
 function analyze(code, ruleEngine = null) {

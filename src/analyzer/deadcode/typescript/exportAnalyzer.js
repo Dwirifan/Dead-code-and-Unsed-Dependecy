@@ -1,5 +1,5 @@
 import estraverse from 'estraverse';
-import { extractIdentifiers } from './destructuringExtractor.js';
+import { extractIdentifiers } from '../core/destructuringExtractor.js';
 
 /**
  * Memastikan bahwa fungsi atau variabel yang diekspor diperiksa referensinya secara lintas file.
