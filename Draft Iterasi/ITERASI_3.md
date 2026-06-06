@@ -11,7 +11,7 @@ Dalam merancang alat yang secara aktif memodifikasi kode sumber (*source code*),
 | 1 | T3-01 | Pembangunan Lapisan Antarmuka CLI (`scan` dan `fix`) serta pembaca konfigurasi (`.deadkillerrc.json`). |
 | 2 | T3-02 | Desain arsitektur *Hybrid String Manipulation* berbasis koordinat lokasi AST. |
 | 3 | T3-03 | Implementasi algoritma pembersihan sisa sintaks (*Trailing Comma & Empty Declaration*). |
-| 4 | T3-04 | Implementasi hierarki pemangkasan berbasis Teori Lacuna (4 Level Optimasi). |
+| 4 | T3-04 | Implementasi hierarki pemangkasan berbasis Skema Eliminasi Bertingkat (4 Level Optimasi). |
 | 5 | T3-05 | Pembangunan *Backup & Restore Manager* sebagai mitigasi risiko korupsi *file*. |
 
 ---
@@ -49,9 +49,9 @@ else if (leading) rStart -= leading[0].length; // Hapus koma depan
 ms.remove(rStart, rEnd); // Eksekusi potong teks via magic-string
 ```
 
-### C. 4 Level Pemangkasan (Teori Lacuna) (T3-04)
+### C. 4 Level Pemangkasan (Skema Eliminasi Bertingkat) (T3-04)
 
-Menghapus sebuah metode kelas (*class method*) karena tampak tidak dipakai di internal berkas memiliki risiko menghancurkan antarmuka publik pustaka tersebut bagi konsumen eksternal. Oleh karenanya, Modul Eliminator mengadopsi tingkat agresivitas pemangkasan (Teori Lacuna) untuk menjaga *API Signature*:
+Menghapus sebuah metode kelas (*class method*) karena tampak tidak dipakai di internal berkas memiliki risiko menghancurkan antarmuka publik pustaka tersebut bagi konsumen eksternal. Oleh karenanya, Modul Eliminator mengadopsi Skema Eliminasi Bertingkat untuk menjaga *API Signature*:
 
 | Level | Nama Mode | Perlakuan Eksekusi Fisik | Target Entitas |
 |---|---|---|---|
@@ -97,7 +97,7 @@ Validasi yang dilakukan dengan mesin *compiler* (*tsc*) membuktikan dua pencapai
 1. **Bebas Galat (*Syntax Error Free*):** Tidak ditemukan anomali *trailing comma* maupun residu *keyword* deklarasi berkat utilitas baris di tahap *Refactor*.
 2. **Preservasi Tata Letak Presisi:** Jarak spasi vertikal/horizontal dan komentar dokumentasi (JSDoc) asli *programmer* tidak tergeser sedikit pun, mengukuhkan dominasi *Hybrid String Manipulation* atas *AST Rewriting* konvensional.
 
-Keberhasilan absolut ini dibuktikan dari tuntasnya seluruh *test suite* Modul Eliminator yang menguji skenario pemangkasan aman (*Safe Deletion*) beserta Teori Lacuna:
+Keberhasilan absolut ini dibuktikan dari tuntasnya seluruh *test suite* Modul Eliminator yang menguji skenario pemangkasan aman (*Safe Deletion*) beserta Skema Eliminasi Bertingkat:
 
 ```text
 ▶ Code Cleaner — Penghapusan Dead Code
@@ -109,15 +109,15 @@ Keberhasilan absolut ini dibuktikan dari tuntasnya seluruh *test suite* Modul El
   ✔ TC-39: Proteksi ClassMethod — Body dikosongkan (Level 3 Default) 
   ✔ TC-40: Menghapus tanpa merusak kode lain di file yang sama 
   ✔ TC-41: Menghapus multiple dead nodes tanpa konflik posisi 
-  ✔ TC-42: Lacuna Level 0 (Dry-Run) tidak memodifikasi kode 
-  ✔ TC-43: Lacuna Level 2 (Empty Body) mengosongkan fungsi, bukan menghapus 
-  ✔ TC-44: Lacuna Level 3 (Aggressive) menghapus variabel secara total 
+  ✔ TC-42: Level 0 (Dry-Run) tidak memodifikasi kode 
+  ✔ TC-43: Level 2 (Empty Body) mengosongkan fungsi, bukan menghapus 
+  ✔ TC-44: Level 3 (Aggressive) menghapus variabel secara total 
 
 ✔ Code Cleaner — Penghapusan Dead Code (11/11 Passed)
 ```
 
 ### B. Kesimpulan Iterasi 3
-1. **Keamanan Eksekusi Operasional:** Modul *Eliminator* sanggup mengeksekusi 4 Level Pemangkasan (Teori Lacuna) untuk melenyapkan variabel tanpa mencederai kontrak publik (*API Signature*).
+1. **Keamanan Eksekusi Operasional:** Modul *Eliminator* sanggup mengeksekusi Skema Eliminasi Bertingkat (4 Level) untuk melenyapkan variabel tanpa mencederai kontrak publik (*API Signature*).
 2. **Mitigasi Bencana Kode:** Kombinasi *Backup Manager* dan perbaikan heuristik sintaksis berhasil menekan probabilitas korupsi berkas ke titik 0% (nol persen).
 3. Modul ketiga ini secara resmi mengunci fungsi motorik (tangan) dari sistem aplikasi, mengubahnya dari sekadar linter peringatan menjadi pembersih otomatis (*auto-fixer*) skala nyata.
 
@@ -130,5 +130,5 @@ Keberhasilan absolut ini dibuktikan dari tuntasnya seluruh *test suite* Modul El
 | T3-01 | Pembangunan CLI & integrasi `.deadkillerrc.json` | ✅ Selesai | Development |
 | T3-02 | Arsitektur *Hybrid String Manipulation* berbasis AST | ✅ Selesai | Development |
 | T3-03 | Pembersihan sisa sintaks (*Trailing Comma*) | ✅ Selesai (Refactored)| Development |
-| T3-04 | Klasifikasi 4 Level Eliminasi (Lacuna) | ✅ Selesai | Development |
+| T3-04 | Klasifikasi 4 Level Eliminasi Bertingkat | ✅ Selesai | Development |
 | T3-05 | Implementasi lapis aman *Backup Manager* | ✅ Selesai | Refactor |
