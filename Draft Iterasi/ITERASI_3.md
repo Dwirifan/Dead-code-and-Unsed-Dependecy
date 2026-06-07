@@ -23,9 +23,15 @@ Untuk merealisasikan arsitektur Lapisan Antarmuka dan Modul Eliminator yang aman
 Fokus fase *development* dibagi menjadi dua: penyediaan antarmuka basis (*CLI skeleton*) dan perancangan algoritma pemotongan teks presisi.
 
 ### A. Lapisan Antarmuka CLI & Rule Engine (T3-01)
-Lapisan antarmuka dibangun menggunakan pustaka `commander` untuk memfasilitasi dua mode eksekusi utama:
+Lapisan antarmuka dibangun menggunakan pustaka `commander` untuk memfasilitasi orkestrasi penuh. Terdapat **dua mode eksekusi utama**:
 1. `deadkiller scan`: Mode *audit* yang menginstruksikan *Parser* dan *Analyzer* untuk memetakan proyek tanpa melakukan operasi tulis-berkas.
 2. `deadkiller fix`: Mode eksekutor yang meneruskan daftar anomali dari *Analyzer* langsung ke tangan Modul Eliminator.
+
+Selain dua mode utama di atas, CLI juga dilengkapi dengan serangkaian **perintah pendukung (Utilities)** untuk mempermudah pengalaman pengembang (*Developer Experience*):
+- `init`: Menghasilkan berkas konfigurasi `.deadkillerrc.json` secara otomatis.
+- `watch`: Menjalankan *scan* secara *real-time* setiap kali ada perubahan berkas.
+- `history`, `report`, `visualize`: Beragam alat pelaporan dan visualisasi DAG.
+- `trace`, `show-deps`: Alat pelacakan dependensi dan jejak pemanggilan fungsi.
 
 Modul ini juga mengintegrasikan konfigurasi absolut dari `.deadkillerrc.json` (jika tersedia), yang digunakan oleh *Rule Engine* untuk membatalkan operasi pada *file* atau variabel yang dilindungi (*whitelist*).
 
