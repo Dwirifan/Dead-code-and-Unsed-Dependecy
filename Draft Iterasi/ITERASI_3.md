@@ -68,15 +68,28 @@ Menghapus sebuah metode kelas (*class method*) karena tampak tidak dipakai di in
 | **Level 2** | *Empty Body (Safe Delete)* | *Node* dipertahankan, namun blok logikanya dikosongkan menjadi `{}`. Preservasi API publik tetap terjaga mutlak. | Parameter Fungsi, *Class Method* |
 | **Level 3** | *Aggressive (Full Delete)* | Pemotongan radikal di mana *node* beserta deklarasinya diamputasi secara utuh dari berkas. | *Unused Variable*, *Unused Import* |
 
-### D. Pengujian Purwarupa Eliminator
-Pengujian purwarupa menemukan celah kebocoran sintaks (*Syntax Leak*). Saat sebuah baris hanya berisi variabel usang, mesin Eliminator menyisakan kata kunci (*keyword*) deklarasinya kosong begitu saja (misal: `const ;`), yang memicu kegagalan kompilasi beruntun pada target.
+### D. Pengujian Eliminator
+Rangkaian *unit test* purwarupa secara komprehensif mengevaluasi seluruh fitur yang dibangun pada fase *Development*, meliputi validasi *Hybrid String Manipulation*, *Skema Eliminasi Bertingkat*, dan proteksi *Syntax Leak*.
 
-Untuk mereplika dan mencegah kegagalan ini berulang, sebuah *unit test* proteksi khusus (*TC-45*) dirancang:
+**1. Validasi Preservasi Tata Letak (TC-40 & TC-41)**
+Memastikan operasi potong-teks oleh `magic-string` bebas benturan. Penghapusan *node* majemuk diverifikasi tidak merusak jarak spasi (indentasi) maupun menggeser struktur kode yang masih aktif digunakan.
+
+**2. Pengujian Skema Eliminasi Bertingkat (TC-42, TC-43, TC-44)**
+Memastikan berjalannya algoritma proteksi *API Signature*. Sebagai contoh, pada pengujian Level 2 (*Empty Body*), fungsi yang terdeteksi usang dibersihkan blok logikanya namun cangkang fungsinya dibiarkan utuh untuk mencegah *crash* pada modul eksternal:
+```javascript
+// Cuplikan Uji Level 2 (codeCleaner.test.js)
+const code = `class Foo { unusedMethod() { console.log("mati"); } }`;
+const cleaned = removeDeadCode(code, deadNodes, 2); 
+// Assertion: cleaned harus menghasilkan `class Foo { unusedMethod() {} }`
+```
+
+**3. Penambalan Celah Kebocoran Sintaks / *Syntax Leak* (TC-45)**
+Pengujian menemukan celah awal di mana baris yang hanya berisi variabel usang menyisakan kata kunci (*keyword*) kosong (misal: `const ;`), memicu kegagalan kompilasi. Untuk menambal dan mengunci proteksi ini, *test* agresif dirancang:
 
 ```javascript
 // Cuplikan: Skenario Uji Kebocoran Sintaks (codeCleaner.test.js)
 it('TC-45: Mencegah Syntax Leak (Residu "const ;") pada penghapusan deklarator ganda', () => {
-    // Skenario: a dan b keduanya usang. Setelah keduanya dihapus, jangan sampai tersisa "const ;"
+    // Skenario: a dan b keduanya usang. Setelah dihapus, jangan sampai ada "const ;"
     const code = `const a = 1, b = 2;\nconsole.log("hidup");`;
     const ast = parseCode(code, 'test.js');
     const deadNodes = findDeadCode(ast, 'test.js');
