@@ -69,7 +69,7 @@ Menghapus sebuah metode kelas (*class method*) karena tampak tidak dipakai di in
 | **Level 3** | *Aggressive (Full Delete)* | Pemotongan radikal di mana *node* beserta deklarasinya diamputasi secara utuh dari berkas. | *Unused Variable*, *Unused Import* |
 
 ### D. Pengujian Eliminator
-Rangkaian *unit test* purwarupa secara komprehensif mengevaluasi seluruh fitur yang dibangun pada fase *Development*, meliputi validasi *Hybrid String Manipulation*, *Skema Eliminasi Bertingkat*, dan proteksi *Syntax Leak*.
+Pengujian modul Eliminator dilakukan melalui serangkaian *unit test* tertutup untuk memastikan keandalan operasi mutasi teks. Secara keseluruhan, terdapat **12 Skenario Pengujian (TC-34 hingga TC-45)** yang dikelompokkan ke dalam tiga fokus utama evaluasi *development*:
 
 **1. Validasi Preservasi Tata Letak (TC-40 & TC-41)**
 Memastikan operasi potong-teks oleh `magic-string` bebas benturan. Penghapusan *node* majemuk diverifikasi tidak merusak jarak spasi (indentasi) maupun menggeser struktur kode yang masih aktif digunakan.
@@ -83,8 +83,8 @@ const cleaned = removeDeadCode(code, deadNodes, 2);
 // Assertion: cleaned harus menghasilkan `class Foo { unusedMethod() {} }`
 ```
 
-**3. Penambalan Celah Kebocoran Sintaks / *Syntax Leak* (TC-45)**
-Pengujian menemukan celah awal di mana baris yang hanya berisi variabel usang menyisakan kata kunci (*keyword*) kosong (misal: `const ;`), memicu kegagalan kompilasi. Untuk menambal dan mengunci proteksi ini, *test* agresif dirancang:
+**3. Temuan Kegagalan: Celah Kebocoran Sintaks / *Syntax Leak* (TC-45)**
+Di tengah jalannya pengujian purwarupa awal, ditemukan sebuah kegagalan kritis. Baris yang hanya berisi variabel usang menyisakan kata kunci (*keyword*) deklarasi kosong (misal: `const ;`), yang memicu kegagalan kompilasi beruntun pada kode target. Untuk menambal celah ini dan mencegahnya terulang, sebuah skenario uji agresif dirancang:
 
 ```javascript
 // Cuplikan: Skenario Uji Kebocoran Sintaks (codeCleaner.test.js)
