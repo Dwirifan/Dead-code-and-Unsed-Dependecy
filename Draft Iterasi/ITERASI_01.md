@@ -53,7 +53,7 @@ export function parseCode(codeString) {
 
 Pengujian dibagi menjadi dua kelompok skenario dengan fokus yang berbeda. Kelompok pertama memvalidasi akurasi pembentukan node AST untuk berbagai konstruksi *dead code* fundamental (seperti variabel yang tidak dibaca, impor redundan, atau *hoisting*). Pengujian ini memastikan bahwa *parser* mampu memetakan struktur logika inti tersebut dengan sempurna, yang mana akan menjadi basis utama bagi mesin analisis. Sementara itu, kelompok kedua dirancang khusus untuk mengevaluasi kompatibilitas dan ketahanan *parser* (*stress-test*) saat berhadapan dengan sintaks *superset* modern seperti TypeScript, JSX, dan TSX agar terhindar dari galat pemrosesan (*crash*).
 
-**Kelompok 1 — Konstruksi Inti Dead Code:**
+**Kelompok 1 — Unit Test: Konstruksi Inti Dead Code (TC-01 hingga TC-10):**
 
 | ID | Konstruksi yang Diuji | Tujuan Validasi |
 |---|---|---|

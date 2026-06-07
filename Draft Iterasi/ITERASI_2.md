@@ -128,8 +128,8 @@ Algoritma deteksi dependensi usang diimplementasikan secara langsung menggunakan
 
 Berbeda dengan Iterasi 1 yang murni menguji ketahanan membaca sintaks (*Parsing Capability*), evaluasi di Iterasi 2 dirancang secara komprehensif untuk memvalidasi akurasi logika skala kecil (*intra-file*), pemetaan lintas-berkas, serta kepatuhan terhadap aturan (*Rule Engine*). Seluruh pengujian diotomatisasi secara terpusat menggunakan utilitas *Native Test Runner* dari Node.js (`node --test`).
 
-**1. Validasi Akurasi Logika Analyzer (Skala File Tunggal / Intra-file)**
-Pengujian dilakukan dengan mem-parsing 10 skenario kode statis menjadi AST, lalu mencocokkan hasil deteksi Tabel Simbol dengan luaran yang diekspektasikan (*expected output*). Proses ini menguji ketajaman ruang lingkup (*scope*) pada resolusi Import, antarmuka TypeScript, dan deklarasi JSX. Sistem mencatat akurasi **87.5%**, yang secara transparan membuktikan adanya dua anomali semantik (*edge cases*) yang terekam jelas pada *log* terminal:
+**1. Unit Test: Validasi Akurasi Logika Analyzer (TC-49 hingga TC-130)**
+Pengujian dilakukan dengan mem-parsing puluhan skenario kode statis menjadi AST, lalu mencocokkan hasil deteksi Tabel Simbol dengan luaran yang diekspektasikan (*expected output*). Proses ini menguji ketajaman ruang lingkup (*scope*) pada resolusi Import, antarmuka TypeScript, dan deklarasi JSX. Sistem mencatat akurasi **87.5%**, yang secara transparan membuktikan adanya dua anomali semantik (*edge cases*) yang terekam jelas pada *log* terminal:
   ```text
   [TC-03] React JSX False Positive (Bug)
            ✅ PARSING BERHASIL — 3 dead code ditemukan (False Positive)
