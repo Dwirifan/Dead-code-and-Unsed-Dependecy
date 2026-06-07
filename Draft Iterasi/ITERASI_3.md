@@ -71,6 +71,23 @@ Menghapus sebuah metode kelas (*class method*) karena tampak tidak dipakai di in
 ### D. Pengujian Purwarupa Eliminator
 Pengujian purwarupa menemukan celah kebocoran sintaks (*Syntax Leak*). Saat sebuah baris hanya berisi variabel usang, mesin Eliminator menyisakan kata kunci (*keyword*) deklarasinya kosong begitu saja (misal: `const ;`), yang memicu kegagalan kompilasi beruntun pada target.
 
+Untuk mereplika dan mencegah kegagalan ini berulang, sebuah *unit test* proteksi khusus (*TC-45*) dirancang:
+
+```javascript
+// Cuplikan: Skenario Uji Kebocoran Sintaks (codeCleaner.test.js)
+it('TC-45: Mencegah Syntax Leak (Residu "const ;") pada penghapusan deklarator ganda', () => {
+    // Skenario: a dan b keduanya usang. Setelah keduanya dihapus, jangan sampai tersisa "const ;"
+    const code = `const a = 1, b = 2;\nconsole.log("hidup");`;
+    const ast = parseCode(code, 'test.js');
+    const deadNodes = findDeadCode(ast, 'test.js');
+    const cleaned = removeDeadCode(code, deadNodes);
+    
+    // PENGUJIAN UTAMA: Pastikan tidak ada "const ;" atau "const" yang menggantung
+    assert.ok(!cleaned.includes('const ;'), 'Tidak boleh ada kebocoran sintaks "const ;"');
+    assert.ok(!cleaned.includes('const\n'), 'Kata kunci const harus ikut terhapus seluruhnya');
+});
+```
+
 ---
 
 ## 2. Baseline Refactor
