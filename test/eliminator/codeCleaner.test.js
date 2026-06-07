@@ -118,7 +118,7 @@ describe('Code Cleaner — Penghapusan Dead Code', () => {
     });
 
     // Test 42
-    it('TC-42: Lacuna Level 0 (Dry-Run) tidak memodifikasi kode', () => {
+    it('TC-42: Level 0 (Dry-Run) tidak memodifikasi kode', () => {
         const code = `const a = 1;\n`;
         const deadNodes = [{ name: 'a', type: 'VariableDeclarator', node: { range: [0, 12] } }];
         const cleaned = removeDeadCode(code, deadNodes, 0); // Level 0
@@ -126,7 +126,7 @@ describe('Code Cleaner — Penghapusan Dead Code', () => {
     });
 
     // Test 43
-    it('TC-43: Lacuna Level 2 (Empty Body) mengosongkan fungsi, bukan menghapus', () => {
+    it('TC-43: Level 2 (Empty Body) mengosongkan fungsi, bukan menghapus', () => {
         const code = `class Foo { unusedMethod() { console.log("mati"); } }`;
         const deadNodes = [{ 
             name: 'unusedMethod', 
@@ -142,7 +142,7 @@ describe('Code Cleaner — Penghapusan Dead Code', () => {
     });
 
     // Test 44
-    it('TC-44: Lacuna Level 3 (Aggressive) menghapus variabel secara total', () => {
+    it('TC-44: Level 3 (Aggressive) menghapus variabel secara total', () => {
         const code = `const a = 1, b = 2;`;
         const deadNodes = [{ name: 'a', type: 'VariableDeclarator', node: { range: [6, 11] } }];
         const cleaned = removeDeadCode(code, deadNodes, 3); // Level 3

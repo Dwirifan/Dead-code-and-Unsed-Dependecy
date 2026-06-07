@@ -10,9 +10,9 @@ import MagicString from 'magic-string';
  *                            Setiap node wajib memiliki properti `range` bertipe [start, end].
  * @returns {string} String kode sumber yang telah suci dari dead code.
  */
-export function removeDeadCode(codeString, deadNodes, lacunaLevel = 3) {
+export function removeDeadCode(codeString, deadNodes, eliminationLevel = 3) {
     // Level 0 (Dry-Run): Jangan ubah file fisik sama sekali
-    if (lacunaLevel === 0 || !deadNodes || deadNodes.length === 0) {
+    if (eliminationLevel === 0 || !deadNodes || deadNodes.length === 0) {
         return codeString;
     }
 
@@ -32,14 +32,14 @@ export function removeDeadCode(codeString, deadNodes, lacunaLevel = 3) {
 
         // Level 1: Lazy Load (React Components)
         // Saat ini dilewatkan sebagai perlindungan awal (Safe skip)
-        if (lacunaLevel <= 1 && dead.type === 'ReactComponent') {
+        if (eliminationLevel <= 1 && dead.type === 'ReactComponent') {
             continue; 
         }
 
         // Level 2 & 3: Empty Body untuk API Publik (Parameter & ClassMethod)
         // Kita TIDAK PERNAH menghapus utuh API Signature, meskipun di Level 3
         if (dead.type === 'ClassMethod' || dead.type === 'Parameter' || dead.type === 'FunctionDeclaration') {
-            if (lacunaLevel >= 2) {
+            if (eliminationLevel >= 2) {
                 if (dead.node.value && dead.node.value.body && dead.node.value.body.range) {
                     const bodyStart = dead.node.value.body.range[0];
                     const bodyEnd = dead.node.value.body.range[1];
