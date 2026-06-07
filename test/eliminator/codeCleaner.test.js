@@ -149,6 +149,24 @@ describe('Code Cleaner — Penghapusan Dead Code', () => {
         assert.ok(!cleaned.includes('a = 1'), 'Variabel mati harus diamputasi penuh di Level 3');
         assert.ok(cleaned.includes('b = 2'), 'Variabel lain tidak terpengaruh');
     });
+
+    // Test 45
+    it('TC-45: Mencegah Syntax Leak (Residu "const ;") pada penghapusan deklarator ganda', () => {
+        // Skenario: a dan b keduanya usang. Setelah keduanya dihapus, jangan sampai tersisa "const ;"
+        const code = `const a = 1, b = 2;\nconsole.log("hidup");`;
+        const ast = parseCode(code, 'test.js');
+        const deadNodes = findDeadCode(ast, 'test.js');
+        const cleaned = removeDeadCode(code, deadNodes);
+        
+        // Pastikan 'a' dan 'b' terhapus
+        assert.ok(!cleaned.includes('a = 1'), 'Variabel a harus terhapus');
+        assert.ok(!cleaned.includes('b = 2'), 'Variabel b harus terhapus');
+        
+        // PENGUJIAN UTAMA: Pastikan tidak ada "const ;" atau "const" yang menggantung
+        assert.ok(!cleaned.includes('const ;'), 'Tidak boleh ada kebocoran sintaks "const ;"');
+        assert.ok(!cleaned.includes('const\n'), 'Kata kunci const harus ikut terhapus seluruhnya');
+        assert.ok(cleaned.includes('console.log("hidup");'), 'Baris berikutnya harus tetap aman');
+    });
 });
 
 
