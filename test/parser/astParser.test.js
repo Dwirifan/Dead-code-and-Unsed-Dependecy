@@ -13,8 +13,8 @@ describe('Iterasi 1: Pembangunan Core Parser (astParser)', () => {
         
         for (const uji of dasarTests) {
             const noStr = String(uji.no).padStart(2, '0');
-            test(`[TC-${noStr}] ${uji.label}`, () => {
-                const ast = parseCode(uji.kode, uji.file);
+            test(`[TC-${noStr}] ${uji.label}`, async () => {
+                const ast = await parseCode(uji.kode, uji.file);
                 expect(ast).toBeDefined();
                 expect(ast.type).toBe('Program');
             });
@@ -26,8 +26,8 @@ describe('Iterasi 1: Pembangunan Core Parser (astParser)', () => {
         
         for (const uji of lanjutTests) {
             const noStr = String(uji.no).padStart(2, '0');
-            test(`[TC-${noStr}] ${uji.label}`, () => {
-                const ast = parseCode(uji.kode, uji.file);
+            test(`[TC-${noStr}] ${uji.label}`, async () => {
+                const ast = await parseCode(uji.kode, uji.file);
                 expect(ast).toBeDefined();
                 expect(ast.type).toBe('Program');
             });
@@ -38,8 +38,8 @@ describe('Iterasi 1: Pembangunan Core Parser (astParser)', () => {
 
         for (const uji of traversalTests) {
             const noStr = String(uji.no).padStart(2, '0');
-            test(`[TC-${noStr}] ${uji.label}`, () => {
-                const ast = parseCode(uji.kode, uji.file);
+            test(`[TC-${noStr}] ${uji.label}`, async () => {
+                const ast = await parseCode(uji.kode, uji.file);
                 const visitedNodes = new Set();
                 
                 estraverse.traverse(ast, {

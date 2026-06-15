@@ -1,4 +1,5 @@
 import { parse } from '@typescript-eslint/typescript-estree';
+import { ParseCache } from './parseCache.js';
 
 const PARSER_OPTIONS = {
     loc: true,
@@ -8,6 +9,9 @@ const PARSER_OPTIONS = {
     errorOnUnknownASTType: false,
     allowHashBang: true, // agar shebang (#!/usr/bin/env node) tidak menyebabkan parse error
 };
+
+// Global cache instance untuk sesi analisis
+export const parserCache = new ParseCache();
 
 /**
  * Mem-parsing string kode JavaScript atau TypeScript menjadi Abstract Syntax Tree (AST)
@@ -35,20 +39,36 @@ export class ParseError extends Error {
  * @param {string} codeString - Kode sumber yang akan di-parse.
  * @param {string} [filePath] - Path file (untuk error reporting dan resolusi TypeScript).
  * @param {object} [options] - Opsi tambahan untuk menimpa konfigurasi default parser.
- * @returns {object} AST node root (Program) berformat ESTree-compatible.
+ * @returns {Promise<object>} AST node root (Program) berformat ESTree-compatible.
  * @throws {ParseError} Jika parsing gagal karena sintaks tidak valid.
  */
-export function parseCode(codeString, filePath = 'unknown', options = {}) {
+export async function parseCode(codeString, filePath = 'unknown', options = {}) {
     if (typeof codeString !== 'string') {
         throw new Error(`[Internal Error] parseCode: input harus berupa string kode sumber. Path: ${filePath}`);
     }
 
+    // 1. Cek Cache (HIT)
+    if (filePath !== 'unknown') {
+        const cached = await parserCache.get(filePath);
+        if (cached && cached.ast) {
+            return cached.ast;
+        }
+    }
+
+    // 2. Parsing (MISS)
     try {
-        return parse(codeString, { 
+        const ast = parse(codeString, { 
             ...PARSER_OPTIONS, 
             filePath, // Mengirim filePath ke parser untuk konteks yang lebih baik
             ...options 
         });
+
+        // 3. Simpan ke Cache
+        if (filePath !== 'unknown') {
+            await parserCache.set(filePath, ast, codeString);
+        }
+
+        return ast;
     } catch (error) {
         throw new ParseError(
             `Gagal parsing kode: ${error.message}`,
