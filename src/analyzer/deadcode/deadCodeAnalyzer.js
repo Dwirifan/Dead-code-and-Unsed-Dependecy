@@ -221,14 +221,13 @@ function analyzeDeadCodeRevised(ast, fileName = null, globalRegistry = null, rul
                     // Tentukan apakah ini konteks WRITE (assignment target) atau READ
                     const isWriteContext = (
                         // a = 10 (left side of assignment, bukan compound +=, -=, dll)
-                        (parent.type === 'AssignmentExpression' && parent.left === node && parent.operator === '=') ||
-                        // a++ atau a--
-                        (parent.type === 'UpdateExpression')
+                        (parent.type === 'AssignmentExpression' && parent.left === node && parent.operator === '=')
                     );
 
-                    // Compound assignment (a += 10) → READ + WRITE (perlu baca nilai lama)
+                    // Compound assignment (a += 10) atau Update (a++) → READ + WRITE
                     const isCompoundWrite = (
-                        parent.type === 'AssignmentExpression' && parent.left === node && parent.operator !== '='
+                        (parent.type === 'AssignmentExpression' && parent.left === node && parent.operator !== '=') ||
+                        (parent.type === 'UpdateExpression')
                     );
 
                     if (isCompoundWrite) {

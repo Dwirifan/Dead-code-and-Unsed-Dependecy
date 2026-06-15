@@ -2,8 +2,56 @@ export const kasusUji = [
     // ─── KELOMPOK A: Berhasil di Kedua Engine (Baseline) ───────────────
     {
         no: 1,
+        label: 'Konstruksi JavaScript Dasar - Import',
+        file: 'tc01.js',
+        kode: `import { x } from 'y';`
+    },
+    {
+        no: 2,
+        label: 'Konstruksi JavaScript Dasar - Variabel Global',
+        file: 'tc02.js',
+        kode: `globalVar = 10;`
+    },
+    {
+        no: 3,
+        label: 'Konstruksi JavaScript Dasar - Deklarasi Var',
+        file: 'tc03.js',
+        kode: `var a = 1;`
+    },
+    {
+        no: 4,
+        label: 'Konstruksi JavaScript Dasar - Deklarasi Let',
+        file: 'tc04.js',
+        kode: `let b = 2;`
+    },
+    {
+        no: 5,
+        label: 'Konstruksi JavaScript Dasar - Fungsi dengan Parameter',
+        file: 'tc05.js',
+        kode: `function add(x, y) { return x + y; }`
+    },
+    {
+        no: 6,
+        label: 'Konstruksi JavaScript Dasar - Arrow Function',
+        file: 'tc06.js',
+        kode: `const multiply = (x, y) => x * y;`
+    },
+    {
+        no: 7,
+        label: 'Konstruksi JavaScript Dasar - Object Destructuring',
+        file: 'tc07.js',
+        kode: `const { name, age } = user;`
+    },
+    {
+        no: 8,
+        label: 'Konstruksi JavaScript Dasar - Array Destructuring',
+        file: 'tc08.js',
+        kode: `const [first, second] = array;`
+    },
+    {
+        no: 9,
         label: 'JavaScript & TypeScript Dasar',
-        file: 'tc01.ts',
+        file: 'tc09.ts',
         kode: `
 import { format } from 'date-fns';
 
@@ -13,9 +61,9 @@ export function formatDate<T extends Date>(date: T, pattern: string): string {
 `.trim()
     },
     {
-        no: 2,
+        no: 10,
         label: 'JSX — React Components',
-        file: 'tc02.jsx',
+        file: 'tc10.jsx',
         kode: `
 import React, { useState } from 'react';
 
@@ -33,9 +81,9 @@ export default Card;
 `.trim()
     },
     {
-        no: 3,
+        no: 11,
         label: 'TSX — React Component dengan Generic Props',
-        file: 'tc03.tsx',
+        file: 'tc11.tsx',
         kode: `
 import React from 'react';
 
@@ -54,9 +102,9 @@ export const List = <T,>({ data, renderItem }: Props<T>) => (
 `.trim()
     },
     {
-        no: 4,
+        no: 12,
         label: 'TypeScript 4.1 — Template Literal Types',
-        file: 'tc04.ts',
+        file: 'tc12.ts',
         kode: `
 type Color = 'red' | 'blue' | 'green';
 type Shade = 100 | 200 | 300 | 400 | 500;
@@ -68,11 +116,11 @@ export function applyColor(palette: ColorPalette) {
 `.trim()
     },
 
-    // ─── KELOMPOK B: Pengujian Sintaks Tingkat Lanjut (Stress Test) ───────────────
+    // ─── KELOMPOK B: Uji Kompatibilitas Sintaks (Compatibility Test) ───────────────
     {
-        no: 5,
+        no: 13,
         label: 'Type-Only Export (TS 3.8+)',
-        file: 'tc05.ts',
+        file: 'tc13.ts',
         kode: `
 /**
  * Mengekspor definisi tipe abstrak dari modul inti.
@@ -82,9 +130,9 @@ export type { UserProfile, AuthCredentials, SessionInfo };
 `.trim()
     },
     {
-        no: 6,
+        no: 14,
         label: 'Inline Type Export (TS 4.5+)',
-        file: 'tc06.ts',
+        file: 'tc14.ts',
         kode: `
 import { createStore } from 'redux';
 
@@ -93,9 +141,9 @@ export { type RootState, type AppDispatch };
 `.trim()
     },
     {
-        no: 7,
+        no: 15,
         label: 'Export Type Star (TS 3.8+)',
-        file: 'tc07.ts',
+        file: 'tc15.ts',
         kode: `
 /**
  * Re-exporting seluruh definisi tipe tanpa mengekspos logic.
@@ -105,9 +153,9 @@ export type * as AuthUtils from './auth/utils.d.ts';
 `.trim()
     },
     {
-        no: 8,
+        no: 16,
         label: 'Override keyword pada Polymorphism',
-        file: 'tc08.ts',
+        file: 'tc16.ts',
         kode: `
 abstract class BaseController {
     abstract handleRequest(req: Request, res: Response): void;
@@ -125,9 +173,9 @@ export class UserController extends BaseController {
 `.trim()
     },
     {
-        no: 9,
+        no: 17,
         label: 'Operator satisfies (TS 4.9+)',
-        file: 'tc09.ts',
+        file: 'tc17.ts',
         kode: `
 type ThemeConfig = { 
     colors: Record<string, string>; 
@@ -141,9 +189,9 @@ export const defaultTheme = {
 `.trim()
     },
     {
-        no: 10,
+        no: 18,
         label: 'Assignment ke Non-Null Assertion',
-        file: 'tc10.ts',
+        file: 'tc18.ts',
         kode: `
 interface RequestMetrics {
     totalRequests?: number;
@@ -156,5 +204,34 @@ export function incrementMetrics(metrics: RequestMetrics) {
     }
 }
 `.trim()
+    },
+    // ─── KELOMPOK C: Pengujian Kompatibilitas Traversal AST ───────────────
+    {
+        no: 19,
+        label: 'TSInterfaceDeclaration dapat ditelusuri',
+        file: 'tc19.ts',
+        kode: `export interface User { id: number; }`,
+        expectedNodeType: 'TSInterfaceDeclaration'
+    },
+    {
+        no: 20,
+        label: 'TSTypeAliasDeclaration dapat ditelusuri',
+        file: 'tc20.ts',
+        kode: `export type ID = number | string;`,
+        expectedNodeType: 'TSTypeAliasDeclaration'
+    },
+    {
+        no: 21,
+        label: 'TSEnumDeclaration dapat ditelusuri',
+        file: 'tc21.ts',
+        kode: `export enum Status { Active, Inactive }`,
+        expectedNodeType: 'TSEnumDeclaration'
+    },
+    {
+        no: 22,
+        label: 'TSModuleDeclaration dapat ditelusuri',
+        file: 'tc22.ts',
+        kode: `export namespace Utils { export const a = 1; }`,
+        expectedNodeType: 'TSModuleDeclaration'
     }
 ];

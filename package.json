@@ -2,7 +2,6 @@
   "name": "tugas-akhir",
   "version": "1.0.0",
   "type": "module",
-  "main": "index.js",
   "bin": {
     "deadkiller": "./bin/dce-cli.js"
   },
@@ -10,7 +9,8 @@
     "test": "test"
   },
   "scripts": {
-    "test": "node --test test/run-tests.js"
+    "test": "vitest run",
+    "coverage": "vitest run --coverage"
   },
   "keywords": [],
   "author": "",
@@ -27,5 +27,9 @@
     "inquirer": "^12.11.1",
     "magic-string": "^0.30.21",
     "ora": "^9.3.0"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.8",
+    "vitest": "^4.1.8"
   }
 }

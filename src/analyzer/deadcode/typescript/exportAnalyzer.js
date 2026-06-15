@@ -44,6 +44,9 @@ export function markUsedExports(ast, globalScope, fileName, globalRegistry, rule
                  if (node.declaration.type === 'FunctionDeclaration') {
                      if (checkUsage(node.declaration.id.name)) globalScope.markUsed(node.declaration.id.name);
                  }
+                 if (node.declaration.type === 'ClassDeclaration' && node.declaration.id) {
+                     if (checkUsage(node.declaration.id.name)) globalScope.markUsed(node.declaration.id.name);
+                 }
              }
              if (node.type === 'ExportDefaultDeclaration') {
                  if (node.declaration.type === 'Identifier') {

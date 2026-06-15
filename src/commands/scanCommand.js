@@ -53,7 +53,7 @@ export function registerScanCommand(program) {
                     }
 
                     if (deadNodes.length > 0) {
-                        console.log(`\n[!] Dead Code ditemukan:`);
+                        console.log(`\n[!] Temuan (Dead Code & Code Smell):`);
                         console.log(`   -> ${path.relative(process.cwd(), absolutePath)}`);
                         deadNodes.forEach(n => console.log(`      Line ${n.line}: ${n.type} '${n.name}'`));
                         console.log(`\n[x] ${deadNodes.length} masalah ditemukan.`);

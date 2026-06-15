@@ -97,7 +97,7 @@ export function buildCFG(bodyStatements) {
 
     // Deteksi unreachable blocks (blocks tanpa predecessor, kecuali entry)
     const unreachableBlocks = [];
-    for (const [id, block] of blocks) {
+    for (const [, block] of blocks) {
         if (!block.isEntry && block.predecessors.length === 0 && block.statements.length > 0) {
             unreachableBlocks.push(block);
         }
@@ -168,8 +168,8 @@ export function buildCallGraph(ast) {
                 let calleeName = null;
                 if (node.callee.type === 'Identifier') {
                     calleeName = node.callee.name;
-                } else if (node.callee.type === 'MemberExpression' && 
-                           node.callee.property.type === 'Identifier') {
+                } else if (node.callee.type === 'MemberExpression' &&
+                    node.callee.property.type === 'Identifier') {
                     calleeName = node.callee.property.name;
                 }
 
@@ -185,8 +185,8 @@ export function buildCallGraph(ast) {
             }
         },
         leave(node) {
-            if (node.type === 'FunctionDeclaration' || 
-                node.type === 'FunctionExpression' || 
+            if (node.type === 'FunctionDeclaration' ||
+                node.type === 'FunctionExpression' ||
                 node.type === 'ArrowFunctionExpression') {
                 currentFunction = '__top__';
             }
@@ -238,15 +238,15 @@ export function analyzePathSensitive(ast) {
             // Jika x diakses di else tanpa guard → risky
             if (node.type === 'IfStatement' && node.test.type === 'BinaryExpression') {
                 const test = node.test;
-                
+
                 // typeof x !== 'undefined'
                 if (test.left.type === 'UnaryExpression' && test.left.operator === 'typeof' &&
                     test.left.argument.type === 'Identifier' &&
                     test.right.type === 'Literal' && test.right.value === 'undefined' &&
                     (test.operator === '!==' || test.operator === '!=')) {
-                    
+
                     const varName = test.left.argument.name;
-                    
+
                     // Cek apakah varName diakses di else block tanpa guard
                     if (node.alternate) {
                         const usedInElse = containsIdentifier(node.alternate, varName);
@@ -273,7 +273,7 @@ export function analyzePathSensitive(ast) {
 function containsIdentifier(node, name) {
     if (!node) return false;
     if (node.type === 'Identifier' && node.name === name) return true;
-    
+
     for (const key of Object.keys(node)) {
         if (key === 'loc' || key === 'range' || key === 'start' || key === 'end') continue;
         const child = node[key];

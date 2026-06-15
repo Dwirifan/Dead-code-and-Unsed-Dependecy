@@ -67,7 +67,7 @@ async function _fixSingleFile(absolutePath, startTime, inquirer) {
     const deadNodes  = findDeadCode(ast, absolutePath, null, ruleEngine);
 
     if (deadNodes.length === 0) {
-        console.log(chalk.green('[ok] File bersih! Tidak ada dead code ditemukan.\n'));
+        console.log(chalk.green('[ok] File bersih! Tidak ada dead code maupun anomali kode ditemukan.\n'));
         return;
     }
 
@@ -77,7 +77,7 @@ async function _fixSingleFile(absolutePath, startTime, inquirer) {
     const riskyNodes  = deadNodes.filter(n => n.status === 'risky');
 
     // Tampilkan laporan lengkap
-    console.log(chalk.yellow(`[*] Dead code ditemukan (${deadNodes.length} item):`))
+    console.log(chalk.yellow(`[*] Temuan (Dead Code & Code Smell) (${deadNodes.length} item):`))
     if (safeNodes.length > 0) {
         console.log(chalk.green(`\n   ${chalk.bold('[SAFE]')} — Akan dihapus otomatis (${safeNodes.length} item):`));
         safeNodes.forEach(n => console.log(`      Line ${n.line}: ${n.type} '${n.name}'`));

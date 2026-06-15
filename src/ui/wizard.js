@@ -1,5 +1,6 @@
 import inquirer from 'inquirer';
 import fs from 'fs-extra';
+import fg from 'fast-glob';
 import path from 'path';
 import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
@@ -25,7 +26,8 @@ export async function launchWizard() {
                     { name: '[>] Analisis & Eksekusi       (scan & fix)', value: 'scan' },
                     { name: '[+] Lihat Dependensi          (show-deps)', value: 'show-deps' },
                     { name: '[~] Buat Diagram Visualisasi  (visualize)', value: 'visualize' },
-                    { name: '[H] Riwayat & Restore Backup  (history)',   value: 'history' },
+                    { name: '[T] Lacak Ketergantungan File (trace)', value: 'trace' },
+                    { name: '[H] Riwayat & Restore Backup  (history)', value: 'history' },
                     { name: '[x] Keluar', value: 'exit' },
                 ]
             }
@@ -42,22 +44,46 @@ export async function launchWizard() {
         process.exit(0);
     }
 
-    // 2. Pilih Target Folder
+    // 2. Pilih Target Folder / File
     let targetDirectory;
     try {
-        const answer = await inquirer.prompt([
-            {
-                type: 'input',
-                name: 'targetDirectory',
-                message: 'Masukkan direktori target (contoh: ./ atau ./src):',
-                default: './',
-                validate: (input) => {
-                    if (fs.existsSync(path.resolve(input))) return true;
-                    return '[!] Direktori tidak ditemukan! Silakan masukkan path yang valid.';
-                }
+        if (action === 'trace') {
+            console.log(uiColors.muted('Memindai file yang tersedia...'));
+            const files = await fg(['**/*.js', '**/*.jsx', '**/*.ts', '**/*.tsx'], {
+                ignore: ['node_modules/**', 'dist/**', 'build/**', '.git/**'],
+                cwd: process.cwd()
+            });
+
+            if (files.length === 0) {
+                console.log(uiColors.warning('\n[!] Tidak ada file JS/TS yang ditemukan untuk di-trace.\n'));
+                process.exit(0);
             }
-        ]);
-        targetDirectory = answer.targetDirectory;
+
+            const answer = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'targetDirectory',
+                    message: 'Pilih file yang ingin dilacak (gunakan panah, ketik untuk mencari):',
+                    choices: files,
+                    pageSize: 15
+                }
+            ]);
+            targetDirectory = answer.targetDirectory;
+        } else {
+            const answer = await inquirer.prompt([
+                {
+                    type: 'input',
+                    name: 'targetDirectory',
+                    message: 'Masukkan direktori target (contoh: ./ atau ./src):',
+                    default: './',
+                    validate: (input) => {
+                        if (fs.existsSync(path.resolve(input))) return true;
+                        return '[!] Direktori tidak ditemukan! Silakan masukkan path yang valid.';
+                    }
+                }
+            ]);
+            targetDirectory = answer.targetDirectory;
+        }
     } catch (err) {
         console.log(uiColors.muted('\n\n[.] Keluar. Sampai jumpa!\n'));
         process.exit(0);
@@ -100,5 +126,3 @@ export async function launchWizard() {
 
     console.log();
 }
-
-// PXP: Pengembangan Generator Pelaporan dan Antarmuka (UI & Reporting)
