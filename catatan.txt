@@ -40,7 +40,7 @@ TIPS UNTUK SIDANG/PENDADARAN TA:
 Jika ditanya bukti penerapan iterasi PXP, tunjukkan riwayat Git (Git log) Anda. Siklus dari membuat branch fitur -> merge ke develop -> merge ke main adalah bukti nyata bahwa Anda tidak mengkoding sembarangan (waterfall), melainkan melakukan tahapan PXP (Design -> Implementation -> System Testing -> Retrospective/Rilis) di setiap fiturnya.
 
 Bab 8 (Skema Eliminasi dan Konfigurasi Tingkat Optimisasi) memberikan kita panduan desain (Blue Print) yang absolut untuk Iterasi 3 (Modul Eliminator) yang akan kita bangun selanjutnya!
-
+@
 Berdasarkan teori Lacuna yang kamu tulis, Modul Eliminator kita nanti harus punya 4 mode (Level 0 - 3):
 
 Level 0 (Pasif): Hanya mencetak laporan JSON/HTML (Ini yang Analyzer kita lakukan sekarang).

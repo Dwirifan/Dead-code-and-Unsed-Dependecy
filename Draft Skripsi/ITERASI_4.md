@@ -1,123 +1,76 @@
-#### 4.4.4 Iterasi 4: Pengembangan Generator Pelaporan Visual (*Visualization Reporter*)
+#### 4.4.4 Iterasi 4 : Pengembangan Modul Antarmuka dan Pelaporan (CLI & Reporter)
 
-Iterasi keempat dalam metodologi PXP ini berfokus pada pembangunan **Visualization Reporter** (Generator Pelaporan Visual). Setelah kode dianalisis (Iterasi 2) dan dipangkas (Iterasi 3), sistem membutuhkan mekanisme untuk menyajikan metrik dan detail tindakan tersebut kepada pengguna (*developer*). Modul ini bertugas mengubah data mentah JSON hasil analisis menjadi laporan HTML interaktif yang *standalone* (mandiri) serta ringkasan CLI di terminal.
+Iterasi keempat adalah tahap finalisasi di mana seluruh mesin inti yang telah dibangun (Analyzer, Graph Builder, dan Eliminator) dibungkus ke dalam **Modul Antarmuka (*Command Line Interface* / CLI)** dan **Sistem Pelaporan (*Reporter*)**. Modul ini menjembatani interaksi antara pengguna dengan kompleksitas mesin analisis statis.
+
+---
 
 ##### A. Perencanaan Iterasi dan *TaskPriorityList*
 
-Sebelum tahapan *development* dimulai, tugas-tugas pelaporan disusun ke dalam *TaskPriorityList* sebagai berikut:
+Pengembangan difokuskan pada *User Experience* (UX) di terminal serta kemampuan menyajikan data kompleks menjadi visualisasi yang intuitif.
 
-| Prioritas | ID Task | Deskripsi Task                                                                                            | *User Story* |
-| --------- | ------- | --------------------------------------------------------------------------------------------------------- | ------------ |
-| 1         | T4-01   | Pembuatan modul agregasi data untuk menghitung metrik (total temuan, file terdampak, rasio *dead code*)   | US-06        |
-| 2         | T4-02   | Implementasi antarmuka Command Line Interface (CLI) menggunakan warna (ANSI) untuk umpan balik instan     | US-06        |
-| 3         | T4-03   | Perancangan struktur HTML *Single-Page* dan injeksi CSS/JS bawaan (*embedded*)                            | US-06        |
-| 4         | T4-04   | Implementasi fitur interaktif pada HTML (*Filtering* Kategori, *Sorting*, dan *Search*)                   | US-06        |
-| 5         | T4-05   | Pengujian integrasi modul *Reporter* dengan alur (*pipeline*) utama aplikasi                              | US-06        |
+| Prioritas | ID Task | Deskripsi Task                                                                         | *User Story* |
+| --------- | ------- | -------------------------------------------------------------------------------------- | ------------ |
+| 1         | T4-01   | Registrasi dan *routing* perintah CLI (`scan`, `fix`, `watch`, dll) menggunakan `commander`| US-01, US-02 |
+| 2         | T4-02   | Pembuatan antarmuka panduan interaktif (*Wizard*) untuk pengguna baru                  | US-01        |
+| 3         | T4-03   | Pembangunan Modul *Reporter* untuk merangkum hasil analisis dalam format JSON/Terminal | US-04        |
+| 4         | T4-04   | Pembangunan Modul Visualisasi HTML (*Dashboard* interaktif berbasis `mermaid.js`)      | US-04        |
+| 5         | T4-05   | Pengujian fungsional *End-to-End* (E2E) seluruh perintah CLI                           | US-01 - 07   |
 
 ---
 
 ##### B. *Development Baseline*
 
-Fase ini merealisasikan alur kerja (*flow*) dari data mentah hingga menjadi visualisasi laporan yang siap dibaca oleh pengguna.
+**1. Ekosistem Perintah Terintegrasi (*CLI Commands*)**
+Modul dikembangkan menggunakan *library* `commander` untuk mendefinisikan arsitektur perintah yang terstruktur. Beberapa perintah utama yang diimplementasikan meliputi:
+*   `scan`: Memicu eksekusi *Analyzer* dan *Graph Builder* untuk melaporkan *dead code* tanpa mutasi.
+*   `fix`: Mengeksekusi *Eliminator* dengan tingkat agresi (*Elimination Level*) yang dapat diatur melalui argumen perintah.
+*   `watch`: Mode observasi berkala (berjalan di latar belakang) yang akan memindai kode setiap kali terjadi perubahan (*file save*).
+*   `init`: Memanggil panduan interaktif (*Wizard*) untuk menghasilkan berkas konfigurasi `.deadkillerrc.json`.
 
-**1. Alur Kerja Pembangkitan Laporan HTML (T4-01 & T4-03)**
+**2. Antarmuka Panduan Interaktif (*Interactive Wizard*)**
+Untuk meminimalisir kesalahan konfigurasi awal, *Interactive Wizard* (`wizard.js`) dibangun menggunakan *prompt* interaktif. Fitur ini secara dinamis bertanya kepada pengguna mengenai titik masuk (*entry point*) spesifik, preferensi keagresifan *auto-fix*, serta direktori/berkas yang ingin diabaikan (*ignore list*).
 
-Sistem pelaporan dibangun dengan pendekatan *Single-File Portable Report*, di mana seluruh aset (CSS, JavaScript, dan Data) disuntikkan secara *inline* ke dalam satu berkas HTML. Hal ini memastikan laporan dapat dibuka di *browser* manapun tanpa memerlukan *web server* atau koneksi internet.
+**3. Visualisasi Graf dan *Dashboard* HTML (`graphVisualizer.js`)**
+Sebuah inovasi utama di fase ini adalah perintah `visualize`. Modul ini tidak hanya mengeluarkan teks di terminal, melainkan **menghasilkan sebuah *Dashboard* HTML secara otomatis** (`code-structure-trace.html`). *Dashboard* ini memuat:
+*   Visualisasi arsitektur proyek (DAG) dalam bentuk graf *Mermaid*.
+*   Pemetaan status keamanan anomali (*Safe, Review, Risky*).
+*   Daftar *Dead Files* dan *Unsafe Files* (file yang gagal dipindai).
+Setelah digenerasi, CLI secara otomatis akan membuka berkas HTML tersebut di *browser* bawaan sistem operasi.
 
-Alur pembangkitan HTML bekerja melalui tiga tahapan sekuensial:
-1. **Data Aggregation (Agregasi Metrik):** Sistem mengumpulkan keluaran dari *Analyzer* dan *Eliminator*, lalu menghitung statistik utama.
-2. **Template Interpolation (Injeksi Data ke Templat):** Data yang sudah diagregasi diubah menjadi format string JSON statis dan disuntikkan ke dalam kerangka HTML dasar (`template.html`).
-3. **Client-Side Hydration (Render Dinamis):** *Vanilla JavaScript* me-render tabel temuan, grafik (Chart.js), dan kartu metrik ke dalam DOM.
-
-```javascript
-// Cuplikan: Logika Pembangkitan Laporan HTML (htmlReporter.js)
-export function generateHTMLReport(analysisData, outputPath) {
-    const template = fs.readFileSync('./templates/report.html', 'utf8');
-    
-    // Injeksi data analisis sebagai variabel global di dalam HTML
-    const injectedHTML = template.replace(
-        '/*__DATA_PLACEHOLDER__*/', 
-        `window.__REPORT_DATA__ = ${JSON.stringify(analysisData)};`
-    );
-
-    fs.writeFileSync(outputPath, injectedHTML);
-    console.log(`Laporan visual berhasil digenerate di: ${outputPath}`);
-}
-```
-
-**2. Implementasi Pelaporan Terminal (T4-02)**
-
-Untuk memfasilitasi lingkungan CI/CD dan umpan balik cepat, dibangun juga *reporter* berbasis terminal yang memanfaatkan kode *escape* ANSI untuk mencetak metrik berwarna, memberikan peringatan (*warning*), dan status pembersihan.
+---
 
 ##### C. Pengujian Awal
 
-Pada pengujian awal (T4-05) dengan himpunan proyek berskala besar (1000+ temuan *dead code*), ditemukan kegagalan performa (*UI Freezing*) pada laporan HTML yang dihasilkan.
-Ketika sistem mencoba menyuntikkan ribuan baris temuan ke dalam tabel HTML sekaligus, *browser* mengalami pembekuan sesaat karena beban *reflow* dan *repaint* DOM yang terlalu masif. Laporan menjadi tidak responsif saat pengguna mencoba melakukan *scrolling*.
+Pengujian dilakukan secara *End-to-End* (E2E) mulai dari *input* terminal hingga eksekusi mesin analisis di belakang layar.
 
-##### D. *Self-Review* dan Analisis Kegagalan
-
-Berdasarkan kegagalan performa tersebut, dilakukan evaluasi teknis. Penyebab utama *freeze* adalah perenderan seluruh baris data ke dalam struktur DOM secara bersamaan. Untuk mengatasi ini, sistem membutuhkan penanganan virtualisasi atau paginasi di sisi klien (*client-side*).
-
-Sebagai tindak lanjut, dicatat satu kebutuhan perbaikan performa:
-
-| ID Task Baru | Deskripsi Task                                                            |
-| ------------ | ------------------------------------------------------------------------- |
-| T4-06        | *Performance Bug Fix*: Implementasi Paginasi *Client-Side* pada HTML Report |
-
-##### E. Penyesuaian Implementasi dan Uji Ulang
-
-Sesuai metodologi PXP, kegagalan performa ini langsung ditindaklanjuti di *development baseline* (T4-06). Diterapkan teknik **DOM Virtualization** (Paginasi *Client-Side*) pada logika JavaScript di dalam berkas HTML. Daripada me-render 1000 baris tabel secara bersamaan, tabel hanya menampilkan 50 baris pertama. Elemen navigasi paginasi (*Next/Prev*) ditambahkan untuk memuat sisa data sesuai permintaan pengguna.
-
-```javascript
-// Cuplikan: Logika Paginasi di dalam HTML Report untuk mencegah DOM Freeze
-function renderTable(data, page = 1, limit = 50) {
-    const start = (page - 1) * limit;
-    const paginatedData = data.slice(start, start + limit);
-    
-    tbody.innerHTML = paginatedData.map(item => `
-        <tr>
-            <td><span class="badge ${item.type}">${item.type}</span></td>
-            <td>${item.name}</td>
-            <td>${item.file}:${item.line}</td>
-        </tr>
-    `).join('');
-}
-```
-Hasil uji regresi pasca-perbaikan ini secara instan menurunkan waktu *render* awal dari ~3.2 detik menjadi kurang dari 0.1 detik pada proyek berskala besar, memastikan UI tetap stabil dan fungsionalitas pelaporan siap dinaikkan ke tahap *refactor*.
+**Status Test Case Internal:**
+*   [TC-R1] Eksekusi Flag Perintah (`--dry-run`, `--level`)           ✅ BERHASIL
+*   [TC-R2] Validasi *Output* Teks Terminal Berbasis Tema (*Chalk*)   ✅ BERHASIL
+*   [TC-R3] Generasi HTML *Dashboard* dan Pembukaan Otomatis Browser ✅ BERHASIL
+*   [TC-R4] Pembuatan Konfigurasi via Interaksi *Wizard*              ✅ BERHASIL
+─────────────────────────────────────────────────────────────────
+Lulus : 4 dari 4 | Stabilitas CLI: 100%
 
 ---
 
-##### F. *Refactor Baseline*
+##### D. *Self-Review* dan *Refactor Baseline*
 
-Setelah masalah *DOM Bottleneck* teratasi, fase *refactoring* ini difokuskan untuk merapikan struktur injeksi *template* HTML agar lebih modular dan mudah dikelola (*maintainable*).
-
-**Perapian Logika Injeksi (Template Refactoring)**
-Logika penyatuan *string* HTML yang sebelumnya tertumpuk dalam satu berkas dipisahkan ke dalam beberapa modul kecil. Penyematan gaya (CSS) dan eksekusi skrip (*Vanilla JS*) dirapikan menggunakan blok *minify* pada tahap *build* internal agar *output* laporan *single-file* yang dihasilkan memiliki ukuran dokumen (*file size*) yang jauh lebih ringan, padat, dan ringkas.
+Tahap *self-review* menitikberatkan pada perbaikan estetika (UX) dan informasi *error handling*. Terdapat penambahan *loading spinner* (`ora`) untuk memberikan umpan balik visual saat mesin analisis sedang menambang struktur *Dependecy Tree* yang berukuran masif. Selain itu, pesan-pesan *error* di terminal dipercantik menggunakan tata warna (`chalk`) yang terpusat di `theme.js` agar konsisten dan ramah pengguna.
 
 ---
 
-##### G. *Production Baseline*
+##### E. *Production Baseline*
 
-Tahapan akhir ini mengunci antarmuka pelaporan (*Reporter*) setelah terbukti stabil menangani data masif dan memberikan *User Experience* (UX) yang optimal tanpa mengalami *freeze*.
-
-Laporan Visual akhir divalidasi memiliki kapabilitas utuh berikut:
-1. **Executive Dashboard**: Menampilkan diagram lingkaran (Kategori *Dead Code*) dan metrik reduksi.
-2. **Interactive Data Table**: Tabel temuan yang dilengkapi fitur pencarian (*Search*), pengurutan (*Sort*), dan Paginasi *Client-Side*.
-3. **Filter Berbasis Kepercayaan (*Confidence*)**: Pengguna dapat menyaring temuan berdasarkan label `High Confidence` (aman dihapus) atau `Low Confidence` (butuh tinjauan manual).
-
-Modul keempat ini secara remi diintegrasikan sebagai penutup siklus audit sistem. Pembuatan laporan *single-file* yang portabel terbukti sangat memfasilitasi komunikasi kualitas kode antarpengembang tanpa kerumitan instalasi dependensi tambahan.
+Dengan selesainya Modul CLI dan Pelaporan, siklus hidup aplikasi **secara resmi telah lengkap (*feature complete*)**. Pengguna kini dapat membedah anomali kode, melakukan penghapusan dengan jaring pengaman, serta melihat struktur keseluruhan arsitektur proyek melalui interaksi *Command Line* yang mulus dan interaktif. Proyek dinyatakan siap memasuki fase implementasi akhir dan pengujian fungsional keseluruhan.
 
 ---
 
-##### H. Ringkasan Penyelesaian Task Iterasi 4
+##### F. Ringkasan Penyelesaian Task Iterasi 4
 
-Sebagai penutup iterasi keempat, berikut adalah rekapitulasi penyelesaian *tasks*:
-
-| ID Task | Deskripsi                                              | Status  | Baseline    |
-| ------- | ------------------------------------------------------ | ------- | ----------- |
-| T4-01   | Pembuatan modul agregasi metrik                        | Selesai | Development |
-| T4-02   | Implementasi antarmuka terminal (CLI)                  | Selesai | Development |
-| T4-03   | Injeksi Data ke Struktur HTML *Single-Page*            | Selesai | Development |
-| T4-04   | Implementasi fitur interaktif (*Filtering*, *Sorting*) | Selesai | Development |
-| T4-05   | Pengujian Integrasi (Menemukan *DOM Bottleneck*)       | Selesai | Development |
-| T4-06   | *Bug Fix*: Implementasi Paginasi *Client-Side*         | Selesai | Development |
+| ID Task | Deskripsi | Status | Baseline |
+| :--- | :--- | :--- | :--- |
+| T4-01 | Registrasi dan *routing* perintah CLI (`scan`, `fix`, `watch`) | Selesai | Development |
+| T4-02 | Pembuatan antarmuka *Wizard* interaktif | Selesai | Development |
+| T4-03 | Pembangunan Modul *Reporter* format terminal | Selesai | Development |
+| T4-04 | Pembangunan Visualisasi Graf HTML (*Dashboard*) | Selesai | Development |
+| T4-05 | Pengujian fungsional E2E struktur perintah | Selesai | Development |

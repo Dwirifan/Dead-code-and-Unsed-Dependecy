@@ -10,7 +10,7 @@ import MagicString from 'magic-string';
  *                            Setiap node wajib memiliki properti `range` bertipe [start, end].
  * @returns {string} String kode sumber yang telah suci dari dead code.
  */
-export function removeDeadCode(codeString, deadNodes, eliminationLevel = 3) {
+export function removeDeadCode(codeString, deadNodes, ruleEngine = null, eliminationLevel = 3) {
     // Level 0 (Dry-Run): Jangan ubah file fisik sama sekali
     if (eliminationLevel === 0 || !deadNodes || deadNodes.length === 0) {
         return codeString;
@@ -45,10 +45,24 @@ export function removeDeadCode(codeString, deadNodes, eliminationLevel = 3) {
                     const bodyEnd = dead.node.value.body.range[1];
                     ms.overwrite(bodyStart, bodyEnd, '{}');
                 } else if (dead.type === 'Parameter') {
-                    const paramText = codeString.substring(start, end);
-                    if (!paramText.startsWith('_')) {
-                        ms.prependRight(start, '_');
+                    if (ruleEngine && ruleEngine.rules.eliminator && ruleEngine.rules.eliminator.autoRenameUnusedParameters) {
+                        const paramText = codeString.substring(start, end);
+                        if (!paramText.startsWith('_')) {
+                            ms.prependRight(start, '_');
+                        }
                     }
+                }
+            }
+            continue; // Skip dari aggressive delete
+        }
+
+        // Penanganan Auto-Refactoring untuk EmptyBlock (Catch kosong, dlL)
+        if (dead.type === 'EmptyBlock') {
+            if (ruleEngine && ruleEngine.rules.eliminator && ruleEngine.rules.eliminator.autoRemoveEmptyBlocks) {
+                const blockText = codeString.substring(start, end);
+                if (blockText.includes('{')) {
+                    const openBraceIdx = start + blockText.indexOf('{') + 1;
+                    ms.appendRight(openBraceIdx, '\n/* [DeadKiller] Auto-Refactored */\nif (process.env.DEBUG) console.warn("Empty Block Reached");\n');
                 }
             }
             continue; // Skip dari aggressive delete
@@ -97,7 +111,11 @@ export function removeDeadCode(codeString, deadNodes, eliminationLevel = 3) {
             const isEmptyDeclaration = /^(const|let|var)$/.test(remainingBefore) &&
                 (remainingAfter === '' || remainingAfter === ';');
 
-            if (isEmptyDeclaration) {
+            // Cek apakah menyisakan impor kosong seperti: import  from 'fs'; atau import { } from 'fs';
+            const isEmptyImport = /^import\s*\{?\s*\}?$/.test(remainingBefore) && 
+                /^from\s+['"][^'"]+['"];?$/.test(remainingAfter);
+
+            if (isEmptyDeclaration || isEmptyImport) {
                 const fullLineEnd = consumeNewline(codeString, lineEnd);
                 ms.remove(lineStart, fullLineEnd);
             } else {

@@ -3,15 +3,15 @@
 import { program } from 'commander';
 import chalk from 'chalk';
 
-import { registerScanCommand }     from '../src/commands/scanCommand.js';
-import { registerFixCommand }      from '../src/commands/fixCommand.js';
+import { registerScanCommand } from '../src/commands/scanCommand.js';
+import { registerFixCommand } from '../src/commands/fixCommand.js';
 import { registerShowDepsCommand } from '../src/commands/showDepsCommand.js';
 import { registerVisualizeCommand } from '../src/commands/visualizeCommand.js';
-import { registerHistoryCommand }  from '../src/commands/historyCommand.js';
-import { registerTraceCommand }    from '../src/commands/traceCommand.js';
-import { registerWatchCommand }    from '../src/commands/watchCommand.js';
-import { registerReportCommand }   from '../src/commands/reportCommand.js';
-import { registerInitCommand }     from '../src/commands/initCommand.js';
+import { registerHistoryCommand } from '../src/commands/historyCommand.js';
+import { registerTraceCommand } from '../src/commands/traceCommand.js';
+import { registerWatchCommand } from '../src/commands/watchCommand.js';
+import { registerReportCommand } from '../src/commands/reportCommand.js';
+import { registerInitCommand } from '../src/commands/initCommand.js';
 
 // ── Global Ctrl+C handler ──────────────────────────────────────────────────
 // Inquirer v9+ melempar ExitPromptError saat user menekan Ctrl+C.
@@ -25,7 +25,7 @@ const handleExit = (err) => {
     console.error(chalk.red('[ERROR]'), err?.message ?? err);
     process.exit(1);
 };
-process.on('uncaughtException',  handleExit);
+process.on('uncaughtException', handleExit);
 process.on('unhandledRejection', handleExit);
 
 // ── Program ───────────────────────────────────────────────────────────────

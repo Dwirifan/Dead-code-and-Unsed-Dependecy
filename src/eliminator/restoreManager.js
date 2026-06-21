@@ -56,7 +56,7 @@ export async function restoreCheckpoint(checkpointPath, projectRoot) {
     const failed = [];
 
     for (const relFile of files) {
-        const srcFile  = path.join(checkpointPath, relFile);
+        const srcFile = path.join(checkpointPath, relFile);
         const destFile = path.join(projectRoot, relFile);
 
         try {

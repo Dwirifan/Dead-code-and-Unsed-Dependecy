@@ -6,7 +6,7 @@ import ora from 'ora';
 import { performance } from 'perf_hooks';
 import { parseCode } from '../parser/astParser.js';
 import { ParseCache } from '../parser/parseCache.js';
-import { findDeadCode } from '../analyzer/deadcode/deadCodeAnalyzer.js';
+import { findDeadCode } from '../analyzer/deadcode/index.js';
 import { findUnusedDependencies } from '../analyzer/dependency/dependencyAnalyzer.js';
 import { removeDeadCode } from '../eliminator/codeCleaner.js';
 import { removeUnusedDependencies } from '../eliminator/dependencyCleaner.js';
@@ -26,7 +26,7 @@ export function registerFixCommand(program) {
         .argument('<path>', 'Path ke file tunggal (.js/.ts) atau direktori proyek')
         .description('Deteksi dan hapus dead code. Mendukung satu file maupun seluruh proyek.')
         .action(async (targetPath) => {
-            const inquirer    = (await import('inquirer')).default;
+            const inquirer = (await import('inquirer')).default;
             const absolutePath = path.resolve(targetPath);
             if (!fs.existsSync(absolutePath)) {
                 console.error(`[ERROR] Path '${absolutePath}' tidak ditemukan.`);
@@ -34,7 +34,7 @@ export function registerFixCommand(program) {
             }
 
             const startTime = performance.now();
-            const stats     = await fs.stat(absolutePath);
+            const stats = await fs.stat(absolutePath);
 
             // ================================================================
             // MODE A: FILE TUNGGAL — analisis langsung, tidak perlu graph
@@ -62,9 +62,9 @@ async function _fixSingleFile(absolutePath, startTime, inquirer) {
     try { code = await fs.readFile(absolutePath, 'utf-8'); }
     catch (e) { console.error(`[ERROR] Tidak bisa membaca file: ${e.message}`); process.exit(1); }
 
-    const ast        = parseCode(code, absolutePath);
+    const ast = await parseCode(code, absolutePath);
     const ruleEngine = new RuleEngine();
-    const deadNodes  = findDeadCode(ast, absolutePath, null, ruleEngine);
+    const deadNodes = findDeadCode(ast, absolutePath, null, ruleEngine);
 
     if (deadNodes.length === 0) {
         console.log(chalk.green('[ok] File bersih! Tidak ada dead code maupun anomali kode ditemukan.\n'));
@@ -72,9 +72,9 @@ async function _fixSingleFile(absolutePath, startTime, inquirer) {
     }
 
     // Pisahkan item berdasarkan status keamanan
-    const safeNodes   = deadNodes.filter(n => n.status === 'safe');
+    const safeNodes = deadNodes.filter(n => n.status === 'safe');
     const reviewNodes = deadNodes.filter(n => n.status === 'review');
-    const riskyNodes  = deadNodes.filter(n => n.status === 'risky');
+    const riskyNodes = deadNodes.filter(n => n.status === 'risky');
 
     // Tampilkan laporan lengkap
     console.log(chalk.yellow(`[*] Temuan (Dead Code & Code Smell) (${deadNodes.length} item):`))
@@ -91,14 +91,25 @@ async function _fixSingleFile(absolutePath, startTime, inquirer) {
         riskyNodes.forEach(n => console.log(`      Line ${n.line}: ${n.type} '${n.name}'`));
     }
 
-    // Hanya auto-fix item SAFE
-    if (safeNodes.length === 0) {
+    // Terapkan aturan Modul Eliminator
+    const eliminatorConfig = ruleEngine.rules.eliminator || {};
+    if (eliminatorConfig.autoRenameUnusedParameters) {
+        deadNodes.forEach(n => { if (n.type === 'Parameter') n.status = 'safe'; });
+    }
+    if (eliminatorConfig.autoRemoveEmptyBlocks) {
+        deadNodes.forEach(n => { if (n.type === 'EmptyBlock') n.status = 'safe'; });
+    }
+
+    // Refresh safeNodes after config application
+    const newSafeNodes = deadNodes.filter(n => n.status === 'safe');
+
+    if (newSafeNodes.length === 0) {
         console.log(chalk.gray('\n[ok] Tidak ada item yang aman untuk dihapus otomatis. Tinjau manual item di atas.\n'));
         return;
     }
 
-    const newCode = removeDeadCode(code, safeNodes);
-    const diff    = generateDiff(code, newCode, path.basename(absolutePath));
+    const newCode = removeDeadCode(code, newSafeNodes, ruleEngine);
+    const diff = generateDiff(code, newCode, path.basename(absolutePath));
     console.log(chalk.gray('\n--- Preview ---'));
     console.log(diff);
     console.log(chalk.gray('---------------'));
@@ -110,7 +121,13 @@ async function _fixSingleFile(absolutePath, startTime, inquirer) {
     }]);
     if (!ok) { console.log(chalk.gray('[.] Dibatalkan.\n')); return; }
 
-    try { await createBackup(path.dirname(absolutePath), [absolutePath], false); } catch (_) {}
+    try { 
+        const eliminatorConfig = ruleEngine.rules.eliminator || {};
+        const maxBackups = eliminatorConfig.maxBackups !== undefined ? eliminatorConfig.maxBackups : 20;
+        await createBackup(path.dirname(absolutePath), [absolutePath], false, maxBackups); 
+    } catch (err) { 
+        if (process.env.DEBUG) console.warn(`[Warning] Gagal membuat backup untuk ${absolutePath}:`, err.message);
+    }
     await fs.writeFile(absolutePath, newCode);
 
     const locDiff = code.split('\n').length - newCode.split('\n').length;
@@ -122,7 +139,7 @@ async function _fixSingleFile(absolutePath, startTime, inquirer) {
 
 async function _fixDirectory(absolutePath, startTime, inquirer) {
     console.log(chalk.cyan(`\n[>] Fix mode: direktori — ${absolutePath}`));
-    const spinner    = ora('Membangun graph & mendeteksi dead code di semua file...').start();
+    const spinner = ora('Membangun graph & mendeteksi dead code di semua file...').start();
     const ruleEngine = new RuleEngine();
     await ruleEngine.loadConfig(absolutePath);
 
@@ -133,10 +150,13 @@ async function _fixDirectory(absolutePath, startTime, inquirer) {
     // Dependensi tidak terpakai — dianalisis oleh modul dependencyAnalyzer
     let unusedDeps = [];
     try {
-        const depReport = await findUnusedDependencies(absolutePath, graph.usedPackages);
+        const depReport = await findUnusedDependencies(absolutePath, graph.usedPackages, ruleEngine);
         unusedDeps = depReport.unused;
-    } catch (_) {
-        // package.json tidak ditemukan — lewati analisis dependensi
+    } catch (err) {
+        // package.json tidak ditemukan atau gagal diparsing — lewati analisis dependensi
+        if (process.env.DEBUG) {
+            console.warn(`[Warning] Gagal menganalisis dependensi proyek:`, err.message);
+        }
     }
 
     // Dead files — normalisasi path glob ke format OS lokal
@@ -152,7 +172,7 @@ async function _fixDirectory(absolutePath, startTime, inquirer) {
 
     // Dead code di dalam live files (global, otomatis)
     const deadCodeReport = [];
-    const skippedReport  = []; // Item review/risky yang hanya dilaporkan
+    const skippedReport = []; // Item review/risky yang hanya dilaporkan
     const cache = new ParseCache();
     let originalLoc = 0, originalSize = 0, newLoc = 0, newSize = 0;
 
@@ -168,32 +188,43 @@ async function _fixDirectory(absolutePath, startTime, inquirer) {
             const cached = await cache.get(file);
             if (cached) {
                 code = cached.code;
-                ast  = cached.ast;
+                ast = cached.ast;
             } else {
                 code = await fs.readFile(file, 'utf-8');
-                ast  = parseCode(code, file);
+                ast = await parseCode(code, file);
                 await cache.set(file, ast, code);
             }
 
-            originalLoc  += code.split('\n').length;
+            originalLoc += code.split('\n').length;
             originalSize += Buffer.byteLength(code);
             const allDead = findDeadCode(ast, file, graph.globalRegistry, ruleEngine);
 
+            // Terapkan aturan Modul Eliminator
+            const eliminatorConfig = ruleEngine.rules.eliminator || {};
+            if (eliminatorConfig.autoRenameUnusedParameters) {
+                allDead.forEach(n => { if (n.type === 'Parameter') n.status = 'safe'; });
+            }
+            if (eliminatorConfig.autoRemoveEmptyBlocks) {
+                allDead.forEach(n => { if (n.type === 'EmptyBlock') n.status = 'safe'; });
+            }
+
             // Pisahkan: hanya item SAFE yang di-auto-fix
-            const safeDead   = allDead.filter(n => n.status === 'safe');
+            const safeDead = allDead.filter(n => n.status === 'safe');
             const unsafeDead = allDead.filter(n => n.status !== 'safe');
 
             // Catat item yang tidak di-fix
             unsafeDead.forEach(n => skippedReport.push({ file, ...n }));
 
             if (safeDead.length > 0) {
-                const newCode = removeDeadCode(code, safeDead);
-                newLoc  += newCode.split('\n').length;
+                const newCode = removeDeadCode(code, safeDead, ruleEngine);
+                newLoc += newCode.split('\n').length;
                 newSize += Buffer.byteLength(newCode);
-                deadCodeReport.push({ file, dead: safeDead, newCode,
-                    diff: generateDiff(code, newCode, path.relative(absolutePath, file)) });
+                deadCodeReport.push({
+                    file, dead: safeDead, newCode,
+                    diff: generateDiff(code, newCode, path.relative(absolutePath, file))
+                });
             } else {
-                newLoc  += code.split('\n').length;
+                newLoc += code.split('\n').length;
                 newSize += Buffer.byteLength(code);
             }
         } catch (err) {
@@ -203,7 +234,13 @@ async function _fixDirectory(absolutePath, startTime, inquirer) {
     }
 
     for (const f of deadFiles) {
-        try { const c = await fs.readFile(f, 'utf-8'); originalLoc += c.split('\n').length; originalSize += Buffer.byteLength(c); } catch (_) {}
+        try { 
+            const c = await fs.readFile(f, 'utf-8'); 
+            originalLoc += c.split('\n').length; 
+            originalSize += Buffer.byteLength(c); 
+        } catch (err) { 
+            if (process.env.DEBUG) console.warn(`[Warning] Gagal menghitung baris file mati ${f}:`, err.message);
+        }
     }
 
     spinner.stop();
@@ -278,8 +315,8 @@ async function _fixDirectory(absolutePath, startTime, inquirer) {
 
     // 2. Satu konfirmasi akhir
     const parts = [
-        deadCodeReport.length > 0       && `bersihkan dead code di ${deadCodeReport.length} file`,
-        deadFiles.length > 0            && `hapus ${deadFiles.length} file mati`,
+        deadCodeReport.length > 0 && `bersihkan dead code di ${deadCodeReport.length} file`,
+        deadFiles.length > 0 && `hapus ${deadFiles.length} file mati`,
         selectedDepsToRemove.length > 0 && `hapus ${selectedDepsToRemove.length} dependensi`,
     ].filter(Boolean);
 
@@ -300,7 +337,9 @@ async function _fixDirectory(absolutePath, startTime, inquirer) {
 
     const filesToBackup = [...deadFiles, ...deadCodeReport.map(r => r.file)];
     try {
-        await createBackup(absolutePath, filesToBackup, selectedDepsToRemove.length > 0);
+        const eliminatorConfig = ruleEngine.rules.eliminator || {};
+        const maxBackups = eliminatorConfig.maxBackups !== undefined ? eliminatorConfig.maxBackups : 20;
+        await createBackup(absolutePath, filesToBackup, selectedDepsToRemove.length > 0, maxBackups);
         console.log(chalk.gray('   [ok] Checkpoint backup dibuat di .deadkiller_backup/'));
     } catch (err) {
         console.log(chalk.yellow(`   [!] Backup gagal: ${err.message}`));

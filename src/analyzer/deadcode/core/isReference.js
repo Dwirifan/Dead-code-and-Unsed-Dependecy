@@ -74,5 +74,8 @@ export function isReference(node, parent, grandParent) {
     // TypeScript: Nama properti di TSEnumMember bukan referensi
     if (parent.type === 'TSEnumMember' && parent.id === node) return false;
 
+    // TypeScript: Parameter Generik
+    if (parent.type === 'TSTypeParameter' && parent.name === node) return false;
+
     return true; // Jika lolos semua jebakan di atas, maka ini adalah The Real Reference
 }

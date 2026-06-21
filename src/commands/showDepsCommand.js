@@ -33,7 +33,7 @@ export function registerShowDepsCommand(program) {
                     const ruleEngine = new RuleEngine();
                     await ruleEngine.loadConfig(absolutePath);
                     const graph = await buildProjectGraph(absolutePath, ruleEngine);
-                    const depReport = await findUnusedDependencies(absolutePath, graph.usedPackages);
+                    const depReport = await findUnusedDependencies(absolutePath, graph.usedPackages, ruleEngine);
                     unusedDeps = new Set(depReport.unused);
                     spinner.succeed('Analisis selesai.');
                 } catch (err) {
@@ -44,9 +44,9 @@ export function registerShowDepsCommand(program) {
 
                 const printDep = (dep, ver) => {
                     if (unusedDeps.has(dep)) {
-                        console.log(`  ${chalk.red(dep)}: ${chalk.gray(ver)}  ${chalk.bgRed.white(' UNUSED ')}`);
+                        console.log(`  ${chalk.red(dep.padEnd(35))} ${chalk.gray(ver.padEnd(10))} ${chalk.bgRed.white(' UNUSED ')}`);
                     } else {
-                        console.log(`  ${chalk.white(dep)}: ${chalk.gray(ver)}`);
+                        console.log(`  ${chalk.white(dep.padEnd(35))} ${chalk.gray(ver.padEnd(10))} ${chalk.bgGreen.black(' USED ')}`);
                     }
                 };
 

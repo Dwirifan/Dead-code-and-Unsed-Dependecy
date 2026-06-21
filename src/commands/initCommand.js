@@ -6,23 +6,27 @@ import inquirer from 'inquirer';
 export function registerInitCommand(program) {
     program
         .command('init')
-        .description('Generate .deadkillerrc.json secara interaktif')
+        .description('Generate konfigurasi DeadKiller secara interaktif')
         .option('-f, --force', 'Timpa file konfigurasi jika sudah ada')
         .action(initCommand);
 }
 
 /**
- * Command 'init': Generate .deadkillerrc.json secara interaktif
+ * Command 'init': Generate konfigurasi secara interaktif
  */
 export async function initCommand(options) {
     const cwd = process.cwd();
-    const configPath = path.join(cwd, '.deadkillerrc.json');
+    const configPathJS = path.join(cwd, 'deadkiller.config.js');
+    const configPathJSON = path.join(cwd, '.deadkillerrc.json');
 
     console.log(chalk.bold.cyan('\n=== Inisialisasi Konfigurasi DeadKiller ===\n'));
 
-    if (await fs.pathExists(configPath)) {
+    const jsExists = await fs.pathExists(configPathJS);
+    const jsonExists = await fs.pathExists(configPathJSON);
+
+    if (jsExists || jsonExists) {
         if (!options.force) {
-            console.log(chalk.yellow(`\u26A0\uFE0F File konfigurasi sudah ada di: ${configPath}`));
+            console.log(chalk.yellow(`\u26A0\uFE0F File konfigurasi sudah ada di proyek ini.`));
             console.log(chalk.gray(`Gunakan flag --force untuk menimpa file yang ada.`));
             return;
         } else {
@@ -31,6 +35,15 @@ export async function initCommand(options) {
     }
 
     const answers = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'configFormat',
+            message: 'Pilih format konfigurasi yang ingin digunakan:',
+            choices: [
+                { name: 'JavaScript (Dinamis, mendukung Overrides seperti ESLint)', value: 'js' },
+                { name: 'JSON (Statis)', value: 'json' }
+            ]
+        },
         {
             type: 'list',
             name: 'frameworkMode',
@@ -45,8 +58,8 @@ export async function initCommand(options) {
         {
             type: 'input',
             name: 'ignoreVariables',
-            message: 'Daftar nama variabel yang harus selalu diabaikan (pisahkan dengan koma):',
-            default: '^_, dummy'
+            message: 'Regex untuk variabel yang harus diabaikan (contoh: ^_ untuk variabel berawalan underscore):',
+            default: '^_|dummy'
         },
         {
             type: 'input',
@@ -57,29 +70,51 @@ export async function initCommand(options) {
         {
             type: 'confirm',
             name: 'preserveExports',
-            message: 'Apakah file proyek ini adalah library? (Jika Ya, semua exported function/variable tidak akan ditandai mati)',
+            message: 'Apakah file proyek ini adalah library? (Jika Ya, semua exported function/variable dilindungi)',
             default: false
         }
     ]);
 
-    const config = {
-        frameworkMode: answers.frameworkMode,
-        ignoreVariables: answers.ignoreVariables.split(',').map(s => s.trim()).filter(Boolean),
-        ignoreFiles: answers.ignoreFiles.split(',').map(s => s.trim()).filter(Boolean),
-        preserveExports: answers.preserveExports ? 'strict' : false, // menggunakan 'strict' untuk fitur analisis cross-file
-        unusedThresholds: {
-            variables: "warn",
-            functions: "error",
-            classes: "warn"
-        }
-    };
+    const ignoreFilesArray = answers.ignoreFiles.split(',').map(s => s.trim()).filter(Boolean);
 
     try {
-        await fs.writeJSON(configPath, config, { spaces: 2 });
-        console.log(chalk.green(`\n\u2714\uFE0F Berhasil membuat ${chalk.bold('.deadkillerrc.json')}`));
-        console.log(chalk.gray(`\nIsi konfigurasi:`));
-        console.log(chalk.gray(JSON.stringify(config, null, 2)));
-        console.log(`\nSekarang Anda bisa menjalankan ${chalk.cyan('deadkiller scan')} dengan aman!\n`);
+        if (answers.configFormat === 'js') {
+            const jsContent = `/**
+ * Konfigurasi DeadKiller
+ * Anda bisa menggunakan logika JS dinamis dan sistem overrides di sini.
+ */
+export default {
+    mode: '${answers.frameworkMode}',
+    ignorePrefixedVariables: '${answers.ignoreVariables}',
+    preserveExports: ${answers.preserveExports},
+    preserveFiles: ${JSON.stringify(ignoreFilesArray)},
+    ignoreDependencies: [],
+    
+    // Contoh sistem overrides: Terapkan aturan berbeda untuk file spesifik
+    overrides: [
+        {
+            files: ['**/*.test.js', 'tests/**/*.js'],
+            ignorePrefixedVariables: '.*', // Abaikan semua unused variable di file testing
+            preserveExports: true
+        }
+    ]
+};
+`;
+            await fs.writeFile(configPathJS, jsContent, 'utf-8');
+            console.log(chalk.green(`\n\u2714\uFE0F Berhasil membuat ${chalk.bold('deadkiller.config.js')}`));
+        } else {
+            const config = {
+                mode: answers.frameworkMode,
+                ignorePrefixedVariables: answers.ignoreVariables,
+                preserveExports: answers.preserveExports,
+                preserveFiles: ignoreFilesArray,
+                ignoreDependencies: []
+            };
+            await fs.writeJSON(configPathJSON, config, { spaces: 2 });
+            console.log(chalk.green(`\n\u2714\uFE0F Berhasil membuat ${chalk.bold('.deadkillerrc.json')}`));
+        }
+
+        console.log(`\nSekarang Anda bisa menjalankan ${chalk.cyan('deadkiller scan')} dengan konfigurasi baru!\n`);
     } catch (err) {
         console.error(chalk.red(`\n\u2716\uFE0F Gagal menulis konfigurasi: ${err.message}`));
     }

@@ -50,8 +50,9 @@ export class ParseCache {
                 this._hits++;
                 return { ast: cached.ast, code: cached.code };
             }
-        } catch (_) {
+        } catch (err) {
             // File mungkin sudah dihapus
+            if (process.env.DEBUG) console.warn(err);
         }
 
         // File berubah — invalidasi cache
@@ -75,8 +76,9 @@ export class ParseCache {
                 ast,
                 code
             });
-        } catch (_) {
+        } catch (err) {
             // Gagal baca stat — skip caching
+            if (process.env.DEBUG) console.warn(err);
         }
     }
 
@@ -104,5 +106,3 @@ export class ParseCache {
         this._misses = 0;
     }
 }
-
-// PXP: Pengembangan Modul Pengurai (Parser)

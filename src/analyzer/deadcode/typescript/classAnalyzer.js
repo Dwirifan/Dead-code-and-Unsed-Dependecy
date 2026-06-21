@@ -30,7 +30,6 @@ export function findUnusedClassMethods(ast, globalRegistry = null) {
     // Phase 1: Kumpulkan semua deklarasi kelas dan method-nya
     const classMap = new Map(); // className → { methods: Map<methodName, { line, node, used }> }
     const instanceMap = new Map(); // variableName → className
-    const calledMethods = new Map(); // className → Set<methodName>
     let currentClassName = null;
 
     estraverse.traverse(ast, {
@@ -67,7 +66,7 @@ export function findUnusedClassMethods(ast, globalRegistry = null) {
             // class Foo { bar = () => {} }
             if (node.type === 'PropertyDefinition' && currentClassName && classMap.has(currentClassName)) {
                 const fieldName = node.key && node.key.type === 'Identifier' ? node.key.name : null;
-                if (fieldName && node.value && 
+                if (fieldName && node.value &&
                     (node.value.type === 'ArrowFunctionExpression' || node.value.type === 'FunctionExpression')) {
                     classMap.get(currentClassName).methods.set(fieldName, {
                         line: node.loc ? node.loc.start.line : 0,
@@ -157,7 +156,7 @@ export function findUnusedClassMethods(ast, globalRegistry = null) {
         for (const [methodName, methodInfo] of classInfo.methods.entries()) {
             // Mitigasi aman: jika method pernah dipanggil DI FILE MANAPUN, anggap dia hidup (used)
             const isUsedGlobally = globalRegistry && globalRegistry.calledMethods && globalRegistry.calledMethods.has(methodName);
-            
+
             if (!methodInfo.used && !isUsedGlobally) {
                 deadMethods.push({
                     name: `${className}.${methodName}`,

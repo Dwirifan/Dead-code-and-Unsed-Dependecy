@@ -16,9 +16,38 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
     if (await fs.pathExists(pkgPath)) {
         pkg = await fs.readJson(pkgPath);
     }
-    
+
     // A. Identifikasi SEMUA Titik Masuk Sistem (Entry Points)
     const entrySet = new Set();
+
+    // FITUR 1: Workspace / Monorepo Parser
+    if (pkg.workspaces) {
+        const workspacePatterns = Array.isArray(pkg.workspaces) ? pkg.workspaces : (pkg.workspaces.packages || []);
+        for (const pattern of workspacePatterns) {
+            const workspaceDirs = glob.sync(pattern, { cwd: projectRoot, onlyDirectories: true, absolute: true });
+            for (const wsDir of workspaceDirs) {
+                try {
+                    const wsPkgPath = path.join(wsDir, 'package.json');
+                    if (await fs.pathExists(wsPkgPath)) {
+                        const wsPkg = await fs.readJson(wsPkgPath);
+                        if (wsPkg.main) entrySet.add(path.resolve(wsDir, wsPkg.main));
+                        if (wsPkg.module) entrySet.add(path.resolve(wsDir, wsPkg.module));
+                        if (wsPkg.bin) {
+                            if (typeof wsPkg.bin === 'string') {
+                                entrySet.add(path.resolve(wsDir, wsPkg.bin));
+                            } else {
+                                Object.values(wsPkg.bin).forEach(b => entrySet.add(path.resolve(wsDir, b)));
+                            }
+                        }
+                    }
+                } catch (e) {
+                    if (process.env.DEBUG) {
+                        console.warn(`[Warning] Gagal membaca package.json di workspace ${wsDir}:`, e.message);
+                    }
+                }
+            }
+        }
+    }
 
     // 1. Tambahkan Custom Entry Points dari RuleEngine
     if (ruleEngine && ruleEngine.rules && ruleEngine.rules.entryPoints) {
@@ -35,7 +64,7 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
     // 2. Baca dari package.json (jika ada)
     if (pkg.main) entrySet.add(path.resolve(projectRoot, pkg.main));
     if (pkg.module) entrySet.add(path.resolve(projectRoot, pkg.module));
-    
+
     if (pkg.bin) {
         if (typeof pkg.bin === 'string') {
             entrySet.add(path.resolve(projectRoot, pkg.bin));
@@ -58,7 +87,7 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
     // 3. Framework Auto-Detection Heuristics
     const allDeps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
     const frameworkGlobs = [];
-    
+
     if (allDeps['next']) {
         frameworkGlobs.push('pages/**/*.{js,jsx,ts,tsx}', 'app/**/*.{js,jsx,ts,tsx}', 'src/pages/**/*.{js,jsx,ts,tsx}', 'src/app/**/*.{js,jsx,ts,tsx}');
     } else if (allDeps['nuxt'] || allDeps['nuxt3']) {
@@ -81,7 +110,7 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
         frameworkGlobs.push('src/main.{js,ts}', 'src/renderer.{js,ts}', 'main.js');
     }
 
-    // Webpack deteksi
+    // Webpack deteksi (Legacy)
     if (allDeps['webpack'] || allDeps['webpack-cli']) {
         const webpackConfigs = ['webpack.config.js', 'webpack.common.js'];
         for (const wc of webpackConfigs) {
@@ -101,8 +130,39 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
                             if (await fs.pathExists(resolved)) entrySet.add(resolved);
                         }
                     }
-                } catch { /* Gagal baca webpack config, skip */ }
+                } catch (err) {
+                    if (process.env.DEBUG) {
+                        console.warn(`[Warning] Gagal membaca konfigurasi Webpack ${wcPath}:`, err.message);
+                    }
+                }
             }
+        }
+    }
+
+    // FITUR 2: Arsitektur Plugin (Config Files sebagai Entry Point Otomatis)
+    const pluginConfigFiles = [
+        'vite.config.js', 'vite.config.ts', 'vite.config.mjs', 'vite.config.cjs',
+        'webpack.config.js', 'webpack.config.ts', 'webpack.common.js', 'webpack.dev.js', 'webpack.prod.js',
+        'next.config.js', 'next.config.mjs',
+        'nuxt.config.js', 'nuxt.config.ts',
+        'rollup.config.js', 'rollup.config.ts', 'rollup.config.mjs',
+        'jest.config.js', 'jest.config.ts', 'jest.config.mjs', 'jest.config.cjs',
+        'vitest.config.js', 'vitest.config.ts', 'vitest.config.mjs', 'vitest.config.cjs',
+        'playwright.config.js', 'playwright.config.ts',
+        'cypress.config.js', 'cypress.config.ts',
+        '.eslintrc.js', '.eslintrc.cjs', 'eslint.config.js', 'eslint.config.mjs', 'eslint.config.cjs',
+        'prettier.config.js', 'prettier.config.cjs',
+        'tailwind.config.js', 'tailwind.config.ts', 'tailwind.config.cjs',
+        'postcss.config.js', 'postcss.config.cjs',
+        'svelte.config.js',
+        'babel.config.js', 'babel.config.cjs',
+        'commitlint.config.js',
+        'lint-staged.config.js'
+    ];
+    for (const conf of pluginConfigFiles) {
+        const confPath = path.resolve(projectRoot, conf);
+        if (await fs.pathExists(confPath)) {
+            entrySet.add(confPath);
         }
     }
 
@@ -116,10 +176,10 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
     // Fallback: kandidat umum
     if (entrySet.size === 0) {
         const candidates = [
-            'index.js', 'index.ts', 
-            'main.js', 'main.ts', 
-            'src/index.js', 'src/index.ts', 
-            'app.js', 'app.ts', 
+            'index.js', 'index.ts',
+            'main.js', 'main.ts',
+            'src/index.js', 'src/index.ts',
+            'app.js', 'app.ts',
             'server.js', 'server.ts'
         ];
         for (const c of candidates) {
@@ -145,7 +205,11 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
                             entrySet.add(resolved);
                         }
                     }
-                } catch { /* Gagal baca HTML, skip */ }
+                } catch (err) {
+                    if (process.env.DEBUG) {
+                        console.warn(`[Warning] Gagal memparsing HTML file ${htmlPath}:`, err.message);
+                    }
+                }
                 break;
             }
         }

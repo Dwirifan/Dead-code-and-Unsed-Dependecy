@@ -8,6 +8,15 @@ export function markUsedExports(ast, globalScope, fileName, globalRegistry, rule
     estraverse.traverse(ast, {
         fallback: 'iteration',
         enter: function(node) {
+             const recordExport = (name) => {
+                 if (!globalRegistry || !globalRegistry.projectExports) return;
+                 if (name === 'default') return; // Abaikan default exports karena namanya bebas (bisa bentrok tapi sah)
+                 if (!globalRegistry.projectExports.has(name)) {
+                     globalRegistry.projectExports.set(name, new Set());
+                 }
+                 globalRegistry.projectExports.get(name).add(fileName);
+             };
+
              const checkUsage = (name) => {
                  const rules = ruleEngine && ruleEngine.rules;
                  
@@ -37,18 +46,22 @@ export function markUsedExports(ast, globalScope, fileName, globalRegistry, rule
                      node.declaration.declarations.forEach(decl => {
                          const identifiers = extractIdentifiers(decl.id);
                          identifiers.forEach(({ name }) => {
+                             recordExport(name);
                              if (checkUsage(name)) globalScope.markUsed(name);
                          });
                      });
                  }
                  if (node.declaration.type === 'FunctionDeclaration') {
+                     recordExport(node.declaration.id.name);
                      if (checkUsage(node.declaration.id.name)) globalScope.markUsed(node.declaration.id.name);
                  }
                  if (node.declaration.type === 'ClassDeclaration' && node.declaration.id) {
+                     recordExport(node.declaration.id.name);
                      if (checkUsage(node.declaration.id.name)) globalScope.markUsed(node.declaration.id.name);
                  }
              }
              if (node.type === 'ExportDefaultDeclaration') {
+                 recordExport('default');
                  if (node.declaration.type === 'Identifier') {
                      if (checkUsage(node.declaration.name)) globalScope.markUsed(node.declaration.name);
                  }
@@ -65,6 +78,7 @@ export function markUsedExports(ast, globalScope, fileName, globalRegistry, rule
              if (node.type === 'AssignmentExpression' && node.left.type === 'MemberExpression' &&
                  node.left.object.type === 'MemberExpression' && node.left.object.object.name === 'module') {
                  if (node.right.type === 'Identifier') {
+                     recordExport(node.right.name);
                      if (checkUsage(node.right.name)) globalScope.markUsed(node.right.name);
                  }
              }

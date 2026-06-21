@@ -23,10 +23,7 @@ export class Scope {
         }
     }
 
-    addReference(name) {
-        // Backward compatible: default = READ reference
-        this.readReferences.push(name);
-    }
+
 
     addReadReference(name) {
         this.readReferences.push(name);

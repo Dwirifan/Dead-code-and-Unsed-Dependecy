@@ -23,7 +23,10 @@ export function generateMermaidGraph(graph, rootDir, pkgData = { dependencies: {
         try {
             const logoBase64 = `data:image/png;base64,${fs.readFileSync(logoPath).toString('base64')}`;
             logoImgHtml = `<img src="${logoBase64}" alt="Logo" class="header-logo">`;
-        } catch(e) { /* fallback tanpa logo */ }
+        } catch(e) { 
+            /* fallback tanpa logo */ 
+            if (process.env.DEBUG) console.warn(e);
+        }
     }
 
     // === 1. Siapkan Data untuk vis.js ===

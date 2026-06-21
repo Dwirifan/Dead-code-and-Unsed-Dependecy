@@ -3,7 +3,7 @@ import fs from 'fs-extra';
 import chalk from 'chalk';
 import { performance } from 'perf_hooks';
 import { parseCode } from '../parser/astParser.js';
-import { findDeadCode } from '../analyzer/deadcode/deadCodeAnalyzer.js';
+import { findDeadCode } from '../analyzer/deadcode/index.js';
 import { RuleEngine } from '../analyzer/ruleEngine.js';
 import { buildGraphWithInteractiveFallback } from './commandHelpers.js';
 
@@ -16,6 +16,7 @@ import { buildGraphWithInteractiveFallback } from './commandHelpers.js';
  * 
  * @param {import('commander').Command} program
  */
+
 export function registerWatchCommand(program) {
     program
         .command('watch')
@@ -72,18 +73,30 @@ export function registerWatchCommand(program) {
 
                         try {
                             const code = await fs.readFile(file, 'utf-8');
-                            const ast = parseCode(code, file);
+                            const ast = await parseCode(code, file);
                             const deadNodes = findDeadCode(ast, file, graph.globalRegistry, ruleEngine);
 
                             if (deadNodes.length > 0) {
-                                const safeCount  = deadNodes.filter(n => n.status === 'safe').length;
+                                const safeCount = deadNodes.filter(n => n.status === 'safe').length;
                                 const riskyCount = deadNodes.filter(n => n.status !== 'safe').length;
                                 const rel = path.relative(absolutePath, file);
 
                                 console.log(`   ${chalk.yellow('[!]')} ${rel}: ${chalk.green(`${safeCount} safe`)}, ${chalk.red(`${riskyCount} review/risky`)}`);
+
+                                // UX Improvement: Tampilkan detail nama dead code KHUSUS untuk file yang baru saja disave
+                                if (changedFile && path.relative(absolutePath, changedFile) === rel) {
+                                    deadNodes.forEach(n => {
+                                        const color = n.status === 'safe' ? chalk.green : chalk.red;
+                                        const typeLabel = n.type === 'EmptyBlock' ? 'Code Smell: Empty Block' : n.type;
+                                        console.log(`       └─ [${typeLabel}] ${color(n.name)} (Line ${n.line})`);
+                                    });
+                                }
+
                                 totalIssues += deadNodes.length;
                             }
-                        } catch (_) { /* skip parse errors */ }
+                        } catch (err) {
+                            if (process.env.DEBUG) console.warn(`[Warning] Watcher gagal mem-parse ${file}:`, err.message);
+                        }
                     }
 
                     const elapsed = (performance.now() - startTime).toFixed(0);
@@ -109,7 +122,7 @@ export function registerWatchCommand(program) {
 
             const watchDir = (dir) => {
                 try {
-                    fs.watch(dir, { recursive: true }, (eventType, filename) => {
+                    fs.watch(dir, { recursive: true }, (_, filename) => {
                         if (!filename) return;
 
                         // Pastikan file yang berubah relevan

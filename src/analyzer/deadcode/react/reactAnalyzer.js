@@ -25,7 +25,7 @@ const visitorKeys = { ...estraverse.VisitorKeys, ...tsVisitorKeys };
 export function analyzeReactSmells(ast) {
     const findings = [];
     const TOO_MANY_STATES_THRESHOLD = 5;
-    const TOO_MANY_PROPS_THRESHOLD  = 7;
+    const TOO_MANY_PROPS_THRESHOLD = 7;
 
     // ══════════════════════════════════════════════════════════════
     // RULE 1 — Too Many States
@@ -86,8 +86,8 @@ function _detectTooManyStates(ast, findings, threshold, visitorKeys) {
                     (
                         (node.callee.type === 'Identifier' && node.callee.name === 'useState') ||
                         (node.callee.type === 'MemberExpression' &&
-                         node.callee.property.type === 'Identifier' &&
-                         node.callee.property.name === 'useState')
+                            node.callee.property.type === 'Identifier' &&
+                            node.callee.property.name === 'useState')
                     )
                 ) {
                     stateCount++;
@@ -172,8 +172,8 @@ function _detectUnnecessaryWrapper(ast, findings, visitorKeys) {
             // Harus hanya memiliki tepat satu child JSXElement/JSXExpressionContainer
             const meaningfulChildren = (node.children || []).filter(
                 c => c.type === 'JSXElement' ||
-                     c.type === 'JSXExpressionContainer' ||
-                     c.type === 'JSXFragment'
+                    c.type === 'JSXExpressionContainer' ||
+                    c.type === 'JSXFragment'
             );
 
             if (meaningfulChildren.length === 1) {
@@ -240,8 +240,8 @@ function _detectMissingKey(ast, findings, visitorKeys) {
 
             const hasKey = opening.attributes.some(
                 attr => attr.type === 'JSXAttribute' &&
-                        attr.name &&
-                        attr.name.name === 'key'
+                    attr.name &&
+                    attr.name.name === 'key'
             );
 
             if (!hasKey) {

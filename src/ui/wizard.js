@@ -97,6 +97,7 @@ export async function launchWizard() {
         execSync(`node "${cliPath}" ${action} "${targetDirectory}"`, { stdio: 'inherit' });
     } catch (error) {
         // Kesalahan sudah ditangani dan di-print oleh proses anak (dce-cli.js)
+        if (process.env.DEBUG) console.warn(error);
     }
 
     // 4. Setelah scan selesai, tawarkan langsung fix
@@ -117,10 +118,12 @@ export async function launchWizard() {
                     execSync(`node "${cliPath}" fix "${targetDirectory}"`, { stdio: 'inherit' });
                 } catch (error) {
                     // Kesalahan sudah ditangani oleh proses anak
+                    if (process.env.DEBUG) console.warn(error);
                 }
             }
         } catch (err) {
             // Ctrl+C — abaikan saja
+            if (process.env.DEBUG) console.warn(err);
         }
     }
 

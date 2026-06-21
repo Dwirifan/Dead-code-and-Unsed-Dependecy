@@ -114,7 +114,7 @@ export async function resolveBarrelExports(filePath, visited = new Set()) {
 
     try {
         const code = await fs.readFile(filePath, 'utf-8');
-        const ast = parseCode(code, resolvedFile);
+        const ast = await parseCode(code, resolvedFile);
 
         // Kumpulkan ekspor lokal dari file ini
         const localExports = extractExportNames(ast);
@@ -140,8 +140,10 @@ export async function resolveBarrelExports(filePath, visited = new Set()) {
                 }
             }
         }
-    } catch {
-        // File tidak bisa diparsing, abaikan saja
+    } catch (err) {
+        if (process.env.DEBUG) {
+            console.warn(`[Warning] Gagal memparsing file barrel ${filePath}:`, err.message);
+        }
     }
 
     return allExports;

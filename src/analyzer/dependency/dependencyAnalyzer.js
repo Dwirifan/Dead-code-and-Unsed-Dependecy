@@ -1,27 +1,64 @@
 import fs from 'fs-extra';
 import path from 'path';
+import { builtinModules } from 'module';
+import { runConfigParsers } from './configParsers/configParserRunner.js';
+
+// Set modul bawaan Node.js untuk filter Missing Dependencies
+// Contoh: 'path', 'fs', 'url', 'child_process', 'perf_hooks', dll
+const NODE_BUILTINS = new Set([
+    ...builtinModules,
+    ...builtinModules.map(m => `node:${m}`), // format "node:fs", "node:path"
+]);
+
 
 /**
  * Modul Analisis Dependensi (Unused Dependency Analyzer)
- * 
- * Bertanggung jawab atas seluruh siklus deteksi dependensi NPM yang tidak terpakai:
- *   1. Membaca daftar dependensi yang dideklarasikan di package.json
- *   2. Membandingkan dengan daftar paket yang benar-benar dipakai oleh kode
- *   3. Menghasilkan laporan dependensi yang tidak terpakai (unused)
- * 
- * PENTING: Hanya `dependencies` (runtime) yang dianalisis secara ketat.
- * `devDependencies` (build tools seperti webpack, prettier, babel) TIDAK
- * diperiksa karena mereka dipanggil melalui CLI/npm-scripts/config-files,
- * bukan melalui import/require di kode sumber.
- * 
+ *
+ * Bertanggung jawab atas seluruh siklus deteksi anomali dependensi NPM:
+ *
+ *   1. UNUSED RUNTIME DEPS   — Ada di `dependencies`, tapi tidak pernah di-import di kode.
+ *   2. MISSING DEPENDENCIES  — Di-import di kode, tapi lupa didaftarkan ke `package.json`.
+ *      (Paket tersebut mungkin tersedia sebagai transitive dependency paket lain,
+ *       yang berarti berpotensi hilang jika paket induknya diperbarui.)
+ *   3. DEAD DEV DEPENDENCIES — Ada di `devDependencies`, tidak dipakai di kode
+ *      maupun di file konfigurasi (ESLint, Babel, dll.) proyek.
+ *
+ * Arsitektur Pipeline:
+ *   (A) extractBinFromScripts()  → membaca npm scripts di package.json untuk menemukan
+ *       CLI tools yang benar-benar dipakai → hasilnya dimasukkan ke `usedPackages`.
+ *   (B) runConfigParsers()       → membaca file config (ESLint, Babel) untuk menemukan
+ *       devDependencies yang dipakai di sana.
+ *   (C) Set Difference Forward   → runtimeDeps - usedPackages = unusedRuntimeDeps
+ *   (D) Set Difference Reverse   → usedPackages - allDeclared = missingDeps
+ *   (E) Set Difference DevDeps   → devDeps - (usedPackages ∪ configUsedPackages) = deadDevDeps
+ *
  * Modul ini menerima data `usedPackages` dari Project Graph (BFS) agar
  * tidak perlu melakukan traversal ulang — cukup sekali scan, data dipakai bersama.
  */
 
+// ─────────────────────────────────────────────────────────────────────────────
+// KONSTANTA: Paket yang SELALU dikecualikan dari laporan "dead devDependency"
+// karena mereka beroperasi secara implisit (tanpa konfigurasi eksplisit).
+// ─────────────────────────────────────────────────────────────────────────────
+const ALWAYS_EXCLUDED_DEV_PATTERNS = [
+    /^@types\//,          // TypeScript type definitions — tidak pernah di-import langsung
+];
+const ALWAYS_EXCLUDED_DEV_EXACT = new Set([
+    'typescript',         // Compiler — dipanggil via tsc
+    'ts-node', 'tsx',     // Runtime TS executor
+    'husky',              // Git hooks manager — tidak pernah di-import atau dikonfigurasi eksplisit
+    'lint-staged',        // Terkait husky — dieksekusi via .husky/
+    'commitlint', '@commitlint/cli', '@commitlint/config-conventional',
+]);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FUNGSI UTILITAS
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
  * Membaca package.json dan mengembalikan semua dependensi yang terdaftar.
  * Memisahkan `dependencies` (runtime) dan `devDependencies` (build tools).
- * 
+ *
  * @param {string} projectRoot - Path direktori akar proyek
  * @returns {Promise<{runtimeDeps: Set<string>, devDeps: Set<string>, pkg: object}>}
  * @throws {Error} Jika file package.json tidak ditemukan
@@ -40,55 +77,119 @@ export async function getDeclaredDependencies(projectRoot) {
 }
 
 /**
- * Menganalisis dan mendeteksi dependensi NPM yang tidak terpakai.
- * 
- * Cara kerja:
- *   - Membaca dependensi runtime dari package.json (dependencies)
- *   - Menerima daftar paket yang terdeteksi dipakai dari Project Graph (usedPackages)
- *   - Membandingkan: runtimeDeps - usedPackages = unusedDependencies
- *   - devDependencies DILEWATI karena mereka adalah build tools (webpack, prettier, dll)
- *     yang dipanggil via CLI/npm-scripts, bukan import/require
- * 
- * @param {string} projectRoot - Path direktori akar proyek
- * @param {Set<string>} usedPackages - Set berisi nama paket NPM yang benar-benar
- *                                      dipakai oleh kode (dari buildProjectGraph)
- * @returns {Promise<object>} Objek berisi daftar dependensi tidak terpakai beserta statistik
+ * NPM Scripts Parser
+ *
+ * Terinspirasi dari depcheck/src/special/bin.js
+ *
+ * Mengekstrak nama binary / CLI tool yang benar-benar dipakai dari bagian
+ * "scripts" di package.json. Hasilnya digunakan untuk menandai devDependencies
+ * yang dipanggil via CLI sebagai "masih terpakai" (bukan dead devDep).
+ *
+ * Algoritma:
+ *   - Baca semua nilai string dari pkg.scripts
+ *   - Tokenisasi setiap nilai script dengan split whitespace & &&/||/;
+ *   - Token pertama setiap sub-command biasanya nama binary (misal: rimraf, webpack)
+ *   - Juga cocokkan token yang ada di dalam semua nilai devDeps
+ *
+ * @param {object} pkg      - Objek package.json yang sudah diparsing
+ * @param {Set<string>} devDeps - Set nama devDependencies yang dideklarasikan
+ * @returns {Set<string>} - Set nama paket yang terdeteksi digunakan di scripts
  */
-export async function findUnusedDependencies(projectRoot, usedPackages) {
-    const { runtimeDeps, devDeps } = await getDeclaredDependencies(projectRoot);
+function extractBinFromScripts(pkg, devDeps) {
+    const usedViaCli = new Set();
+    if (!pkg.scripts || typeof pkg.scripts !== 'object') return usedViaCli;
 
-    // Inject Implicit Framework Dependencies
-    // Framework modern seperti Next.js, Create React App (react-scripts), atau Vite
-    // seringkali menyertakan dependensi secara implisit tanpa instruksi `import` eksplisit di kode.
-    const implicitDependencies = new Map([
-        ['next', ['react', 'react-dom', 'eslint-config-next']],
-        ['react-scripts', ['react', 'react-dom']],
-        ['@vitejs/plugin-react', ['react', 'react-dom']],
-        ['@vitejs/plugin-react-swc', ['react', 'react-dom']],
-        ['nuxt', ['vue']],
-        ['nuxt3', ['vue']],
-        ['gatsby', ['react', 'react-dom']],
-    ]);
+    // Ekstrak semua string scripts
+    const allScripts = Object.values(pkg.scripts).filter(s => typeof s === 'string');
 
-    // Jika framework terdeteksi (baik di package.json atau kode), tambahkan paket implisit ke `usedPackages`
-    const allDeclared = new Set([...runtimeDeps, ...devDeps]);
-    for (const [framework, implicitlyUsed] of implicitDependencies.entries()) {
-        if (allDeclared.has(framework) || usedPackages.has(framework)) {
-            implicitlyUsed.forEach(pkg => usedPackages.add(pkg));
+    for (const script of allScripts) {
+        // Pecah berdasarkan operator chain (&&, ||, ;, |) dan whitespace
+        const tokens = script
+            .split(/&&|\|\||;|\||\s+/)
+            .map(t => t.trim())
+            .filter(Boolean);
+
+        for (const token of tokens) {
+            // Hapus flag (diawali dengan -) dan path (mengandung /)
+            if (token.startsWith('-') || token.includes('/') || token.includes('=')) continue;
+            // Hapus variabel environment (KEY=VALUE)
+            if (/^\w+=/.test(token)) continue;
+
+            // Cek apakah token ini adalah salah satu nama paket devDependency
+            // (exact match atau sebagai bagian dari nama binary scoped package)
+            for (const dep of devDeps) {
+                // Nama paket scoped: @scope/package → binary biasanya "package" atau nama terakhir
+                const binName = dep.startsWith('@') ? dep.split('/').pop() : dep;
+                if (token === binName || token === dep) {
+                    usedViaCli.add(dep);
+                    break;
+                }
+            }
         }
     }
 
-    // Auto-Ignore: Package yang TIDAK PERNAH di-import di kode sumber
-    // Mereka dipanggil via CLI, config files, atau compiler — bukan melalui import/require.
-    const BUILD_TOOL_PATTERNS = [
-        /^@types\//,           // TypeScript type definitions (@types/node, @types/react, dll)
-        /^eslint/,             // ESLint dan semua plugin/config-nya
-        /^prettier/,           // Prettier formatter
-        /^@eslint\//,          // ESLint scoped packages
-        /^stylelint/,          // Stylelint CSS linter
+    return usedViaCli;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FUNGSI UTAMA
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Menganalisis dan mendeteksi seluruh anomali dependensi NPM.
+ *
+ * @param {string} projectRoot   - Path direktori akar proyek
+ * @param {Set<string>} usedPackages - Set berisi nama paket NPM yang benar-benar
+ *                                    dipakai oleh kode (dari buildProjectGraph / BFS)
+ * @returns {Promise<object>} Objek laporan dependensi lengkap
+ */
+export async function findUnusedDependencies(projectRoot, usedPackages, ruleEngine = null) {
+    const { runtimeDeps, devDeps, pkg } = await getDeclaredDependencies(projectRoot);
+
+    // ── FASE A: Inject Implicit Framework Dependencies ────────────────────────
+    // Framework modern seperti Next.js, CRA, atau Vite menyertakan dependensi
+    // secara implisit tanpa instruksi `import` eksplisit di kode.
+    const implicitDependencies = new Map([
+        ['next',                     ['react', 'react-dom', 'eslint-config-next']],
+        ['react-scripts',            ['react', 'react-dom']],
+        ['@vitejs/plugin-react',     ['react', 'react-dom']],
+        ['@vitejs/plugin-react-swc', ['react', 'react-dom']],
+        ['nuxt',                     ['vue']],
+        ['nuxt3',                    ['vue']],
+        ['gatsby',                   ['react', 'react-dom']],
+    ]);
+
+    const allDeclared = new Set([...runtimeDeps, ...devDeps]);
+    for (const [framework, implicitlyUsed] of implicitDependencies.entries()) {
+        if (allDeclared.has(framework) || usedPackages.has(framework)) {
+            implicitlyUsed.forEach(p => usedPackages.add(p));
+        }
+    }
+
+    // ── FASE B: NPM Scripts Parser ────────────────────────────────────────────
+    // Temukan devDependencies yang dipanggil sebagai CLI binary di npm scripts.
+    // Hasilnya langsung masuk ke usedPackages agar tidak dihitung sebagai dead.
+    const usedViaCli = extractBinFromScripts(pkg, devDeps);
+    for (const dep of usedViaCli) {
+        usedPackages.add(dep);
+    }
+
+    // ── FASE C: Config File Parsers ───────────────────────────────────────────
+    // Temukan devDependencies yang dipakai di dalam file konfigurasi
+    // (mis. plugins di .eslintrc.json, presets di babel.config.json).
+    const configUsedPackages = await runConfigParsers(projectRoot);
+
+    // ── FASE D: Kalkulasi Unused Runtime Dependencies ─────────────────────────
+    // Tetap gunakan filter pattern untuk paket yang tidak bisa dideteksi via AST/scripts/config
+    const LEGACY_PATTERNS = [
+        /^@types\//,
+        /^eslint/,
+        /^prettier/,
+        /^@eslint\//,
+        /^stylelint/,
     ];
-    const BUILD_TOOL_EXACT = new Set([
-        'typescript',          // TypeScript compiler (dipanggil via tsc, bukan import)
+    const LEGACY_EXACT = new Set([
+        'typescript',
         'webpack', 'webpack-cli', 'webpack-dev-server',
         'babel-core', '@babel/core', '@babel/cli',
         'rollup', 'esbuild', 'swc',
@@ -100,25 +201,90 @@ export async function findUnusedDependencies(projectRoot, usedPackages) {
         'sass', 'less', 'stylus',
     ]);
 
-    // Bandingkan: hanya runtime dependencies vs yang benar-benar dipakai
-    const unused = [];
+    const unusedRuntime = [];
     for (const dep of runtimeDeps) {
         if (usedPackages.has(dep)) continue;
+        if (LEGACY_EXACT.has(dep)) continue;
+        if (LEGACY_PATTERNS.some(p => p.test(dep))) continue;
+        if (ruleEngine && ruleEngine.isIgnoredDependency(dep)) continue;
+        unusedRuntime.push(dep);
+    }
 
-        // Skip jika masuk kategori build tool (tidak pernah di-import)
-        if (BUILD_TOOL_EXACT.has(dep)) continue;
-        if (BUILD_TOOL_PATTERNS.some(pattern => pattern.test(dep))) continue;
+    // ── FASE E: Kalkulasi Missing Dependencies (Set Difference Terbalik) ──────
+    // Paket yang dipakai di kode tapi tidak dideklarasikan di package.json sama sekali.
+    // Ini berbahaya karena mengandalkan transitive dependency yang bisa hilang kapan saja.
+    //
+    // Filter yang diterapkan:
+    //   1. Modul bawaan Node.js (path, fs, url, perf_hooks, dll.) — bukan paket NPM
+    //   2. Path relatif ('./...') atau absolut — bukan paket NPM
+    //   3. Sub-package scoped dari paket yang sudah dideklarasikan
+    //      (mis. @typescript-eslint/visitor-keys sudah bundled dengan @typescript-eslint/typescript-estree)
+    const missing = [];
+    for (const dep of usedPackages) {
+        // Skip path relatif / absolut
+        if (dep.startsWith('.') || dep.startsWith('/')) continue;
+        // Skip modul bawaan Node.js
+        if (NODE_BUILTINS.has(dep)) continue;
+        // Skip paket yang sudah dideklarasikan
+        if (allDeclared.has(dep)) continue;
+        // Skip sub-package scoped yang scope induknya sudah dideklarasikan
+        // Contoh: "@typescript-eslint/visitor-keys" → scope "@typescript-eslint"
+        // Jika "@typescript-eslint/typescript-estree" ada di allDeclared, skip.
+        if (dep.startsWith('@')) {
+            const scope = dep.split('/')[0]; // "@typescript-eslint"
+            const isScopePresent = [...allDeclared].some(d => d.startsWith(scope + '/'));
+            if (isScopePresent) continue;
+        }
+        missing.push(dep);
+    }
 
-        unused.push(dep);
+    // ── FITUR 9: Missing Binaries ─────────────────────────────────────────────
+    // Binari CLI yang digunakan di package.json "scripts" tapi tidak di-install.
+    const missingBinaries = [];
+    for (const bin of usedViaCli) {
+        if (!allDeclared.has(bin)) {
+            missingBinaries.push(bin);
+        }
+    }
+
+    // ── FASE F: Kalkulasi Dead DevDependencies ────────────────────────────────
+    // devDependencies yang tidak ditemukan di:
+    //   (1) kode sumber (usedPackages dari BFS)
+    //   (2) npm scripts (usedViaCli)
+    //   (3) file konfigurasi (configUsedPackages dari config parsers)
+    const deadDevDeps = [];
+    for (const dep of devDeps) {
+        // Skip paket yang selalu dikecualikan
+        if (ALWAYS_EXCLUDED_DEV_EXACT.has(dep)) continue;
+        if (ALWAYS_EXCLUDED_DEV_PATTERNS.some(p => p.test(dep))) continue;
+
+        const inCode    = usedPackages.has(dep);
+        const inScripts = usedViaCli.has(dep);
+        const inConfig  = configUsedPackages.has(dep);
+
+        if (!inCode && !inScripts && !inConfig) {
+            deadDevDeps.push(dep);
+        }
     }
 
     return {
-        unused,                            // Daftar nama dependensi runtime yang tidak terpakai
-        declared: runtimeDeps,             // Runtime dependencies yang dideklarasikan
-        devDeclared: devDeps,              // Dev dependencies (tidak dianalisis)
-        used: usedPackages,                // Semua dependensi yang terdeteksi dipakai
-        totalDeclared: runtimeDeps.size,   // Jumlah total runtime declared
-        totalUsed: usedPackages.size,      // Jumlah total used
-        totalUnused: unused.length         // Jumlah total unused
+        // Laporan utama
+        unused:          unusedRuntime,     // Runtime deps yang tidak terpakai
+        missing,                            // Paket yang dipakai tapi tidak dideklarasikan
+        missingBinaries,                    // FITUR 9: Binari scripts yang tidak ter-install
+        deadDevDeps,                        // Dev deps yang tidak terpakai sama sekali
+
+        // Metadata dan statistik
+        declared:        runtimeDeps,
+        devDeclared:     devDeps,
+        used:            usedPackages,
+        configUsed:      configUsedPackages,
+        usedViaCli,
+
+        totalDeclared:   runtimeDeps.size,
+        totalUsed:       usedPackages.size,
+        totalUnused:     unusedRuntime.length,
+        totalMissing:    missing.length,
+        totalDeadDev:    deadDevDeps.length,
     };
 }
