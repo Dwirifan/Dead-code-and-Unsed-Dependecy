@@ -1,0 +1,34 @@
+name: Publish Package to npm
+
+on:
+  release:
+    types: [published] # Workflow ini akan berjalan otomatis begitu Anda mengklik "Publish Release" di GitHub
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. Mengambil kode terbaru dari repositori
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Menyiapkan environment Node.js dan mengarahkan ke registry npm
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20' # Anda bisa sesuaikan dengan versi Node.js yang digunakan
+          registry-url: 'https://registry.npmjs.org'
+
+      # 3. Menginstall dependencies secara bersih (clean install)
+      - name: Install dependencies
+        run: npm ci
+
+      # 4. Proses compile/build (Aktifkan baris di bawah ini jika proyek Anda menggunakan TypeScript atau bundler)
+      # - name: Build package
+      #   run: npm run build
+
+      # 5. Mempublikasikan ke npm menggunakan token yang aman di GitHub Secrets
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKENS }}
