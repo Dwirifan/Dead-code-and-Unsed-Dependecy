@@ -1,7 +1,8 @@
 {
-  "name": "tugas-akhir",
+  "name": "deadkiller-cli",
   "version": "1.0.0",
   "type": "module",
+  "main": "./bin/dce-cli.js",
   "bin": {
     "deadkiller": "./bin/dce-cli.js"
   },
