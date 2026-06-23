@@ -34,47 +34,44 @@ Pada tahap ini, pengembangan difokuskan pada implementasi fungsi `parseCode()`, 
 
 Pengujian modul *Core Parser* dirancang untuk memvalidasi empat aspek utama: kemampuan pembentukan node AST untuk sintaks JavaScript modern (ES6+), kompatibilitas terhadap sintaks modern TypeScript, kemampuan penelusuran (*traversal*) AST oleh pustaka `estraverse`, serta pengujian ketahanan (*crash test*) untuk melihat batas beban memori *engine*. Secara keseluruhan, terdapat 22 skenario pengujian yang diringkas sebagai berikut:
 
-| Kelompok Uji                      | Cakupan Skenario                                                                     | Jumlah Skenario | Tujuan                                                                                                          |
-| --------------------------------- | ------------------------------------------------------------------------------------ | --------------: | --------------------------------------------------------------------------------------------------------------- |
-| Sintaks JavaScript Modern (ES6+)  | `import`, variabel, `var`, `let`, parameter, dan *destructuring*                     |            8 TC | Memvalidasi pembentukan AST dari sintaks JavaScript modern (ES6+).                                              |
-| Kompatibilitas TypeScript Modern  | TS dasar, `export type`, `override`, `satisfies`, dan *non-null assertion*           |            8 TC | Memvalidasi pemrosesan dan pembentukan AST untuk sintaks TypeScript modern.                                     |
-| Kompatibilitas Traversal AST      | `TSInterfaceDeclaration`, `TSTypeAliasDeclaration`, `TSEnumDeclaration`, dan `TSModuleDeclaration` |            4 TC | Memverifikasi kompatibilitas penelusuran node khusus TypeScript menggunakan pustaka `estraverse`.               |
-| Skenario Ekstrem (Crash Test)     | Deep nesting dan massive payload script                                              |            2 TC | Menguji ketahanan *parser* terhadap anomali *stack overflow* dan konsumsi memori berlebih.                      |
+| Kelompok Uji                      | Cakupan Skenario                                                                     | Jumlah TC | Tujuan                                                                                                          |
+| --------------------------------- | ------------------------------------------------------------------------------------ | --------: | --------------------------------------------------------------------------------------------------------------- |
+| Sintaks JavaScript Modern (ES6+)  | `import`, variabel, `var`, `let`, parameter, dan *destructuring*                     |         8 | Memvalidasi pembentukan AST dari sintaks JavaScript modern (ES6+).                                              |
+| Kompatibilitas TypeScript Modern  | TS dasar, `export type`, `override`, `satisfies`, dan *non-null assertion*           |         8 | Memvalidasi pemrosesan dan pembentukan AST untuk sintaks TypeScript modern.                                     |
+| Kompatibilitas Traversal AST      | `TSInterfaceDeclaration`, `TSTypeAliasDeclaration`, `TSEnumDeclaration`, dan `TSModuleDeclaration` |         4 | Memverifikasi kompatibilitas penelusuran node khusus TypeScript menggunakan pustaka `estraverse`.               |
+| Skenario Ekstrem (Crash Test)     | Deep nesting dan massive payload script                                              |         2 | Menguji ketahanan *parser* terhadap anomali *stack overflow* dan konsumsi memori berlebih.                      |
 
 Detail skenario pengujian (TC-01 s.d. TC-24, *melewati TC-10 & TC-11 yang telah dihapus sesuai batasan sistem*) disajikan pada Lampiran.
 
-Hasil pengujian awal menunjukkan bahwa *engine* Acorn berhasil membentuk AST untuk 12 skenario awal (TC-01 s.d. TC-12, meliputi sintaks JavaScript modern dan TypeScript dasar). Namun, 6 skenario terkait sintaks TypeScript lanjutan (TC-13 s.d. TC-18) mengalami kegagalan *parsing* (*crash*). Selain itu, 4 skenario uji kompatibilitas traversal (TC-19 s.d. TC-22) juga dinyatakan gagal karena node TypeScript yang dihasilkan belum dapat ditelusuri secara lengkap menggunakan estraverse, sehingga beberapa deklarasi TypeScript-spesifik tidak berhasil teridentifikasi selama proses traversal. Tingkat keberhasilan (*success rate*) keseluruhan pada pengujian awal ini hanya mencapai 54,5% (12 dari 22 skenario lulus).
+Hasil pengujian awal menunjukkan bahwa *engine* Acorn memiliki performa yang cukup baik dalam memproses mayoritas skenario. Acorn berhasil memproses sintaks JavaScript modern, TypeScript dasar, dan bahkan terbukti kompatibel dengan proses *traversal* (TC-19 s.d. TC-22 Lulus). Selain itu, Acorn juga berhasil melewati skenario pengujian ekstrem (*Crash Test*) tanpa hambatan. Namun, terdapat 4 skenario uji yang gagal dilewati oleh Acorn, sehingga tingkat keberhasilan (*success rate*) secara keseluruhan hanya mencapai 81,8% (18 dari 22 skenario lulus).
 
 ```text
 [TC-01 — TC-08]  Sintaks JavaScript Modern (ES6+)   LULUS (8/8)
-[TC-09 — TC-12]  Sintaks JavaScript & TS Dasar      BERHASIL
-[TC-13 — TC-18]  Sintaks TypeScript Lanjutan        GAGAL
-[TC-19 — TC-22]  Pengujian Kompatibilitas Traversal GAGAL
-[TC-23 — TC-24]  Skenario Ekstrem (Crash Test)      GAGAL
+[TC-09 — TC-18]  Kompatibilitas TypeScript Modern   GAGAL (Lulus: 4/8)
+[TC-19 — TC-22]  Kompatibilitas Traversal AST       BERHASIL
+[TC-23 — TC-24]  Skenario Ekstrem (Crash Test)      BERHASIL
 ─────────────────────────────────────────────────────────────────
-Lulus : 10 dari 22 | Success Rate: 45,4%
+Lulus : 18 dari 22 | Success Rate: 81,8%
 ```
 
 ---
 
 ##### D. *Self-Review* dan Analisis Kegagalan
 
-Hasil pengujian awal kemudian ditinjau melalui *self-review* dan *code walkthrough* mandiri. Proses tinjauan mencakup pemeriksaan kesesuaian implementasi dengan rancangan pada Subbab 4.3, evaluasi keterbacaan kode, serta analisis akar penyebab kegagalan pada TC-13 s.d. TC-22.
+Hasil pengujian awal kemudian ditinjau melalui *self-review* dan *code walkthrough* mandiri. Proses tinjauan difokuskan pada analisis akar penyebab kegagalan yang terjadi pada kelompok uji kompatibilitas TypeScript modern (TC-15 s.d. TC-18).
 
-Selain menemukan kegagalan *parsing* pada beberapa sintaks TypeScript modern, proses *self-review* juga mengidentifikasi keterbatasan kompatibilitas AST terhadap mekanisme *traversal* yang digunakan pada sistem. Berdasarkan hasil pengujian dan pemeriksaan struktur node AST, diketahui bahwa AST yang dihasilkan oleh kombinasi Acorn dan `acorn-typescript` belum sepenuhnya kompatibel dengan proses *traversal* menggunakan `estraverse`, sehingga beberapa node TypeScript-spesifik tidak dapat ditelusuri secara konsisten selama proses traversal.
+Pengujian mengungkap **kelemahan fatal** pada Acorn, yaitu ketidakmampuannya mem-parsing sintaks TypeScript lanjutan. Keempat skenario tersebut mengalami kegagalan *parsing* secara mutlak (*crash* akibat `SyntaxError`) ketika berhadapan dengan sintaks seperti `export type *`, `override`, `satisfies`, dan *non-null assertion*. Karena modul analisis *dead code* membutuhkan akurasi *parsing* 100% dan tidak boleh *crash* pada berkas apapun, tingkat keberhasilan (*success rate*) Acorn yang hanya mencapai 81,8% dinyatakan tidak memenuhi kriteria kelayakan produksi.
 
-Investigasi mengidentifikasi dua kelemahan mendasar *engine* Acorn:
+Investigasi menyimpulkan bahwa kelemahan mendasar *engine* Acorn terletak pada **Keterbatasan Dukungan Sintaks TypeScript Modern**. Kombinasi parser `acorn` dan plugin `acorn-typescript` terbukti sudah tertinggal dari spesifikasi TypeScript terbaru. Sintaks-sintaks modern tersebut memicu `SyntaxError` internal pada *engine* yang menghentikan seluruh rantai proses *parsing*. 
 
-1. **AST Tidak Sepenuhnya Traversable.** Beberapa node TypeScript-spesifik tidak menyediakan informasi struktur penelusuran (visitor keys) yang sepenuhnya kompatibel dengan mekanisme traversal ESTree. Akibatnya, proses penelusuran AST menggunakan `estraverse` berpotensi melewatkan variabel, tipe, maupun deklarasi tertentu sehingga menimbulkan *false negative* pada tahap analisis.
+Kegagalan *parsing* ini bersifat *blocking*, artinya jika *analyzer* menemukan satu saja berkas dengan sintaks tersebut di dalam proyek pengguna, seluruh proses analisis akan terhenti (*crash*).
 
-2. **Kegagalan Parsing pada Sintaks TypeScript Modern.** Sintaks seperti `export type { ... }`, `override`, dan operator `satisfies` menghasilkan `SyntaxError` yang menghentikan proses *parsing*.
-
-Berdasarkan temuan tersebut, diperlukan perubahan pada komponen parser untuk menjamin keberhasilan parsing sintaks TypeScript modern serta kompatibilitas AST terhadap mekanisme traversal yang digunakan sistem. Oleh karena itu ditambahkan dua task perbaikan berikut:
+Berdasarkan temuan tersebut, diputuskan bahwa purwarupa Acorn tidak dapat dipertahankan. Diperlukan perubahan komponen *parser* utama untuk menjamin keberhasilan pemrosesan seluruh varian sintaks TypeScript tanpa terkecuali. Oleh karena itu ditambahkan dua task perbaikan berikut:
 
 | Prioritas | ID Task | Deskripsi Task                                                                                                                              |
 | --------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1 (Baru)  | T1-06   | Migrasi *engine* ke `@typescript-eslint/typescript-estree` untuk memastikan kompatibilitas AST terhadap proses *traversal* node TypeScript. |
-| 2 (Baru)  | T1-07   | Penghapusan `acorn-typescript` yang gagal menangani sintaks TypeScript lanjutan (TS 4.9+).                                                  |
+| 1 (Baru)  | T1-06   | Migrasi *engine* secara permanen ke `@typescript-eslint/typescript-estree` untuk menjamin dukungan 100% terhadap sintaks TypeScript modern. |
+| 2 (Baru)  | T1-07   | Penghapusan dependensi `acorn` dan `acorn-typescript` dari sistem.                                                                          |
 
 ---
 
@@ -93,20 +90,21 @@ export function parseCode(codeString, filePath = 'unknown', opts = {}) {
 
 Selain migrasi *engine*, *ParseCache* divalidasi melalui *unit test* sederhana guna memastikan mekanisme simpan, ambil, dan invalidasi berbasis `mtimeMs` berjalan dengan benar.
 
-Seluruh 22 skenario uji awal kemudian dijalankan kembali (*regression test*). Hasilnya, *engine* baru sukses memproses keseluruhan sintaks TypeScript lanjutan (TC-13 s.d. TC-18) yang sebelumnya menyebabkan *crash*. Begitu pula dengan pengujian kompatibilitas traversal (TC-19 s.d. TC-22), di mana seluruh node TypeScript-spesifik (`TSInterfaceDeclaration`, `TSTypeAliasDeclaration`, `TSEnumDeclaration`, dan `TSModuleDeclaration`) berhasil dikunjungi oleh `estraverse` tanpa kehilangan informasi deklarasi.
+Seluruh 22 skenario uji awal kemudian dijalankan kembali (*regression test*). Hasilnya, *engine* baru sukses memproses secara sempurna keempat skenario sintaks TypeScript lanjutan (TC-15 s.d. TC-18) yang sebelumnya menyebabkan *crash* pada Acorn. Selain itu, *engine* `@typescript-eslint/typescript-estree` juga terbukti secara formal mempertahankan tingkat kelulusan 100% pada pengujian JavaScript modern (TC-01 s.d. TC-08), kompatibilitas traversal `estraverse` (TC-19 s.d. TC-22), serta pengujian ekstrem (TC-23 s.d. TC-24).
 
-Dengan keberhasilan memulihkan *test case* yang gagal, tingkat keberhasilan (*success rate*) mencapai 100%. AST yang dihasilkan oleh `@typescript-eslint/typescript-estree` terbukti secara formal kompatibel, dan modul *parser* dinyatakan stabil untuk diteruskan ke tahap *refactor baseline*.
+Dengan keberhasilan memulihkan *test case* yang gagal tanpa merusak skenario lain, tingkat keberhasilan (*success rate*) *parser* kini mencapai 100%. Modul *parser* dinyatakan sangat stabil untuk diteruskan ke tahap *refactor baseline*.
 
 | Kelompok Uji | Hasil |
 | :--- | :--- |
-| JavaScript Modern (ES6+) | 8/8 |
-| TypeScript Modern | 8/8 |
+| JavaScript Dasar | 8/8 |
+| TypeScript | 8/8 |
 | Kompatibilitas Traversal AST | 4/4 |
-| Skenario Ekstrem (Crash Test)| 2/2 |
-| Total | 22/22 (100%) |
+| Skenario Ekstrem (Crash Test) | 2/2 |
+| Total | 22 (100%) |
 
 ```text
-[TC-01 — TC-18]  Sintaks Dasar & Lanjutan           BERHASIL
+[TC-01 — TC-08]  Sintaks JavaScript Modern (ES6+)   BERHASIL
+[TC-09 — TC-18]  Kompatibilitas TypeScript Modern   BERHASIL
 [TC-19 — TC-22]  Kompatibilitas Traversal AST       BERHASIL
 [TC-23 — TC-24]  Skenario Ekstrem (Crash Test)      BERHASIL
 ─────────────────────────────────────────────────────────────────

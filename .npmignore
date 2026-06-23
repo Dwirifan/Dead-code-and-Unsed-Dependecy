@@ -1,0 +1,10 @@
+# File dan folder khusus pengembangan (tidak untuk dirilis di NPM)
+Draft Skripsi/
+test/
+.github/
+.deadkiller_backup/
+.deadkillerrc.json
+code-structure-trace.html
+catatan.txt
+todo.txt
+vitest.config.js

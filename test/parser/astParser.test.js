@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'vitest';
+import { describe, test, expect, afterAll } from 'vitest';
 import { parseCode } from '../../src/parser/astParser.js';
 import { kasusUji } from '../parser/scenarios.mjs';
 import estraverse from 'estraverse';

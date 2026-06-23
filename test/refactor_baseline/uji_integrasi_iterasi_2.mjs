@@ -8,6 +8,7 @@ import { parseCode } from '../../src/parser/astParser.js';
 import { analyzeReactSmells } from '../../src/analyzer/deadcode/react/reactAnalyzer.js';
 import { buildProjectGraph } from '../../src/analyzer/graph/projectGraph.js';
 import { Scope } from '../../src/analyzer/deadcode/core/scope.js';
+import { analyzeAstCode } from '../../src/analyzer/deadcode/astAnalyzer.js';
 import { isReference } from '../../src/analyzer/deadcode/core/isReference.js';
 import { extractIdentifiers } from '../../src/analyzer/deadcode/core/destructuringExtractor.js';
 import { kasusUjiDeadCode } from '../analyzer/scenarios_deadcode.mjs';
@@ -45,84 +46,29 @@ async function runDeadcodeAccuracy() {
     console.log(`  Engine Aktif : ${ENGINE === 'ACORN' ? R+W+'ACORN'+X+' (acorn v8.15.0 + acorn-typescript v1.4.13)' : G+W+'TS-ESTREE'+X+' (@typescript-eslint/typescript-estree v8.58.2)'}`);
     console.log(`${'═'.repeat(65)}\n`);
 
-    function analisis(kode, namaFile) {
+    async function analisis(kode, namaFile) {
         let ast;
         try {
-            ast = localParseCode(kode, namaFile);
+            ast = await localParseCode(kode, namaFile);
         } catch (e) {
             return { error: e.message, terdeteksi: [], missed: [] };
         }
 
-        const globalScope = new Scope();
-        let currentScope = globalScope;
-        const scopeStack = [globalScope];
-        const parentStack = [];
-
         try {
-            estraverse.traverse(ast, {
-                fallback: 'iteration',
-                keys: visitorKeys,
-                enter(node, parent) {
-                    parentStack.push(node);
-                    if (['FunctionDeclaration','FunctionExpression','ArrowFunctionExpression'].includes(node.type)) {
-                        const s = new Scope(currentScope);
-                        currentScope = s; scopeStack.push(s);
-                    }
-                    if (node.type === 'VariableDeclarator') {
-                        const ids = extractIdentifiers(node.id);
-                        ids.forEach(({name}) => currentScope.addDeclaration(name, 'Variable', node.loc?.start.line, node));
-                    }
-                    if (node.type === 'FunctionDeclaration' && node.id && currentScope.parent) {
-                        currentScope.parent.addDeclaration(node.id.name, 'Function', node.loc?.start.line, node);
-                    }
-                    if (node.type === 'ImportDeclaration' && node.specifiers?.length > 0) {
-                        node.specifiers.forEach(spec => {
-                            if (spec.local?.type === 'Identifier') {
-                                currentScope.addDeclaration(spec.local.name, 'Variable', spec.loc?.start.line, spec.local);
-                            }
-                        });
-                    }
-                    if (node.type === 'TSInterfaceDeclaration' && node.id) {
-                        currentScope.addDeclaration(node.id.name, 'UnusedType', node.loc?.start.line, node);
-                    }
-                    if (node.type === 'TSTypeAliasDeclaration' && node.id) {
-                        currentScope.addDeclaration(node.id.name, 'UnusedType', node.loc?.start.line, node);
-                    }
-                    if (node.type === 'TSEnumDeclaration' && node.id) {
-                        currentScope.addDeclaration(node.id.name, 'UnusedType', node.loc?.start.line, node);
-                    }
-                    if (node.type === 'TSModuleDeclaration' && node.id) {
-                        currentScope.addDeclaration(node.id.name, 'Variable', node.loc?.start.line, node);
-                    }
-                    if (node.type === 'Identifier' || node.type === 'JSXIdentifier') {
-                        const gp = parentStack.length >= 3 ? parentStack[parentStack.length - 3] : null;
-                        if (isReference(node, parent, gp)) {
-                            if (HAS_READ_WRITE_API) {
-                                currentScope.addReadReference(node.name);
-                            } else {
-                                currentScope.addReference(node.name);
-                            }
-                        }
-                    }
-                },
-                leave(node) {
-                    parentStack.pop();
-                    if (['FunctionDeclaration','FunctionExpression','ArrowFunctionExpression'].includes(node.type)) {
-                        scopeStack.pop();
-                        currentScope = scopeStack[scopeStack.length - 1];
-                    }
-                }
-            });
-        } catch(e) {
-            return { error: `Traversal error: ${e.message}`, terdeteksi: [], missed: [] };
+            // Memanggil mesin analisis asli dari Iterasi 2
+            const rawDeadCode = analyzeAstCode(ast, namaFile);
+            
+            // Konversi keluaran agar cocok dengan format assertion di test
+            const dead = rawDeadCode.map(issue => ({
+                name: issue.name,
+                type: issue.type,
+                line: issue.line
+            }));
+            
+            return { error: null, dead };
+        } catch (e) {
+            return { error: `Analyzer error: ${e.message}`, terdeteksi: [], missed: [] };
         }
-
-        globalScope.resolve();
-        const dead = [];
-        globalScope.declarations.forEach((info, name) => {
-            if (!info.used) dead.push({ name, type: info.type, line: info.line });
-        });
-        return { error: null, dead };
     }
 
     let totalBenar = 0;
@@ -133,7 +79,7 @@ async function runDeadcodeAccuracy() {
         console.log(`${W}[TC-${String(no).padStart(2,'0')}] ${label}${X}`);
         console.log(`         ${B}${note}${X}`);
 
-        const hasil = analisis(kode, file);
+        const hasil = await analisis(kode, file);
 
         if (hasil.error) {
             console.log(`         ${R}❌ GAGAL PARSING: ${hasil.error}${X}`);
@@ -243,7 +189,7 @@ async function runReactSmells() {
 
         let ast;
         try {
-            ast = parseCode(kode, file);
+            ast = await parseCode(kode, file);
         } catch (e) {
             console.log(`         ${R}❌ GAGAL PARSING: ${e.message}${X}\n`);
             totalSalah += harusTerdeteksi.length;

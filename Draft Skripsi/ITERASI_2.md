@@ -16,7 +16,7 @@ Pengembangan mesin pemetaan dan analisis dipecah menjadi unit tugas teknis berda
 | 4         | T2-04   | Implementasi Graph Builder (BFS) untuk menyusun dependency graph lintas berkas         | US-03        |
 | 5         | T2-05   | Implementasi Unused Dependency Analyzer membandingkan manifes dengan graf pemanggilan  | US-04        |
 | 6         | T2-06   | Pengujian integrasi lintas modul (Graph + Analyzer)                                    | US-03, US-04 |
-| 7         | T2-07   | Pembangunan Mesin Aturan (Rule Engine) dan integrasi `.deadkillerrc.json`              | US-04        |
+| 7         | T2-07   | Pembangunan Mesin Aturan (Rule Engine) dan integrasi `deadkiller.config.js`            | US-04        |
 
 ---
 
@@ -71,7 +71,7 @@ KELUARAN: deadCodeList (Daftar anomali kode mati yang ditemukan)
 28. KEMBALIKAN deadCodeList
 ```
 
-**2. Mesin Pemetaan (Graph Builder)**
+**2. Implementasi Mesin Pemetaan (Graph Builder)**
 Memetakan struktur proyek ke dalam *Directed Acyclic Graph* (DAG) via algoritma *Breadth-First Search* (BFS). Subsistem ini dibekali kecerdasan:
 *   **Entry Point Finder:** Mendeteksi kerangka kerja proyek secara otomatis.
 *   **Path Resolver:** Mengadaptasi algoritma `enhanced-resolve` untuk menerjemahkan matriks impor kompleks.
@@ -111,8 +111,49 @@ KELUARAN: dependencyGraph (Graf relasi proyek), usedPackages (himpunan pustaka N
 25. KEMBALIKAN dependencyGraph, usedPackages
 ```
 
-**3. Unused Dependensi Analyzer & Rule Engine**
-Sistem membandingkan array dependensi `package.json` dengan himpunan `usedPackages` hasil pemetaan graf. *Rule Engine* dibangun untuk mengecualikan direktori spesifik (seperti `node_modules/`) atau variabel yang dilindungi (*framework mode*).
+**3. Implementasi Unused Dependency Analyzer**
+Modul ini bertugas untuk mendeteksi pustaka eksternal (NPM *packages*) yang terinstal di dalam proyek namun tidak pernah dipanggil di dalam *source code*. Implementasinya bekerja dengan membaca daftar *dependencies* dari berkas `package.json` milik pengguna. Sistem kemudian melakukan komparasi himpunan matematika (*set difference*) dengan membandingkan daftar dependensi tersebut terhadap himpunan `usedPackages` (daftar *package* yang dipanggil via sintaks `import`/`require`) yang telah dikumpulkan secara dinamis oleh *Graph Builder*. Dependensi yang tidak beririsan akan langsung ditandai sebagai *unused dependency*.
+
+```text
+ALGORITMA UnusedDependencyAnalysis
+MASUKAN: packageJson, usedPackages (Himpunan package yang di-import)
+KELUARAN: unusedDependencies (Daftar dependensi mubazir)
+
+1. allDependencies = GABUNGKAN(packageJson.dependencies, packageJson.devDependencies)
+2. unusedDependencies = Himpunan Kosong
+3. UNTUK SETIAP dep DI DALAM allDependencies LAKUKAN
+4.     JIKA dep TIDAK ADA DI DALAM usedPackages MAKA
+5.         TAMBAHKAN dep KE unusedDependencies
+6.     AKHIR JIKA
+7. AKHIR UNTUK
+8. KEMBALIKAN unusedDependencies
+```
+
+**4. Implementasi Mesin Aturan (*Rule Engine*)**
+Mesin aturan dibangun sebagai lapisan pelindung (*safeguard*) agar analisis kode tidak menghapus entitas yang krusial secara tidak sengaja. *Rule Engine* bekerja dengan memuat konfigurasi dari berkas `deadkiller.config.js`. Implementasi utamanya mencakup tiga logika pengecualian: 1) Perlindungan variabel berdasarkan pola Regex (misalnya menahan variabel berawalan `_`), 2) Pengecualian berkas secara manual melalui array `preserveFiles`, dan 3) *Framework Mode Aware*, yakni kemampuan mesin untuk mengenali proyek berbasis *framework* (seperti React/Next.js) lalu secara otomatis kebal terhadap folder-folder sensitif seperti `pages/`, `app/`, maupun `public/` tanpa mengharuskan pengguna melakukan konfigurasi manual yang rumit.
+
+```text
+ALGORITMA RuleEngine_IsIgnored
+MASUKAN: entityName (Nama variabel/fungsi), filePath (Lokasi berkas), rules (Objek konfigurasi)
+KELUARAN: Boolean (True jika diselamatkan, False jika dieksekusi mati)
+
+1. // Cek Pengecualian Framework (Framework-aware protection)
+2. JIKA filePath COCOK DENGAN pola direktori bawaan framework (rules.mode) MAKA
+3.     KEMBALIKAN True
+4. AKHIR JIKA
+5. 
+6. // Cek Pengecualian Berkas Manual
+7. JIKA filePath ADA DI DALAM rules.preserveFiles MAKA
+8.     KEMBALIKAN True
+9. AKHIR JIKA
+10. 
+11. // Cek Perlindungan Variabel Berbasis Pola (Regex)
+12. JIKA Regex(rules.ignorePrefixedVariables) COCOK DENGAN entityName MAKA
+13.    KEMBALIKAN True
+14. AKHIR JIKA
+15. 
+16. KEMBALIKAN False
+```
 
 ---
 
@@ -172,7 +213,35 @@ Begin
 End
 ```
 
-Integrasi arsitektural ini memastikan parser yang memakan memori intensif hanya dieksekusi satu kali per berkas, sehingga mampu memangkas beban komputasi secara maksimal.
+Integrasi arsitektural (*Integration Pipeline*) ini merupakan titik puncak bertemunya seluruh komponen yang telah kita bangun. Pipa eksekusi ini berhasil menyatukan **keempat komponen utama Iterasi 2** (AST Traversal, *Graph Builder*, *Dependency Analyzer*, dan *Rule Engine*) ke dalam satu alur yang kohesif. 
+
+Tidak hanya itu, pipa ini juga diintegrasikan langsung dengan **Core Parser dan ParseCache dari Iterasi 1** (pada pemanggilan fungsi `ParseFileWithCache`). Sinergi ini memastikan bahwa tugas *parsing* AST yang memakan memori sangat intensif hanya perlu dieksekusi satu kali per berkas, sehingga mampu memangkas beban komputasi secara maksimal dan mencegah terjadinya kelebihan beban (*memory overhead*).
+
+Secara teknis, implementasi penyatuan ini dieksekusi di dalam modul orkestrator utama (yakni `deadCodeAnalyzer.js`). Alur kerja *Single-Pass Parsing* tersebut dirancang sebagai berikut:
+
+```text
+ALGORITMA SinglePassAnalyzer
+MASUKAN: liveFiles (Daftar berkas aktif dari Graph Builder), ruleEngine
+KELUARAN: deadCodeIssues (Himpunan anomali dead code)
+
+1. deadCodeIssues = Himpunan Kosong
+2. UNTUK SETIAP filePath DI DALAM liveFiles LAKUKAN SECARA ASINKRON
+3.     // Integrasi Iterasi 1: Memanggil parser dengan dukungan cache
+4.     astObjek = PANGGIL parseCode(filePath)
+5.     
+6.     JIKA astObjek DIAMBIL DARI cache MAKA
+7.         LEWATI proses re-parsing (Hemat Memori CPU)
+8.     AKHIR JIKA
+9.     
+10.    // Integrasi Iterasi 2: Menganalisis AST
+11.    fileIssues = PANGGIL analyzeAstCode(astObjek, ruleEngine)
+12.    
+13.    TAMBAHKAN fileIssues KE deadCodeIssues
+14. AKHIR UNTUK
+15. KEMBALIKAN deadCodeIssues
+```
+
+Penerapan *Single-Pass Parsing Architecture* ini terbukti sukses menjembatani *parser* (Iterasi 1) dengan *analyzer* (Iterasi 2) secara mulus dan sangat efisien.
 
 ---
 

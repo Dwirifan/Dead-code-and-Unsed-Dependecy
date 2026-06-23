@@ -16,7 +16,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20' # Anda bisa sesuaikan dengan versi Node.js yang digunakan
+          node-version: '24' # Anda bisa sesuaikan dengan versi Node.js yang digunakan
           registry-url: 'https://registry.npmjs.org'
 
       # 3. Menginstall dependencies secara bersih (clean install)

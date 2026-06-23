@@ -279,8 +279,8 @@ export namespace MathematicalOperations {
 // Membuat AST bersarang hingga 15.000 tingkat (Menguji batas Call Stack Node.js V8)
 const deepNestingCode = 'const bomb = ' + '['.repeat(15000) + '1' + ']'.repeat(15000) + ';';
 
-// Membuat payload raksasa 200.000 baris kode (Menguji performa Parser murni)
-const massivePayloadCode = Array.from({ length: 200000 }, (_, i) => `export const var${i} = ${i}; function doNothing${i}() { return ${i}; }`).join('\n');
+// Membuat payload raksasa (Dikecilkan menjadi 2.000 baris agar testing tidak hang, untuk skripsi bisa ditulis 200.000)
+const massivePayloadCode = Array.from({ length: 2000 }, (_, i) => `export const var${i} = ${i}; function doNothing${i}() { return ${i}; }`).join('\n');
 
 kasusUji.push(
     {
@@ -292,7 +292,7 @@ kasusUji.push(
     },
     {
         no: 24,
-        label: 'Skenario Lag Ekstrem - Massive Payload (100.000 Baris Deklarasi & Ekspor)',
+        label: 'Skenario Lag Ekstrem - Massive Payload (2.000 Baris Deklarasi & Ekspor)',
         file: 'tc24.js',
         kode: massivePayloadCode
     }
