@@ -1,6 +1,8 @@
 #### 4.4.2 Iterasi 2 : Pengembangan Mesin Pemetaan & Analisis (Graph Builder & Analyzer)
 
-Iterasi kedua berfokus pada pembangunan dua komponen analitik sentral: Graph Builder (memetakan dependensi DAG lintas-berkas) dan Analyzer (menginspeksi AST per berkas). Keduanya bekerja sinergis untuk mengekstraksi entitas yang tidak tereferensi secara statis maupun dinamis.
+Iterasi kedua berfokus pada pembangunan dua komponen analitik sentral: *Graph Builder* (memetakan dependensi DAG lintas-berkas) dan *Analyzer* (menginspeksi AST per berkas). Keduanya bekerja sinergis untuk mengekstraksi entitas yang tidak tereferensi secara statis maupun dinamis.
+
+Iterasi ini secara langsung bergantung pada fondasi yang telah dibangun di **Iterasi 1**. Fungsi `parseCode()` dan mekanisme `ParseCache` yang dihasilkan Iterasi 1 menjadi prasyarat mutlak bagi kedua komponen di Iterasi 2: *Graph Builder* memanggil `parseCode()` untuk mengurai setiap berkas dalam proyek selama proses pemetaan BFS, sementara *Analyzer* mengonsumsi AST yang sama — berkat `ParseCache` — tanpa perlu melakukan *parsing* ulang. Tanpa *Core Parser* yang stabil dari Iterasi 1, seluruh proses pemetaan dan analisis di Iterasi 2 tidak dapat berjalan.
 
 ---
 
@@ -38,37 +40,58 @@ Logika traversal untuk mengekstrak anomali variabel dan fungsi lokal dirumuskan 
 
 ```text
 ALGORITMA AST_Analyzer
-MASUKAN: ASTNode (Akar dari pohon sintaksis)
+MASUKAN: ASTNode (Akar dari pohon sintaksis), globalRegistry, ruleEngine
 KELUARAN: deadCodeList (Daftar anomali kode mati yang ditemukan)
 
+// PHASE 1: Pemetaan Scope & Referensi (Single Pass)
 1.  INISIALISASI ScopeManager (pelacak lingkup leksikal)
 2.  INISIALISASI deadCodeList
 3.
 4.  FUNGSI Traverse(node)
-5.      JIKA node adalah Deklarasi (Variabel/Fungsi/Parameter) MAKA
-6.          ScopeManager.Register(node.identifier)
+5.      JIKA node adalah Deklarasi (Variabel/Fungsi/Parameter/Import/TypeScript) MAKA
+6.          ScopeManager.Register(node.identifier, tipe="Variable/Function/Parameter")
 7.      AKHIR JIKA
 8.
-9.      JIKA node adalah Pemanggilan (Identifier/MemberExpression) MAKA
-10.         ScopeManager.MarkAsRead(node.identifier)
-11.     AKHIR JIKA
-12.
-13.     UNTUK SETIAP childNode DALAM node.children LAKUKAN
-14.         Traverse(childNode) // Rekursi menelusuri anak node
-15.     AKHIR UNTUK
-16. AKHIR FUNGSI
-17.
-18. Traverse(ASTNode)
-19. 
-20. UNTUK SETIAP scope DALAM ScopeManager LAKUKAN
-21.     UNTUK SETIAP variable DALAM scope LAKUKAN
-22.         JIKA variable TIDAK PERNAH DIBACA (Unread) MAKA
-23.             TAMBAHKAN variable ke deadCodeList dengan label "Unused Variable"
-24.         AKHIR JIKA
-25.     AKHIR UNTUK
-26. AKHIR UNTUK
-27.
-28. KEMBALIKAN deadCodeList
+9.      JIKA node adalah Referensi (Identifier/MemberExpression) MAKA
+10.         JIKA konteks penulisan MAKA
+11.             ScopeManager.MarkAsWrite(node.identifier)
+12.         JIKA TIDAK MAKA
+13.             ScopeManager.MarkAsRead(node.identifier)
+14.         AKHIR JIKA
+15.     AKHIR JIKA
+16.
+17.     UNTUK SETIAP childNode DALAM node.children LAKUKAN
+18.         Traverse(childNode) // Rekursi menelusuri anak node
+19.     AKHIR UNTUK
+20. AKHIR FUNGSI
+21.
+22. Traverse(ASTNode)
+23.
+// PHASE 2: Resolusi Ekspor Lintas-Modul
+24. PANGGIL markUsedExports(ASTNode, ScopeManager, globalRegistry, ruleEngine)
+25. // Tandai identifier yang diimpor oleh file lain sebagai "terpakai"
+26.
+// PHASE 3: Resolusi Akhir (Hoisting Handling)
+27. UNTUK SETIAP scope DALAM ScopeManager LAKUKAN
+28.     PANGGIL scope.resolve()
+29.     // Cocokkan jejak referensi ke deklarasi; tangani hoisting secara alami
+30. AKHIR UNTUK
+31.
+// PHASE 4: Ekstraksi Dead Code
+32. UNTUK SETIAP scope DALAM ScopeManager LAKUKAN
+33.     UNTUK SETIAP variable DALAM scope LAKUKAN
+34.         JIKA variable TIDAK PERNAH DIBACA (used = false) DAN
+35.              TIDAK DIKECUALIKAN oleh ruleEngine MAKA
+36.             TENTUKAN tipe efektif:
+37.             JIKA hanya WriteOnly (writeCount > 0 DAN readCount = 0) MAKA
+38.                 tipe = "WriteOnly"
+39.             AKHIR JIKA
+40.             TAMBAHKAN variable ke deadCodeList dengan label tipe + confidence + status
+41.         AKHIR JIKA
+42.     AKHIR UNTUK
+43. AKHIR UNTUK
+44.
+45. KEMBALIKAN deadCodeList
 ```
 
 **2. Implementasi Mesin Pemetaan (Graph Builder)**
@@ -81,34 +104,40 @@ Untuk memvalidasi perancangan ini secara akademis, alur kerja pemetaan graf diru
 
 ```text
 ALGORITMA GraphBuilderBFS
-MASUKAN: entryPoint (jalur berkas utama)
-KELUARAN: dependencyGraph (Graf relasi proyek), usedPackages (himpunan pustaka NPM)
+MASUKAN: projectRoot (direktori akar proyek), ruleEngine
+KELUARAN: liveFiles (berkas aktif), usedPackages (pustaka NPM), edges (relasi), globalRegistry
 
-1.  INISIALISASI antrean (queue) Q
-2.  INISIALISASI himpunan visitedFiles
-3.  INISIALISASI himpunan usedPackages
-4.  TAMBAHKAN entryPoint ke dalam Q dan visitedFiles
-5.
-6.  SELAMA Q tidak kosong, LAKUKAN:
-7.      currentFile = DEQUEUE(Q)
-8.      AST = ParseAST(currentFile)
-9.      imports = ExtractImports(AST)
-10.
-11.     UNTUK SETIAP importItem DALAM imports:
-12.         JIKA importItem adalah Pustaka NPM MAKA
-13.             TAMBAHKAN importItem ke usedPackages
-14.         TETAPI JIKA importItem adalah Berkas Lokal MAKA
-15.             resolvedPath = ResolvePath(currentFile, importItem)
-16.             TAMBAHKAN edge(currentFile -> resolvedPath) ke dependencyGraph
-17.             JIKA resolvedPath BELUM ADA DI visitedFiles MAKA
-18.                 TAMBAHKAN resolvedPath ke visitedFiles
-19.                 ENQUEUE(Q, resolvedPath)
-20.             AKHIR JIKA
-21.         AKHIR JIKA
-22.     AKHIR UNTUK
-23. AKHIR SELAMA
-24.
-25. KEMBALIKAN dependencyGraph, usedPackages
+1.  entryFiles = PANGGIL findEntryPoints(projectRoot, ruleEngine)
+2.  INISIALISASI antrean (queue) Q dengan entryFiles
+3.  INISIALISASI himpunan visitedFiles dan liveFiles
+4.  INISIALISASI himpunan usedPackages
+5.  INISIALISASI globalRegistry (usedExports, calledMethods, unresolvedImports, dll)
+6.
+7.  SELAMA Q tidak kosong, LAKUKAN:
+8.      currentFile = DEQUEUE(Q)
+9.      AST = PANGGIL parseCode(currentFile)  // ← Memanggil Core Parser (Iterasi 1); hasil di-cache oleh ParseCache
+10.     imports = ExtractImports(AST)          // Tangani import/require/export
+11.
+12.     UNTUK SETIAP importItem DALAM imports:
+13.         JIKA importItem adalah Pustaka NPM MAKA
+14.             TAMBAHKAN importItem ke usedPackages
+15.         TETAPI JIKA importItem adalah Berkas Lokal MAKA
+16.             resolvedPath = PANGGIL resolvePath(projectRoot, currentFile, importItem)
+17.             TAMBAHKAN edge(currentFile -> resolvedPath) ke edges
+18.             PERBARUI globalRegistry.usedExports sesuai identifier yang diimpor
+19.             JIKA resolvedPath BELUM ADA DI visitedFiles MAKA
+20.                 TAMBAHKAN resolvedPath ke visitedFiles dan liveFiles
+21.                 ENQUEUE(Q, resolvedPath)
+22.             AKHIR JIKA
+23.         AKHIR JIKA
+24.     AKHIR UNTUK
+25. AKHIR SELAMA
+26.
+27. // Langkah Akhir: Deteksi Siklus Ketergantungan (Circular Dependency)
+28. globalRegistry.circularDependencies = PANGGIL findCircularDependencies(edges)
+29. // Menggunakan algoritma Pewarnaan Node (Gray/Black) via DFS
+30.
+31. KEMBALIKAN { liveFiles, usedPackages, edges, globalRegistry }
 ```
 
 **3. Implementasi Unused Dependency Analyzer**
@@ -196,6 +225,7 @@ Begin
     // FASE 1: PEMETAAN (GRAPH BUILDER)
     ruleEngine ← InitializeRuleEngine(projectPath)
     graph ← BuildProjectGraph(projectPath, ruleEngine)
+    // graph berisi: liveFiles, usedPackages, edges, globalRegistry
     deadFiles ← FindUnreachableFiles(projectPath, graph.liveFiles)
     
     // FASE 2: BEDAH MANIFES (DEPENDENCY ANALYZER)
@@ -204,8 +234,9 @@ Begin
     // FASE 3: BEDAH INTERNAL KODE (DEAD CODE ANALYZER)
     issues ← EmptyList()
     For Each file in graph.liveFiles Do
-        ast ← ParseFileWithCache(file) 
-        fileIssues ← AnalyzeDeadCode(ast, file)
+        ast ← ParseFileWithCache(file)  // ← Memanggil parseCode() + ParseCache dari Iterasi 1 (zero re-parsing)
+        // ruleEngine dan globalRegistry diteruskan untuk analisis lintas-modul
+        fileIssues ← FindDeadCode(ast, file, graph.globalRegistry, ruleEngine)
         issues.add(fileIssues)
     End For
     
@@ -213,9 +244,9 @@ Begin
 End
 ```
 
-Integrasi arsitektural (*Integration Pipeline*) ini merupakan titik puncak bertemunya seluruh komponen yang telah kita bangun. Pipa eksekusi ini berhasil menyatukan **keempat komponen utama Iterasi 2** (AST Traversal, *Graph Builder*, *Dependency Analyzer*, dan *Rule Engine*) ke dalam satu alur yang kohesif. 
+Integrasi arsitektural (*Integration Pipeline*) ini merupakan titik puncak bertemunya seluruh komponen yang telah dibangun lintas iterasi. Pipa eksekusi ini berhasil menyatukan **keempat komponen utama Iterasi 2** (AST Traversal, *Graph Builder*, *Dependency Analyzer*, dan *Rule Engine*) ke dalam satu alur yang kohesif.
 
-Tidak hanya itu, pipa ini juga diintegrasikan langsung dengan **Core Parser dan ParseCache dari Iterasi 1** (pada pemanggilan fungsi `ParseFileWithCache`). Sinergi ini memastikan bahwa tugas *parsing* AST yang memakan memori sangat intensif hanya perlu dieksekusi satu kali per berkas, sehingga mampu memangkas beban komputasi secara maksimal dan mencegah terjadinya kelebihan beban (*memory overhead*).
+Krusialnya, pipa ini juga diintegrasikan secara langsung dengan **Core Parser dan ParseCache dari Iterasi 1** melalui pemanggilan `ParseFileWithCache`. Ini bukan sekadar pemanggilan fungsi biasa — melainkan bentuk realisasi nyata dari prinsip *separation of concerns* yang direncanakan sejak Iterasi 1: modul *parsing* dan modul *analisis* dipisahkan dengan tegas, dan keduanya dihubungkan melalui kontrak AST berformat ESTree. Sinergi ini memastikan bahwa operasi *parsing* yang intensif secara komputasi hanya perlu dieksekusi **satu kali per berkas**, sehingga beban memori terpangkas secara maksimal dan risiko *memory overhead* dicegah sepenuhnya.
 
 Secara teknis, implementasi penyatuan ini dieksekusi di dalam modul orkestrator utama (yakni `deadCodeAnalyzer.js`). Alur kerja *Single-Pass Parsing* tersebut dirancang sebagai berikut:
 
@@ -248,6 +279,8 @@ Penerapan *Single-Pass Parsing Architecture* ini terbukti sukses menjembatani *p
 ##### E. *Production Baseline*
 
 Arsitektur akhir beroperasi secara optimal dan stabil. *Graph Builder* dan *Analyzer* sukses mengekstraksi seluruh 15 klasifikasi anomali secara presisi. Modul pemetaan dan analisis ini dinyatakan siap sebagai bekal menuju tahap eksekusi fisik penghapusan (*Modul Eliminator*) di Iterasi 3.
+
+Meskipun *Graph Builder* dan *Analyzer* telah mencatat akurasi 100% pada pengujian unit (*unit test*) internal, efektivitas dan ketajaman deteksi "otak" analitik ini dalam menghadapi kompleksitas kode nyata akan dievaluasi lebih lanjut. Evaluasi akhir tersebut akan diukur menggunakan instrumen *Confusion Matrix* (*Precision*, *Recall*, *F1-Score*) pada dataset proyek nyata di Tahap Pengujian Akhir Sistem, selaras dengan metode evaluasi yang telah dirumuskan pada Bab 3.
 
 ---
 

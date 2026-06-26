@@ -1,0 +1,15 @@
+{
+  "mode": "vanilla",
+  "ignorePrefixedVariables": "^_",
+  "preserveExports": true,
+  "preserveFiles": [],
+  "ignoreDependencies": [],
+  "entryPoints": [
+    "../bin/dce-cli.js"
+  ],
+  "eliminator": {
+    "autoRenameUnusedParameters": false,
+    "autoRemoveEmptyBlocks": false
+  },
+  "overrides": []
+}
