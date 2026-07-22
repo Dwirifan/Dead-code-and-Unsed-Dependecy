@@ -1,43 +1,58 @@
 import fs from 'fs-extra';
 import path from 'path';
+import { spawnSync } from 'child_process';
 
 /**
  * Membersihkan dan menghapus daftar dependensi yang tidak terpakai
- * secara langsung dari berkas manifesto `package.json`.
+ * secara langsung hingga ke folder node_modules dengan mengeksekusi
+ * package manager bawaan (npm/yarn/pnpm/bun).
  * @param {string} projectRoot - Path direktori akar proyek
  * @param {string[]} unusedDeps - Array berisi nama-nama dependensi NPM yang akan dihapus
  * @returns {Promise<number>} Jumlah total dependensi yang berhasil dihapus
  */
 export async function removeUnusedDependencies(projectRoot, unusedDeps) {
+    if (!unusedDeps || unusedDeps.length === 0) return 0;
+
     const packageJsonPath = path.join(projectRoot, 'package.json');
     if (!await fs.pathExists(packageJsonPath)) {
         throw new Error('package.json not found');
     }
 
-    const pkg = await fs.readJson(packageJsonPath);
-    let removedCount = 0;
+    // Deteksi package manager berdasarkan file lock
+    let cmd = 'npm';
+    let cmdArgs = ['uninstall'];
+    if (await fs.pathExists(path.join(projectRoot, 'yarn.lock'))) {
+        cmd = 'yarn';
+        cmdArgs = ['remove'];
+    } else if (await fs.pathExists(path.join(projectRoot, 'pnpm-lock.yaml'))) {
+        cmd = 'pnpm';
+        cmdArgs = ['remove'];
+    } else if (await fs.pathExists(path.join(projectRoot, 'bun.lockb'))) {
+        cmd = 'bun';
+        cmdArgs = ['remove'];
+    }
 
-    if (pkg.dependencies) {
-        unusedDeps.forEach(dep => {
-            if (pkg.dependencies[dep]) {
-                delete pkg.dependencies[dep];
-                removedCount++;
-            }
+    // Validasi nama package untuk keamanan ekstra (hanya alphanumeric, -, _, @, ., /)
+    const validDeps = unusedDeps.filter(dep => /^[a-zA-Z0-9\-_.@/]+$/.test(dep));
+    if (validDeps.length === 0) return 0;
+    
+    cmdArgs.push(...validDeps);
+
+    try {
+        if (process.env.DEBUG) console.log(`[DependencyCleaner] Executing: ${cmd} ${cmdArgs.join(' ')}`);
+        
+        // Gunakan spawnSync dengan shell: false untuk mencegah Command Injection
+        const result = spawnSync(cmd, cmdArgs, { 
+            cwd: projectRoot, 
+            stdio: 'ignore', 
+            shell: false 
         });
-    }
 
-    if (pkg.devDependencies) {
-        unusedDeps.forEach(dep => {
-            if (pkg.devDependencies[dep]) {
-                delete pkg.devDependencies[dep];
-                removedCount++;
-            }
-        });
-    }
+        if (result.error) throw result.error;
+        if (result.status !== 0) throw new Error(`Exited with code ${result.status}`);
 
-    if (removedCount > 0) {
-        await fs.writeJson(packageJsonPath, pkg, { spaces: 2 });
+        return validDeps.length;
+    } catch (err) {
+        throw new Error(`Gagal menghapus dependensi. Perintah '${cmd} ${cmdArgs.join(' ')}' gagal: ${err.message}`);
     }
-
-    return removedCount;
 }

@@ -171,7 +171,7 @@ export function buildCallGraph(ast) {
             }
 
             // Track ALL references (pemanggilan, callback, passing, dll)
-            if (node.type === 'Identifier') {
+            if (node.type === 'Identifier' || node.type === 'JSXIdentifier') {
                 if (isReference(node, parent, grandParent)) {
                     if (!callGraph.has(currentFunction)) {
                         callGraph.set(currentFunction, new Set());

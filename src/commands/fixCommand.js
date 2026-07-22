@@ -25,8 +25,10 @@ export function registerFixCommand(program) {
         .command('fix')
         .argument('<path>', 'Path ke file tunggal (.js/.ts) atau direktori proyek')
         .description('Deteksi dan hapus dead code. Mendukung satu file maupun seluruh proyek.')
-        .action(async (targetPath) => {
+        .option('-l, --level <number>', 'Tingkat agresi penghapusan (0: Dry-run, 1-2: Safe refactor, 3: Aggressive)', '3')
+        .action(async (targetPath, options) => {
             const inquirer = (await import('inquirer')).default;
+            const level = parseInt(options.level, 10);
             const absolutePath = path.resolve(targetPath);
             if (!fs.existsSync(absolutePath)) {
                 console.error(`[ERROR] Path '${absolutePath}' tidak ditemukan.`);
@@ -40,14 +42,14 @@ export function registerFixCommand(program) {
             // MODE A: FILE TUNGGAL — analisis langsung, tidak perlu graph
             // ================================================================
             if (stats.isFile()) {
-                await _fixSingleFile(absolutePath, startTime, inquirer);
+                await _fixSingleFile(absolutePath, startTime, inquirer, level);
                 return;
             }
 
             // ================================================================
             // MODE B: DIREKTORI — analisis seluruh proyek via graph
             // ================================================================
-            await _fixDirectory(absolutePath, startTime, inquirer);
+            await _fixDirectory(absolutePath, startTime, inquirer, level);
         });
 }
 
@@ -55,7 +57,7 @@ export function registerFixCommand(program) {
 // Helpers (private)
 // ---------------------------------------------------------------------------
 
-async function _fixSingleFile(absolutePath, startTime, inquirer) {
+async function _fixSingleFile(absolutePath, startTime, inquirer, level = 3) {
     console.log(chalk.cyan(`\n[>] Fix mode: file tunggal — ${path.basename(absolutePath)}\n`));
 
     let code;
@@ -101,14 +103,17 @@ async function _fixSingleFile(absolutePath, startTime, inquirer) {
     }
 
     // Refresh safeNodes after config application
-    const newSafeNodes = deadNodes.filter(n => n.status === 'safe');
+    // Jika level >= 1, kita ikut menyertakan node 'review' agar bisa direfaktor aman
+    const nodesToProcess = deadNodes.filter(n => 
+        n.status === 'safe' || (level >= 1 && n.status === 'review')
+    );
 
-    if (newSafeNodes.length === 0) {
-        console.log(chalk.gray('\n[ok] Tidak ada item yang aman untuk dihapus otomatis. Tinjau manual item di atas.\n'));
+    if (nodesToProcess.length === 0) {
+        console.log(chalk.gray('\n[ok] Tidak ada item yang aman untuk diproses otomatis. Tinjau manual item di atas.\n'));
         return;
     }
 
-    const newCode = removeDeadCode(code, newSafeNodes, ruleEngine);
+    const newCode = removeDeadCode(code, nodesToProcess, ruleEngine, level);
     const diff = generateDiff(code, newCode, path.basename(absolutePath));
     console.log(chalk.gray('\n--- Preview ---'));
     console.log(diff);
@@ -116,7 +121,7 @@ async function _fixSingleFile(absolutePath, startTime, inquirer) {
 
     const { ok } = await inquirer.prompt([{
         type: 'confirm', name: 'ok',
-        message: `Hapus ${safeNodes.length} item SAFE dari file ini? (backup otomatis dibuat)`,
+        message: `Terapkan eliminasi (Level ${level}) pada ${nodesToProcess.length} item di file ini? (backup otomatis dibuat)`,
         default: true
     }]);
     if (!ok) { console.log(chalk.gray('[.] Dibatalkan.\n')); return; }
@@ -137,7 +142,7 @@ async function _fixSingleFile(absolutePath, startTime, inquirer) {
     }
 }
 
-async function _fixDirectory(absolutePath, startTime, inquirer) {
+async function _fixDirectory(absolutePath, startTime, inquirer, level = 3) {
     console.log(chalk.cyan(`\n[>] Fix mode: direktori — ${absolutePath}`));
     const spinner = ora('Membangun graph & mendeteksi dead code di semua file...').start();
     const ruleEngine = new RuleEngine();
@@ -208,15 +213,17 @@ async function _fixDirectory(absolutePath, startTime, inquirer) {
                 allDead.forEach(n => { if (n.type === 'EmptyBlock') n.status = 'safe'; });
             }
 
-            // Pisahkan: hanya item SAFE yang di-auto-fix
-            const safeDead = allDead.filter(n => n.status === 'safe');
-            const unsafeDead = allDead.filter(n => n.status !== 'safe');
+            // Pisahkan: item SAFE dan REVIEW (jika level >= 1) diproses oleh Eliminator
+            const nodesToProcess = allDead.filter(n => 
+                n.status === 'safe' || (level >= 1 && n.status === 'review')
+            );
+            const unsafeDead = allDead.filter(n => !nodesToProcess.includes(n));
 
             // Catat item yang tidak di-fix
             unsafeDead.forEach(n => skippedReport.push({ file, ...n }));
 
-            if (safeDead.length > 0) {
-                const newCode = removeDeadCode(code, safeDead, ruleEngine);
+            if (nodesToProcess.length > 0) {
+                const newCode = removeDeadCode(code, nodesToProcess, ruleEngine, level);
                 newLoc += newCode.split('\n').length;
                 newSize += Buffer.byteLength(newCode);
                 deadCodeReport.push({
@@ -327,7 +334,7 @@ async function _fixDirectory(absolutePath, startTime, inquirer) {
 
     const { confirm } = await inquirer.prompt([{
         type: 'confirm', name: 'confirm',
-        message: `Terapkan: ${parts.join(' + ')}? (backup otomatis)`,
+        message: `Terapkan (Level ${level}): ${parts.join(' + ')}? (backup otomatis)`,
         default: true
     }]);
     if (!confirm) { console.log(chalk.gray('[.] Dibatalkan.\n')); return; }

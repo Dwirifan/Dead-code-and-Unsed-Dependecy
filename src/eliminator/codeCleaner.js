@@ -112,8 +112,8 @@ export function removeDeadCode(codeString, deadNodes, ruleEngine = null, elimina
                 (remainingAfter === '' || remainingAfter === ';');
 
             // Cek apakah menyisakan impor kosong seperti: import  from 'fs'; atau import { } from 'fs';
-            const isEmptyImport = /^import\s*\{?\s*\}?$/.test(remainingBefore) && 
-                /^from\s+['"][^'"]+['"];?$/.test(remainingAfter);
+            const isEmptyImport = /^import\s*\{?$/.test(remainingBefore) && 
+                /^\}?\s*from\s+['"][^'"]+['"];?$/.test(remainingAfter);
 
             if (isEmptyDeclaration || isEmptyImport) {
                 const fullLineEnd = consumeNewline(codeString, lineEnd);

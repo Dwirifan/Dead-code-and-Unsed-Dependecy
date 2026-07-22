@@ -41,14 +41,58 @@ const NODE_BUILTINS = new Set([
 // karena mereka beroperasi secara implisit (tanpa konfigurasi eksplisit).
 // ─────────────────────────────────────────────────────────────────────────────
 const ALWAYS_EXCLUDED_DEV_PATTERNS = [
-    /^@types\//,          // TypeScript type definitions — tidak pernah di-import langsung
+    // 1. TypeScript & Typing
+    /^@types\//,                        // Semua file definisi tipe (sangat umum)
+    
+    // 2. Testing Frameworks (Implicit Plugins, Reporters, Coverage)
+    /^@vitest\//,                       // Vitest plugins (@vitest/coverage-v8, @vitest/ui)
+    /^jest-/,                           // Jest plugins (jest-environment-jsdom, dll)
+    /^@testing-library\//,              // Testing library ekosistem (bereaksi implisit di test)
+    /^cypress-/,                        // Cypress plugins
+    
+    // 3. Linters & Formatters (Plugins dan Configs)
+    /^eslint-(plugin|config)-/,         // ESLint standar plugins & configs
+    /^@typescript-eslint\//,            // ESLint untuk TypeScript
+    /^prettier-plugin-/,                // Prettier plugins (seperti tailwindcss-plugin)
+    /^stylelint-(config|plugin)-/,      // Stylelint ekosistem
+    
+    // 4. Bundlers & Compilers (Loaders & Plugins)
+    /^@babel\/(plugin|preset)-/,        // Babel resmi
+    /^babel-(plugin|preset)-/,          // Babel komunitas
+    /^@rollup\/plugin-/,                // Rollup plugins resmi
+    /^rollup-plugin-/,                  // Rollup plugins komunitas
+    /^vite-plugin-/,                    // Vite plugins
+    /^@vitejs\/plugin-/,                // Vite plugins resmi
+    /-loader$/,                         // Webpack loaders (css-loader, ts-loader)
+    /-webpack-plugin$/,                 // Webpack plugins
+    
+    // 5. CSS & Styling Preprocessors
+    /^postcss-/,                        // PostCSS plugins (autoprefixer, dll)
+    /^tailwindcss/,                     // Tailwind dan ekosistemnya
+    
+    // 6. Meta-Frameworks Plugins
+    /^gatsby-(plugin|source|transformer)-/,
+    /^@nuxtjs\//,
 ];
+
 const ALWAYS_EXCLUDED_DEV_EXACT = new Set([
-    'typescript',         // Compiler — dipanggil via tsc
-    'ts-node', 'tsx',     // Runtime TS executor
-    'husky',              // Git hooks manager — tidak pernah di-import atau dikonfigurasi eksplisit
-    'lint-staged',        // Terkait husky — dieksekusi via .husky/
-    'commitlint', '@commitlint/cli', '@commitlint/config-conventional',
+    // Compilers & Execution
+    'typescript', 'ts-node', 'tsx', 'esbuild', 'swc', '@swc/core',
+    
+    // Core Bundlers
+    'webpack', 'webpack-cli', 'webpack-dev-server', 'vite', 'rollup', 'parcel',
+    
+    // Core Testing
+    'vitest', 'jest', 'mocha', 'chai', 'cypress', 'playwright', '@playwright/test',
+    
+    // Core Linters & Formatters
+    'eslint', 'prettier', 'stylelint',
+    
+    // Git Hooks & Workflow
+    'husky', 'lint-staged', 'commitlint', '@commitlint/cli', '@commitlint/config-conventional',
+    
+    // CLI Utilities (Umum digunakan di npm scripts)
+    'rimraf', 'cross-env', 'concurrently', 'npm-run-all', 'nodemon', 'pm2', 'dotenv', 'shx'
 ]);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -181,25 +225,8 @@ export async function findUnusedDependencies(projectRoot, usedPackages, ruleEngi
 
     // ── FASE D: Kalkulasi Unused Runtime Dependencies ─────────────────────────
     // Tetap gunakan filter pattern untuk paket yang tidak bisa dideteksi via AST/scripts/config
-    const LEGACY_PATTERNS = [
-        /^@types\//,
-        /^eslint/,
-        /^prettier/,
-        /^@eslint\//,
-        /^stylelint/,
-    ];
-    const LEGACY_EXACT = new Set([
-        'typescript',
-        'webpack', 'webpack-cli', 'webpack-dev-server',
-        'babel-core', '@babel/core', '@babel/cli',
-        'rollup', 'esbuild', 'swc',
-        'jest', 'mocha', 'vitest', 'nyc', 'c8',
-        'nodemon', 'ts-node', 'tsx',
-        'husky', 'lint-staged', 'commitlint',
-        'concurrently', 'cross-env', 'rimraf',
-        'postcss', 'autoprefixer', 'tailwindcss',
-        'sass', 'less', 'stylus',
-    ]);
+    const LEGACY_PATTERNS = ALWAYS_EXCLUDED_DEV_PATTERNS;
+    const LEGACY_EXACT = ALWAYS_EXCLUDED_DEV_EXACT;
 
     const unusedRuntime = [];
     for (const dep of runtimeDeps) {

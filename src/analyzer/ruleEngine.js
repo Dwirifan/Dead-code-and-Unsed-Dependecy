@@ -157,13 +157,19 @@ export class RuleEngine {
     }
 
     /**
-     * Menyimpan konfigurasi ke file statis (hanya JSON yang didukung saat save).
+     * Menyimpan konfigurasi ke file statis (deadkiller.config.js).
      * @param {string} projectRoot Lokasi root project
      */
     async saveConfig(projectRoot) {
-        const configPath = path.join(projectRoot, '.deadkillerrc.json');
+        const configPath = path.join(projectRoot, 'deadkiller.config.js');
         try {
-            await fs.writeJson(configPath, this.rules, { spaces: 2 });
+            const jsContent = `/**
+ * Konfigurasi DeadKiller
+ * Anda bisa menggunakan logika JS dinamis dan sistem overrides di sini.
+ */
+module.exports = ${JSON.stringify(this.rules, null, 4)};
+`;
+            await fs.writeFile(configPath, jsContent, 'utf-8');
         } catch (err) {
             console.error(`[RuleEngine] Gagal menyimpan konfigurasi: ${err.message}`);
         }

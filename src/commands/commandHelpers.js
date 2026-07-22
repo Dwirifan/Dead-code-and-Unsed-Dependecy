@@ -29,7 +29,7 @@ export async function buildGraphWithInteractiveFallback(absolutePath, ruleEngine
             ruleEngine.rules.entryPoints = entryPointsArray;
             await ruleEngine.saveConfig(absolutePath);
             
-            console.log(chalk.green('\n[v] Konfigurasi diselamatkan di .deadkillerrc.json!\n'));
+            console.log(chalk.green('\n[v] Konfigurasi diselamatkan di deadkiller.config.js!\n'));
             if (spinner) spinner.start('Melanjutkan Membangun Graph...');
             
             return await buildProjectGraph(absolutePath, ruleEngine);

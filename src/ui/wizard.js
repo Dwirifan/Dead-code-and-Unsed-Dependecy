@@ -113,9 +113,23 @@ export async function launchWizard() {
             ]);
 
             if (wantFix) {
-                console.log(uiColors.primary('\n[>>] Melanjutkan ke mode fix...\n'));
+                const { elimLevel } = await inquirer.prompt([
+                    {
+                        type: 'list',
+                        name: 'elimLevel',
+                        message: 'Pilih Tingkat Agresi Penghapusan (Elimination Level):',
+                        choices: [
+                            { name: 'Level 3 - Aggressive Delete', value: '3' },
+                            { name: 'Level 2 - Safe Refactor', value: '2' },
+                            { name: 'Level 1 - Safe Skip', value: '1' },
+                            { name: 'Level 0 - Dry Run', value: '0' }
+                        ]
+                    }
+                ]);
+
+                console.log(uiColors.primary(`\n[>>] Melanjutkan ke mode fix (Level ${elimLevel})...\n`));
                 try {
-                    execSync(`node "${cliPath}" fix "${targetDirectory}"`, { stdio: 'inherit' });
+                    execSync(`node "${cliPath}" fix "${targetDirectory}" --level ${elimLevel}`, { stdio: 'inherit' });
                 } catch (error) {
                     // Kesalahan sudah ditangani oleh proses anak
                     if (process.env.DEBUG) console.warn(error);
