@@ -91,53 +91,76 @@ export async function launchWizard() {
 
     console.log();
 
-    // 3. Eksekusi Perintah (Pass-through ke CLI)
-    try {
-        // stdio: 'inherit' memastikan warna dan interaksi CLI tetap berjalan
-        execSync(`node "${cliPath}" ${action} "${targetDirectory}"`, { stdio: 'inherit' });
-    } catch (error) {
-        // Kesalahan sudah ditangani dan di-print oleh proses anak (dce-cli.js)
-        if (process.env.DEBUG) console.warn(error);
-    }
+    // 3. Eksekusi Perintah dan Interaksi (Pass-through ke CLI)
+    let keepScanning = true;
+    let isAdvanced = false;
 
-    // 4. Setelah scan selesai, tawarkan langsung fix
-    if (action === 'scan') {
+    while (keepScanning) {
         try {
-            const { wantFix } = await inquirer.prompt([
-                {
-                    type: 'confirm',
-                    name: 'wantFix',
-                    message: 'Mau langsung eksekusi fix (bersihkan dead code & unused dependencies)?',
-                    default: false
-                }
-            ]);
+            // stdio: 'inherit' memastikan warna dan interaksi CLI tetap berjalan
+            const advancedFlag = (action === 'scan' && isAdvanced) ? " --advanced" : "";
+            execSync(`node "${cliPath}" ${action} "${targetDirectory}"${advancedFlag}`, { stdio: 'inherit' });
+        } catch (error) {
+            // Kesalahan sudah ditangani dan di-print oleh proses anak (dce-cli.js)
+            if (process.env.DEBUG) console.warn(error);
+        }
 
-            if (wantFix) {
-                const { elimLevel } = await inquirer.prompt([
+        // 4. Setelah scan selesai, tawarkan langsung fix atau scan ulang
+        if (action === 'scan') {
+            try {
+                const choices = [
+                    { name: '1. Ya, Eksekusi Fix Sekarang (Bersihkan dead code & dependensi)', value: 'fix' }
+                ];
+                if (!isAdvanced) {
+                    choices.push({ name: '2. Pindai Ulang dengan Detail Linter AST (--advanced)', value: 'advanced' });
+                }
+                choices.push({ name: isAdvanced ? '2. Tidak, Keluar' : '3. Tidak, Keluar', value: 'exit' });
+
+                const { nextAction } = await inquirer.prompt([
                     {
                         type: 'list',
-                        name: 'elimLevel',
-                        message: 'Pilih Tingkat Agresi Penghapusan (Elimination Level):',
-                        choices: [
-                            { name: 'Level 3 - Aggressive Delete', value: '3' },
-                            { name: 'Level 2 - Safe Refactor', value: '2' },
-                            { name: 'Level 1 - Safe Skip', value: '1' },
-                            { name: 'Level 0 - Dry Run', value: '0' }
-                        ]
+                        name: 'nextAction',
+                        message: 'Apa langkah selanjutnya?',
+                        choices: choices
                     }
                 ]);
 
-                console.log(uiColors.primary(`\n[>>] Melanjutkan ke mode fix (Level ${elimLevel})...\n`));
-                try {
-                    execSync(`node "${cliPath}" fix "${targetDirectory}" --level ${elimLevel}`, { stdio: 'inherit' });
-                } catch (error) {
-                    // Kesalahan sudah ditangani oleh proses anak
-                    if (process.env.DEBUG) console.warn(error);
+                if (nextAction === 'advanced') {
+                    isAdvanced = true;
+                    console.log(uiColors.primary(`\n[>>] Memindai ulang dengan mode detail (--advanced)...\n`));
+                    continue; // Loop kembali untuk eksekusi ulang
+                } else if (nextAction === 'fix') {
+                    keepScanning = false;
+                    const { elimLevel } = await inquirer.prompt([
+                        {
+                            type: 'list',
+                            name: 'elimLevel',
+                            message: 'Pilih Tingkat Agresi Penghapusan (Elimination Level):',
+                            choices: [
+                                { name: 'Level 3 - Aggressive Delete', value: '3' },
+                                { name: 'Level 2 - Safe Refactor', value: '2' },
+                                { name: 'Level 1 - Safe Skip', value: '1' },
+                                { name: 'Level 0 - Dry Run', value: '0' }
+                            ]
+                        }
+                    ]);
+
+                    console.log(uiColors.primary(`\n[>>] Melanjutkan ke mode fix (Level ${elimLevel})...\n`));
+                    try {
+                        execSync(`node "${cliPath}" fix "${targetDirectory}" --level ${elimLevel}`, { stdio: 'inherit' });
+                    } catch (error) {
+                        if (process.env.DEBUG) console.warn(error);
+                    }
+                } else {
+                    keepScanning = false;
                 }
+            } catch (err) {
+                // Ctrl+C — abaikan saja
+                if (process.env.DEBUG) console.warn(err);
+                keepScanning = false;
             }
-        } catch (err) {
-            // Ctrl+C — abaikan saja
-            if (process.env.DEBUG) console.warn(err);
+        } else {
+            keepScanning = false;
         }
     }
 
