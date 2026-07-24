@@ -9,5 +9,10 @@ export const BUILTIN_GLOBALS = new Set([
     ...Object.keys(globals.browser || {}),
     ...Object.keys(globals.node || {}),
     ...Object.keys(globals.jest || {}),
-    ...Object.keys(globals.vitest || {}) // Vitest jika ada
+    ...Object.keys(globals.vitest || {}), // Vitest jika ada
+    // TypeScript Built-in Types (Global)
+    'ReadonlyArray', 'Record', 'Partial', 'Omit', 'Pick', 'Readonly',
+    'Required', 'Exclude', 'Extract', 'NonNullable', 'Parameters',
+    'ConstructorParameters', 'ReturnType', 'InstanceType', 'Awaited',
+    'Deno', 'Bun'
 ]);

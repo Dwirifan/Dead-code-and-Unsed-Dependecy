@@ -81,6 +81,12 @@ export function isReference(node, parent, grandParent) {
     if (parent.type === 'TSModuleDeclaration' && parent.id === node) return false;
     if (parent.type === 'ClassExpression' && parent.id === node) return false;
 
+    // TypeScript & Class: Nama properti (keys) BUKAN referensi variabel
+    if ((parent.type === 'PropertyDefinition' || parent.type === 'ClassProperty') && parent.key === node && !parent.computed) return false;
+    if (parent.type === 'TSPropertySignature' && parent.key === node && !parent.computed) return false;
+    if (parent.type === 'TSMethodSignature' && parent.key === node && !parent.computed) return false;
+    if (parent.type === 'TSIndexSignature') return false;
+
     // TypeScript: Nama properti di TSEnumMember bukan referensi
     if (parent.type === 'TSEnumMember' && parent.id === node) return false;
 

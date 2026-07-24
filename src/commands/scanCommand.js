@@ -371,7 +371,7 @@ export function registerScanCommand(program) {
                     totalIssues += hiddenCount; // Tetap dihitung di statistik total
                 }
             }
-            
+
             if (!printedAny && groupedItems.safe.length === 0) console.log('\n   [ok] Tidak ada dead code [SAFE] yang tertinggal!');
 
             const duration = (performance.now() - startTime).toFixed(2);
