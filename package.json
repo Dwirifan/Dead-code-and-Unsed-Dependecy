@@ -1,6 +1,6 @@
 {
   "name": "deadkiller-cli",
-  "version": "1.0.4",
+  "version": "1.0.7",
   "type": "module",
   "main": "./bin/dce-cli.js",
   "bin": {
