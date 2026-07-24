@@ -63,8 +63,38 @@ export class RuleEngine {
                 // Menimpa aturan default dengan aturan yang disediakan pengguna
                 this.rules = { ...this.rules, ...userConfig };
             }
+
+            // --- AUTO DETECT REACT RUNTIME ---
+            // Baca package.json untuk melihat versi React
+            const pkgJsonPath = path.join(projectRoot, 'package.json');
+            if (await fs.pathExists(pkgJsonPath)) {
+                const pkg = await fs.readJson(pkgJsonPath);
+                const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+                const reactVersion = deps['react'];
+                
+                if (reactVersion) {
+                    // Cek apakah versinya >= 17
+                    // Menghapus karakter khusus seperti ^, ~, >=, dll.
+                    const cleanVersion = reactVersion.replace(/[^0-9.]/g, '');
+                    const majorVersion = parseInt(cleanVersion.split('.')[0], 10);
+                    
+                    if (!isNaN(majorVersion) && majorVersion >= 17) {
+                        // Jika tidak disetel secara manual, aktifkan runtime automatic
+                        if (!this.rules.reactRuntime) {
+                            this.rules.reactRuntime = 'automatic';
+                        }
+                    }
+                }
+            }
+            
+            // Set default reactRuntime jika belum diatur
+            if (!this.rules.reactRuntime) {
+                this.rules.reactRuntime = 'classic'; // Default fallback untuk React < 17
+            }
+
         } catch (err) {
             console.warn(`[RuleEngine] Gagal mem-parsing konfigurasi: ${err.message}. Menggunakan default.`);
+            if (!this.rules.reactRuntime) this.rules.reactRuntime = 'classic';
         }
     }
 

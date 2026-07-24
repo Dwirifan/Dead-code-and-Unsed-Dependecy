@@ -149,7 +149,10 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
             // Implicit JSX React Usage (Older React)
             // Di React < 17, JSX butuh import React from 'react' meskipun tidak dipanggil secara eksplisit.
             if (node.type === 'JSXElement' || node.type === 'JSXFragment') {
-                currentScope.addReadReference('React', node);
+                const reactRuntime = ruleEngine && ruleEngine.rules ? ruleEngine.rules.reactRuntime : 'classic';
+                if (reactRuntime === 'classic') {
+                    currentScope.addReadReference('React', node);
+                }
             }
 
             // Pelacakan Referensi Penggunaan
