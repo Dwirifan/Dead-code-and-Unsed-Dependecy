@@ -69,37 +69,71 @@ export async function initCommand(options) {
             name: 'entryPoints',
             message: 'Masukkan entry points proyek Anda (pisahkan dengan koma, biarkan kosong untuk deteksi otomatis):',
             default: ''
+        },
+        {
+            type: 'list',
+            name: 'configFormat',
+            message: 'Format file konfigurasi apa yang ingin Anda gunakan?',
+            choices: [
+                { name: 'JavaScript Dinamis (deadkiller.config.js)', value: 'js' },
+                { name: 'JSON Statis (.deadkillerrc.json)', value: 'json' }
+            ]
         }
     ]);
 
     const ignoreFilesArray = answers.ignoreFiles.split(',').map(s => s.trim()).filter(Boolean);
-    const entryPointsArray = answers.entryPoints ? answers.entryPoints.split(',').map(s => s.trim()).filter(Boolean) : [];
+    let entryPointsArray = answers.entryPoints ? answers.entryPoints.split(',').map(s => s.trim()).filter(Boolean) : [];
+
+    // Jika pengguna mengosongkan, lakukan deteksi otomatis nyata sebelum menyimpan!
+    if (entryPointsArray.length === 0) {
+        console.log(chalk.gray(`\n[>] Mendeteksi entry point secara otomatis...`));
+        try {
+            // Import dinamis untuk menghindari dependency circle atau error loading awal
+            const { findEntryPoints } = await import('../analyzer/graph/entryPointFinder.js');
+            const detected = await findEntryPoints(cwd);
+            if (detected && detected.length > 0) {
+                // Konversi absolut ke relatif agar rapi di config
+                entryPointsArray = detected.map(p => path.relative(cwd, p).replace(/\\/g, '/'));
+                console.log(chalk.green(`    [v] Ditemukan ${entryPointsArray.length} entry point: ${entryPointsArray.join(', ')}`));
+            } else {
+                console.log(chalk.yellow(`    [!] Gagal mendeteksi entry point secara otomatis. Menyimpan array kosong.`));
+            }
+        } catch (e) {
+            console.log(chalk.yellow(`    [!] Terjadi kesalahan saat deteksi otomatis: ${e.message}`));
+        }
+    }
+
+    const configObj = {
+        mode: answers.frameworkMode,
+        entryPoints: entryPointsArray,
+        ignorePrefixedVariables: answers.ignoreVariables,
+        preserveExports: answers.preserveExports,
+        preserveFiles: ignoreFilesArray,
+        ignoreDependencies: [],
+        globals: [],
+        overrides: [
+            {
+                files: ['**/*.test.js', 'tests/**/*.js'],
+                ignorePrefixedVariables: '.*', // Abaikan semua unused variable di file testing
+                preserveExports: true
+            }
+        ]
+    };
 
     try {
-        const jsContent = `/**
+        if (answers.configFormat === 'json') {
+            await fs.writeJson(configPathJSON, configObj, { spaces: 4 });
+            console.log(chalk.green(`\n\u2714\uFE0F Berhasil membuat ${chalk.bold('.deadkillerrc.json')}`));
+        } else {
+            const jsContent = `/**
  * Konfigurasi DeadKiller
  * Anda bisa menggunakan logika JS dinamis dan sistem overrides di sini.
  */
-module.exports = {
-    mode: '${answers.frameworkMode}',
-    entryPoints: ${JSON.stringify(entryPointsArray)},
-    ignorePrefixedVariables: '${answers.ignoreVariables}',
-    preserveExports: ${answers.preserveExports},
-    preserveFiles: ${JSON.stringify(ignoreFilesArray)},
-    ignoreDependencies: [],
-    
-    // Contoh sistem overrides: Terapkan aturan berbeda untuk file spesifik
-    overrides: [
-        {
-            files: ['**/*.test.js', 'tests/**/*.js'],
-            ignorePrefixedVariables: '.*', // Abaikan semua unused variable di file testing
-            preserveExports: true
-        }
-    ]
-};
+export default ${JSON.stringify(configObj, null, 4)};
 `;
-        await fs.writeFile(configPathJS, jsContent, 'utf-8');
-        console.log(chalk.green(`\n\u2714\uFE0F Berhasil membuat ${chalk.bold('deadkiller.config.js')}`));
+            await fs.writeFile(configPathJS, jsContent, 'utf-8');
+            console.log(chalk.green(`\n\u2714\uFE0F Berhasil membuat ${chalk.bold('deadkiller.config.js')}`));
+        }
 
         console.log(`\nSekarang Anda bisa menjalankan ${chalk.cyan('deadkiller scan')} dengan konfigurasi baru!\n`);
     } catch (err) {

@@ -21,6 +21,7 @@ export class RuleEngine {
                 autoRenameUnusedParameters: false,
                 autoRemoveEmptyBlocks: false
             },
+            globals: [],                   // Variabel global tambahan dari pengguna
             overrides: []                  // Aturan spesifik per-file
         };
 
@@ -161,15 +162,21 @@ export class RuleEngine {
      * @param {string} projectRoot Lokasi root project
      */
     async saveConfig(projectRoot) {
-        const configPath = path.join(projectRoot, 'deadkiller.config.js');
+        const jsConfigPath = path.join(projectRoot, 'deadkiller.config.js');
+        const jsonConfigPath = path.join(projectRoot, '.deadkillerrc.json');
+        
         try {
-            const jsContent = `/**
+            if (await fs.pathExists(jsonConfigPath)) {
+                await fs.writeJson(jsonConfigPath, this.rules, { spaces: 4 });
+            } else {
+                const jsContent = `/**
  * Konfigurasi DeadKiller
  * Anda bisa menggunakan logika JS dinamis dan sistem overrides di sini.
  */
-module.exports = ${JSON.stringify(this.rules, null, 4)};
+export default ${JSON.stringify(this.rules, null, 4)};
 `;
-            await fs.writeFile(configPath, jsContent, 'utf-8');
+                await fs.writeFile(jsConfigPath, jsContent, 'utf-8');
+            }
         } catch (err) {
             console.error(`[RuleEngine] Gagal menyimpan konfigurasi: ${err.message}`);
         }

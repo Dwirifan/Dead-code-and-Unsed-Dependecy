@@ -68,6 +68,10 @@ export function classifyConfidence(type, info = {}) {
         case 'Parameter':
             return { confidence: 'low', status: 'risky' };
 
+        case 'UndeclaredVariable':
+            // Bug: variabel digunakan tapi tidak pernah dideklarasikan (no-undef)
+            return { confidence: 'high', status: 'review' };
+
         default:
             return { confidence: 'medium', status: 'review' };
     }

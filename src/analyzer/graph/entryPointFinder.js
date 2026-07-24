@@ -54,7 +54,7 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
         for (const ep of ruleEngine.rules.entryPoints) {
             const matches = glob.sync(ep, { cwd: projectRoot, absolute: true });
             if (matches.length > 0) {
-                matches.forEach(m => entrySet.add(m));
+                matches.forEach(m => entrySet.add(path.normalize(m)));
             } else {
                 entrySet.add(path.resolve(projectRoot, ep));
             }

@@ -31,6 +31,13 @@ export function isReference(node, parent, grandParent) {
     // JSX: Nama komponen dalam member expression (contoh: <My.Component />)
     // Jika node adalah bagian property dari JSXMemberExpression, itu bukan variabel independen
     if (parent.type === 'JSXMemberExpression' && parent.property === node) return false;
+    
+    // JSX: Tag HTML bawaan (lowercase) bukan referensi variabel
+    if ((parent.type === 'JSXOpeningElement' || parent.type === 'JSXClosingElement') && parent.name === node) {
+        if (/^[a-z]/.test(node.name)) {
+            return false;
+        }
+    }
 
     // Spesifikator Impor
     if (parent.type === 'ImportSpecifier' && parent.imported === node) return false;
@@ -60,6 +67,9 @@ export function isReference(node, parent, grandParent) {
 
     // Sisa Elemen (...rest)
     if (parent.type === 'RestElement') return false;
+
+    // MetaProperty (misal: import.meta.url) - bukan variabel!
+    if (parent.type === 'MetaProperty') return false;
 
     // Pola Pengisian (AssignmentPattern)
     if (parent.type === 'AssignmentPattern' && parent.left === node) return false;

@@ -11,9 +11,10 @@ export class Scope {
     constructor(parent = null) {
         this.parent = parent;
         this.declarations = new Map(); // nama -> { type, line, node, used: false, readCount: 0, writeCount: 0 }
-        this.readReferences = [];  // Nama variabel yang DIBACA (read)
-        this.writeReferences = []; // Nama variabel yang DITULIS saja (write-only)
+        this.readReferences = [];  // Array of { name, node }
+        this.writeReferences = []; // Array of { name, node }
         this.selfName = null; // Nama fungsi pemilik scope ini (untuk deteksi rekursi/self-reference)
+        this.undeclaredVariables = []; // Array of { name, node } (hanya terisi pada global scope)
     }
 
     addDeclaration(name, type, line, node, parentNode = null) {
@@ -25,50 +26,60 @@ export class Scope {
 
 
 
-    addReadReference(name) {
-        this.readReferences.push(name);
+    addReadReference(name, node = null) {
+        this.readReferences.push({ name, node });
     }
 
-    addWriteReference(name) {
-        this.writeReferences.push(name);
+    addWriteReference(name, node = null) {
+        this.writeReferences.push({ name, node });
     }
 
     resolve() {
         // Cocokkan READ references — hanya READ yang membuat variabel "used"
-        for (const refName of this.readReferences) {
+        for (const ref of this.readReferences) {
             // Lewati self-reference: fungsi yang memanggil dirinya sendiri (rekursi)
             // tidak dihitung sebagai penggunaan eksternal.
             // Tanpa ini, fungsi rekursif yang tidak pernah dipanggil dari luar
             // akan salah ditandai sebagai "used" hanya karena memanggil dirinya sendiri.
-            if (refName === this.selfName) continue;
+            if (ref.name === this.selfName) continue;
 
-            this.markRead(refName);
+            this.markRead(ref.name, ref.node);
         }
 
         // Catat WRITE references — tidak menandai used, hanya menaikkan writeCount
-        for (const refName of this.writeReferences) {
-            if (refName === this.selfName) continue;
-            this.markWrite(refName);
+        for (const ref of this.writeReferences) {
+            if (ref.name === this.selfName) continue;
+            this.markWrite(ref.name, ref.node);
         }
     }
 
-    markRead(name) {
+    markRead(name, originalNode = null) {
         if (this.declarations.has(name)) {
             const decl = this.declarations.get(name);
             decl.used = true;
             decl.readCount++;
         } else if (this.parent) {
-            this.parent.markRead(name);
+            this.parent.markRead(name, originalNode);
+        } else {
+            // Tidak ditemukan deklarasi sampai global scope
+            if (!name.includes('.')) {
+                this.undeclaredVariables.push({ name, node: originalNode });
+            }
         }
     }
 
-    markWrite(name) {
+    markWrite(name, originalNode = null) {
         if (this.declarations.has(name)) {
             const decl = this.declarations.get(name);
             decl.writeCount++;
             // TIDAK menandai used = true; write-only variable tetap dianggap dead
         } else if (this.parent) {
-            this.parent.markWrite(name);
+            this.parent.markWrite(name, originalNode);
+        } else {
+            // Write ke undeclared variable (implicit global)
+            if (!name.includes('.')) {
+                this.undeclaredVariables.push({ name, node: originalNode });
+            }
         }
     }
 

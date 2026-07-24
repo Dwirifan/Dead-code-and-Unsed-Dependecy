@@ -6,6 +6,7 @@ import { extractIdentifiers } from './core/destructuringExtractor.js';
 import { findFunctionScope } from './core/scopeHelpers.js';
 import { markUsedExports } from './typescript/exportAnalyzer.js';
 import { classifyConfidence } from './core/confidenceClassifier.js';
+import { BUILTIN_GLOBALS } from './core/globals.js';
 
 // Gabungkan Visitor Keys ESTree standar dengan ekstrasi TypeScript/JSX
 const visitorKeys = { ...estraverse.VisitorKeys, ...tsVisitorKeys };
@@ -67,8 +68,9 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     ? findFunctionScope(scopeStack, scopeTypeStack)
                     : currentScope;
                 
-                identifiers.forEach(({ name }) => {
-                    targetScope.addDeclaration(name, 'Variable', node.loc.start.line, node, parent);
+                identifiers.forEach(({ name, node: idNode }) => {
+                    const targetDeletionNode = (node.id.type === 'Identifier') ? node : idNode;
+                    targetScope.addDeclaration(name, 'Variable', node.loc.start.line, targetDeletionNode, parent);
                 });
             }
 
@@ -92,6 +94,14 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     identifiers.forEach(({ name, node: idNode }) => {
                         currentScope.addDeclaration(name, 'Parameter', param.loc.start.line, idNode);
                     });
+                });
+            }
+
+            // Evaluasi CatchClause (parameter error seperti catch(err))
+            if (node.type === 'CatchClause' && node.param) {
+                const identifiers = extractIdentifiers(node.param);
+                identifiers.forEach(({ name, node: idNode }) => {
+                    currentScope.addDeclaration(name, 'CatchParameter', node.loc.start.line, idNode);
                 });
             }
 
@@ -150,17 +160,17 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     );
 
                     if (isCompoundWrite) {
-                        currentScope.addReadReference(node.name);
-                        currentScope.addWriteReference(node.name);
+                        currentScope.addReadReference(node.name, node);
+                        currentScope.addWriteReference(node.name, node);
                     } else if (isWriteContext) {
-                        currentScope.addWriteReference(node.name);
+                        currentScope.addWriteReference(node.name, node);
                     } else {
-                        currentScope.addReadReference(node.name);
+                        currentScope.addReadReference(node.name, node);
                         
                         // FITUR 6 & 7: Deteksi properti pada Namespace / Enum
                         if (parent.type === 'MemberExpression' && parent.object === node && !parent.computed && parent.property.type === 'Identifier') {
                             const memberKey = `${node.name}.${parent.property.name}`;
-                            currentScope.addReadReference(memberKey);
+                            currentScope.addReadReference(memberKey, parent.property);
                         }
                     }
                 }
@@ -201,7 +211,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
 
     allScopes.forEach(scope => {
         scope.declarations.forEach((info, name) => {
-            if (!info.used && !(ruleEngine && ruleEngine.isIgnoredVariable(name, fileName))) {
+            if (!info.used && info.type !== 'CatchParameter' && !(ruleEngine && ruleEngine.isIgnoredVariable(name, fileName))) {
                 allDeadNames.add(name);
             }
         });
@@ -210,6 +220,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
     allScopes.forEach(scope => {
        scope.declarations.forEach((info, name) => {
            if (!info.used) {
+               if (info.type === 'CatchParameter') return; // JANGAN laporkan parameter catch karena menghapusnya bisa merusak sintaks (catch ())
                if (ruleEngine && ruleEngine.isIgnoredVariable(name, fileName)) return;
 
                let targetNode = info.node;
@@ -282,6 +293,28 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
             }
         }
     }
+
+    // Phase 5: Pengecekan Undeclared Variables (no-undef)
+    // globalScope menampung variabel yang direferensikan tetapi tidak ditemukan deklarasinya
+    globalScope.undeclaredVariables.forEach(({ name, node }) => {
+        // Ambil globals kustom milik pengguna dari ruleEngine
+        const userGlobals = ruleEngine ? (ruleEngine._resolveConfigForFile(fileName).globals || []) : [];
+
+        // Abaikan variabel bawaan JS, Node, Browser, custom globals, dan yang di-ignore ruleEngine
+        if (BUILTIN_GLOBALS.has(name) || userGlobals.includes(name) || (ruleEngine && ruleEngine.isIgnoredVariable(name, fileName))) {
+            return;
+        }
+
+        const { confidence, status } = classifyConfidence('UndeclaredVariable');
+        deadCode.push({
+            name,
+            type: 'UndeclaredVariable',
+            line: node ? node.loc.start.line : 0,
+            node: node,
+            confidence,
+            status
+        });
+    });
 
     return deadCode;
 }

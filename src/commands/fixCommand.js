@@ -227,7 +227,7 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3) {
                 newLoc += newCode.split('\n').length;
                 newSize += Buffer.byteLength(newCode);
                 deadCodeReport.push({
-                    file, dead: safeDead, newCode,
+                    file, dead: nodesToProcess, newCode,
                     diff: generateDiff(code, newCode, path.relative(absolutePath, file))
                 });
             } else {

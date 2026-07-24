@@ -114,7 +114,7 @@ export async function resolveBarrelExports(filePath, visited = new Set()) {
 
     try {
         const code = await fs.readFile(filePath, 'utf-8');
-        const ast = await parseCode(code, resolvedFile);
+        const ast = await parseCode(code, filePath);
 
         // Kumpulkan ekspor lokal dari file ini
         const localExports = extractExportNames(ast);
