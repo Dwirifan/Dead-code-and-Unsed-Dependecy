@@ -140,6 +140,7 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
     }
 
     // FITUR 2: Arsitektur Plugin (Config Files sebagai Entry Point Otomatis)
+    const configEntrySet = new Set();
     const pluginConfigFiles = [
         'vite.config.js', 'vite.config.ts', 'vite.config.mjs', 'vite.config.cjs',
         'webpack.config.js', 'webpack.config.ts', 'webpack.common.js', 'webpack.dev.js', 'webpack.prod.js',
@@ -157,12 +158,13 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
         'svelte.config.js',
         'babel.config.js', 'babel.config.cjs',
         'commitlint.config.js',
-        'lint-staged.config.js'
+        'lint-staged.config.js',
+        'tsdown.config.js', 'tsdown.config.ts', 'tsdown.config.mjs', 'tsdown.config.cjs'
     ];
     for (const conf of pluginConfigFiles) {
         const confPath = path.resolve(projectRoot, conf);
         if (await fs.pathExists(confPath)) {
-            entrySet.add(confPath);
+            configEntrySet.add(confPath);
         }
     }
 
@@ -226,6 +228,12 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
     // Validasi eksistensi file
     const validatedEntries = [];
     const invalidEntries = [];
+
+    // Gabungkan file config yang ditemukan ke dalam entrySet utama
+    for (const conf of configEntrySet) {
+        entrySet.add(conf);
+    }
+    
     for (const entry of entrySet) {
         if (await fs.pathExists(entry)) {
             validatedEntries.push(entry);
