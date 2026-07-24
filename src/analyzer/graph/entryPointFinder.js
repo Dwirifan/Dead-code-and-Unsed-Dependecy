@@ -178,7 +178,7 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
     // Fallback: kandidat umum jika source entry points tidak ada atau tidak valid (misal dist belum dibuild)
     let hasValidSource = false;
     for (const entry of entrySet) {
-        if (fs.existsSync(entry)) { hasValidSource = true; break; }
+        if (fs.existsSync(entry) && !entry.endsWith('.json')) { hasValidSource = true; break; }
     }
     
     if (!hasValidSource) {
@@ -196,7 +196,7 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
     }
 
     // HTML Fallback
-    for (const entry of entrySet) { if (fs.existsSync(entry)) { hasValidSource = true; break; } }
+    for (const entry of entrySet) { if (fs.existsSync(entry) && !entry.endsWith('.json')) { hasValidSource = true; break; } }
     
     if (!hasValidSource) {
         const htmlCandidates = ['index.html', 'public/index.html', 'src/index.html'];
@@ -225,7 +225,7 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
     }
 
     // Ultimate Fallback
-    for (const entry of entrySet) { if (fs.existsSync(entry)) { hasValidSource = true; break; } }
+    for (const entry of entrySet) { if (fs.existsSync(entry) && !entry.endsWith('.json')) { hasValidSource = true; break; } }
     if (!hasValidSource) {
         const deepSearch = glob.sync('src/**/index.{js,ts,jsx,tsx}', { cwd: projectRoot, absolute: true });
         if (deepSearch.length > 0) {
