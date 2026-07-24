@@ -61,7 +61,7 @@ export async function initCommand(options) {
         {
             type: 'confirm',
             name: 'preserveExports',
-            message: 'Apakah file proyek ini adalah library? (Jika Ya, semua exported function/variable dilindungi)',
+            message: 'Apakah proyek ini sebuah Library/Pustaka publik (seperti NPM package)?\n  \u26A0\uFE0F PERINGATAN: Jika Anda pilih (Y), fungsi yang di-export TIDAK AKAN dihapus meskipun tak terpakai.\n  \u26A0\uFE0F Jika Anda pilih (N/Aplikasi Web Biasa), export yang tak terpakai akan otomatis dihapus!\n  Pilih: ',
             default: false
         },
         {
