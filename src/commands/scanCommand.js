@@ -20,6 +20,7 @@ export function registerScanCommand(program) {
         .command('scan')
         .argument('<path>', 'Path ke file tunggal atau direktori proyek')
         .option('--json', 'Output hasil analisis dalam format JSON (untuk integrasi CI/CD)')
+        .option('-a, --advanced', 'Tampilkan hasil linter AST lanjutan (Undeclared Variables, Unused Methods, dll)')
         .description('Pindai dead code dan dependensi tidak terpakai tanpa mengubah file')
         .action(async (targetPath, options) => {
             const jsonMode = options.json || false;
@@ -335,33 +336,43 @@ export function registerScanCommand(program) {
                 totalIssues += groupedItems.safe.length;
             }
 
-            if (printGroup(
-                '\u{1F7E1} NEEDS REVIEW (Butuh Peninjauan Manual)',
-                'Kode ini kemungkinan tidak dipakai, tapi ada risiko side-effect. Periksa sebelum menghapus.',
-                groupedItems.review
-            )) {
-                printedAny = true;
-                totalIssues += groupedItems.review.length;
-            }
+            if (options.advanced) {
+                if (printGroup(
+                    '\u{1F7E1} NEEDS REVIEW (Butuh Peninjauan Manual)',
+                    'Kode ini kemungkinan tidak dipakai, tapi ada risiko side-effect. Periksa sebelum menghapus.',
+                    groupedItems.review
+                )) {
+                    printedAny = true;
+                    totalIssues += groupedItems.review.length;
+                }
 
-            if (printGroup(
-                '\u{1F534} RISKY (Berisiko Tinggi)',
-                'Kode ini mungkin dipanggil secara dinamis (callback, event, inheritance). JANGAN hapus tanpa pengecekan.',
-                groupedItems.risky
-            )) {
-                printedAny = true;
-                totalIssues += groupedItems.risky.length;
-            }
+                if (printGroup(
+                    '\u{1F534} RISKY (Berisiko Tinggi)',
+                    'Kode ini mungkin dipanggil secara dinamis (callback, event, inheritance). JANGAN hapus tanpa pengecekan.',
+                    groupedItems.risky
+                )) {
+                    printedAny = true;
+                    totalIssues += groupedItems.risky.length;
+                }
 
-            if (groupedItems.other.length > 0) {
-                printedAny = true;
-                console.log(`\n${chalk.gray('[Other]')}`);
-                groupedItems.other.forEach(n => {
-                    console.log(`   -> ${path.relative(absolutePath, n.file)} Line ${n.line}: ${n.type} '${n.name}'`);
-                });
-                totalIssues += groupedItems.other.length;
+                if (groupedItems.other.length > 0) {
+                    printedAny = true;
+                    console.log(`\n${chalk.gray('[Other]')}`);
+                    groupedItems.other.forEach(n => {
+                        console.log(`   -> ${path.relative(absolutePath, n.file)} Line ${n.line}: ${n.type} '${n.name}'`);
+                    });
+                    totalIssues += groupedItems.other.length;
+                }
+            } else {
+                const hiddenCount = groupedItems.review.length + groupedItems.risky.length + groupedItems.other.length;
+                if (hiddenCount > 0) {
+                    console.log(`\n${chalk.gray(`   [i] Disembunyikan ${hiddenCount} peringatan lanjutan AST Linter.`)}`);
+                    console.log(`${chalk.gray(`       (Gunakan flag --advanced untuk melihat detailnya)`)}`);
+                    totalIssues += hiddenCount; // Tetap dihitung di statistik total
+                }
             }
-            if (!printedAny) console.log('\n   [ok] Tidak ada dead code yang tertinggal!');
+            
+            if (!printedAny && groupedItems.safe.length === 0) console.log('\n   [ok] Tidak ada dead code [SAFE] yang tertinggal!');
 
             const duration = (performance.now() - startTime).toFixed(2);
 
