@@ -146,7 +146,7 @@ export function registerScanCommand(program) {
             // Dead files — normalisasi path glob ke format OS lokal
             const allFiles = (await glob(['**/*.{js,jsx,mjs,cjs,ts,tsx,mts}'], {
                 cwd: absolutePath,
-                ignore: ['node_modules/**', 'dist/**', 'test/**', 'tests/**', 'coverage/**', '*.config.*', '.*.js', '.*.mjs', '.*.ts'],
+                ignore: ['**/node_modules/**', '**/dist/**', '**/test/**', '**/tests/**', '**/coverage/**', '*.config.*', '.*.js', '.*.mjs', '.*.ts'],
                 absolute: true
             })).map(f => path.resolve(f));
 

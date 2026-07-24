@@ -41,23 +41,47 @@ export function markUsedExports(ast, globalScope, fileName, globalRegistry, rule
                  return globalRegistry.usages.has(name);
              };
 
-             if (node.type === 'ExportNamedDeclaration' && node.declaration) {
-                 if (node.declaration.type === 'VariableDeclaration') {
-                     node.declaration.declarations.forEach(decl => {
-                         const identifiers = extractIdentifiers(decl.id);
-                         identifiers.forEach(({ name }) => {
-                             recordExport(name);
-                             if (checkUsage(name)) globalScope.markUsed(name);
+             if (node.type === 'ExportNamedDeclaration') {
+                 // 1. Ekspor Deklarasi (export const A = 1, export function B(), export interface C)
+                 if (node.declaration) {
+                     if (node.declaration.type === 'VariableDeclaration') {
+                         node.declaration.declarations.forEach(decl => {
+                             const identifiers = extractIdentifiers(decl.id);
+                             identifiers.forEach(({ name }) => {
+                                 recordExport(name);
+                                 if (checkUsage(name)) globalScope.markUsed(name);
+                             });
                          });
+                     }
+                     if (node.declaration.type === 'FunctionDeclaration' && node.declaration.id) {
+                         recordExport(node.declaration.id.name);
+                         if (checkUsage(node.declaration.id.name)) globalScope.markUsed(node.declaration.id.name);
+                     }
+                     if (node.declaration.type === 'ClassDeclaration' && node.declaration.id) {
+                         recordExport(node.declaration.id.name);
+                         if (checkUsage(node.declaration.id.name)) globalScope.markUsed(node.declaration.id.name);
+                     }
+                     // Dukungan TypeScript Types
+                     if (['TSInterfaceDeclaration', 'TSTypeAliasDeclaration', 'TSEnumDeclaration'].includes(node.declaration.type) && node.declaration.id) {
+                         recordExport(node.declaration.id.name);
+                         if (checkUsage(node.declaration.id.name)) globalScope.markUsed(node.declaration.id.name);
+                     }
+                 }
+                 // 2. Ekspor Spesifikator (export { A, B } atau export type { C })
+                 if (node.specifiers && node.specifiers.length > 0) {
+                     node.specifiers.forEach(spec => {
+                         if (spec.exported && spec.exported.type === 'Identifier') {
+                             const exportName = spec.exported.name;
+                             recordExport(exportName);
+                             // Tandai yang diekspor (baik local name maupun exported name jika sama-sama ada)
+                             if (checkUsage(exportName)) {
+                                 globalScope.markUsed(exportName);
+                                 if (spec.local && spec.local.type === 'Identifier') {
+                                     globalScope.markUsed(spec.local.name);
+                                 }
+                             }
+                         }
                      });
-                 }
-                 if (node.declaration.type === 'FunctionDeclaration') {
-                     recordExport(node.declaration.id.name);
-                     if (checkUsage(node.declaration.id.name)) globalScope.markUsed(node.declaration.id.name);
-                 }
-                 if (node.declaration.type === 'ClassDeclaration' && node.declaration.id) {
-                     recordExport(node.declaration.id.name);
-                     if (checkUsage(node.declaration.id.name)) globalScope.markUsed(node.declaration.id.name);
                  }
              }
              if (node.type === 'ExportDefaultDeclaration') {
