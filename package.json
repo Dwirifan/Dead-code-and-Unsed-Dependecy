@@ -1,6 +1,6 @@
 {
   "name": "deadkiller-cli",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "type": "module",
   "main": "./bin/dce-cli.js",
   "bin": {
@@ -10,7 +10,7 @@
     "test": "test"
   },
   "scripts": {
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "coverage": "vitest run --coverage"
   },
   "keywords": [],
