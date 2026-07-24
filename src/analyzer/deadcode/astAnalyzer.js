@@ -146,6 +146,12 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                 currentScope.addDeclaration(node.name.name, 'UnusedType', node.loc.start.line, node);
             }
 
+            // Implicit JSX React Usage (Older React)
+            // Di React < 17, JSX butuh import React from 'react' meskipun tidak dipanggil secara eksplisit.
+            if (node.type === 'JSXElement' || node.type === 'JSXFragment') {
+                currentScope.addReadReference('React', node);
+            }
+
             // Pelacakan Referensi Penggunaan
             if (node.type === 'Identifier' || node.type === 'JSXIdentifier') {
                 const grandParent = parentStack.length >= 3 ? parentStack[parentStack.length - 3] : null;
