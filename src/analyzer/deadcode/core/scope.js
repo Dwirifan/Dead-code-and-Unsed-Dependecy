@@ -26,12 +26,12 @@ export class Scope {
 
 
 
-    addReadReference(name, node = null) {
-        this.readReferences.push({ name, node });
+    addReadReference(name, node = null, owners = null) {
+        this.readReferences.push({ name, node, owners, active: true });
     }
 
-    addWriteReference(name, node = null) {
-        this.writeReferences.push({ name, node });
+    addWriteReference(name, node = null, owners = null) {
+        this.writeReferences.push({ name, node, owners, active: true });
     }
 
     resolve() {
@@ -43,23 +43,24 @@ export class Scope {
             // akan salah ditandai sebagai "used" hanya karena memanggil dirinya sendiri.
             if (ref.name === this.selfName) continue;
 
-            this.markRead(ref.name, ref.node);
+            this.markRead(ref.name, ref.node, ref);
         }
 
         // Catat WRITE references — tidak menandai used, hanya menaikkan writeCount
         for (const ref of this.writeReferences) {
             if (ref.name === this.selfName) continue;
-            this.markWrite(ref.name, ref.node);
+            this.markWrite(ref.name, ref.node, ref);
         }
     }
 
-    markRead(name, originalNode = null) {
+    markRead(name, originalNode = null, refObj = null) {
         if (this.declarations.has(name)) {
             const decl = this.declarations.get(name);
             decl.used = true;
             decl.readCount++;
+            if (refObj) refObj.targetDecl = decl;
         } else if (this.parent) {
-            this.parent.markRead(name, originalNode);
+            this.parent.markRead(name, originalNode, refObj);
         } else {
             // Tidak ditemukan deklarasi sampai global scope
             if (!name.includes('.')) {
@@ -68,13 +69,14 @@ export class Scope {
         }
     }
 
-    markWrite(name, originalNode = null) {
+    markWrite(name, originalNode = null, refObj = null) {
         if (this.declarations.has(name)) {
             const decl = this.declarations.get(name);
             decl.writeCount++;
+            if (refObj) refObj.targetDecl = decl;
             // TIDAK menandai used = true; write-only variable tetap dianggap dead
         } else if (this.parent) {
-            this.parent.markWrite(name, originalNode);
+            this.parent.markWrite(name, originalNode, refObj);
         } else {
             // Write ke undeclared variable (implicit global)
             if (!name.includes('.')) {

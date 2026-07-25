@@ -2,6 +2,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { parseCode } from '../../parser/astParser.js';
 import estraverse from 'estraverse';
+import glob from 'fast-glob';
 import { isReference } from '../deadcode/core/isReference.js';
 import { visitorKeys as tsVisitorKeys } from '@typescript-eslint/visitor-keys';
 import { resolveBarrelExports } from '../deadcode/core/barrelResolver.js';
@@ -122,6 +123,7 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
                         // Jika digunakan sebagai object dari MemberExpression (Utils.format)
                         if (parent && parent.type === 'MemberExpression' && parent.object === node && !parent.computed && parent.property.type === 'Identifier') {
                             nsMeta.names.push(parent.property.name);
+                            if (nsMeta.details) nsMeta.details.push({ imported: parent.property.name, local: parent.property.name, isNamespaceMember: true });
                         } else if (parent && parent.type !== 'ImportNamespaceSpecifier') {
                             // Jika di-pass ke fungsi lain atau di-assign, fallback ke '*'
                             nsMeta.fallbackToStar = true;
@@ -131,67 +133,134 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
                     // --- 3. Pelacakan Instruksi Impor (Sistem Rekat Graf) ---
                     let importPath = null;
                     let importedNames = [];
+                    let importDetails = [];
+                    let isTypeOnly = false;
 
                     if (node.type === 'CallExpression' && node.callee.name === 'require') {
                         if (node.arguments.length > 0 && node.arguments[0].type === 'Literal') {
                             importPath = node.arguments[0].value;
                             importedNames = ['*']; // Conservative fallback
+                            importDetails = [{ imported: '*', local: '*' }];
                             if (parent && parent.type === 'VariableDeclarator' && parent.id.type === 'ObjectPattern') {
                                 importedNames = parent.id.properties.map(p => p.type === 'Property' && p.key.type === 'Identifier' ? p.key.name : '*');
+                                importDetails = parent.id.properties.map(p => {
+                                    if (p.type === 'Property' && p.key.type === 'Identifier') {
+                                        const loc = p.value && p.value.type === 'Identifier' ? p.value.name : p.key.name;
+                                        return { imported: p.key.name, local: loc };
+                                    }
+                                    return { imported: '*', local: '*' };
+                                });
                             } else if (parent && parent.type === 'MemberExpression' && parent.property.type === 'Identifier' && !parent.computed) {
                                 importedNames = [parent.property.name];
+                                importDetails = [{ imported: parent.property.name, local: parent.property.name }];
+                            }
+                        } else if (node.arguments.length > 0 && node.arguments[0].type === 'TemplateLiteral') {
+                            const globPattern = node.arguments[0].quasis.map(q => q.value.raw).join('*');
+                            if (globPattern.startsWith('.') || globPattern.startsWith('/')) {
+                                try {
+                                    const matchedFiles = glob.sync(globPattern, { cwd: fileDir, absolute: false });
+                                    for (const relMatch of matchedFiles) {
+                                        const globPath = relMatch.startsWith('.') || relMatch.startsWith('/') ? relMatch : './' + relMatch;
+                                        importsToResolve.push({ path: globPath, names: ['*'], details: [{ imported: '*', local: '*' }], isGlob: true });
+                                    }
+                                } catch (_e) { }
+                            } else {
+                                unsafeFiles.add(currentFile);
                             }
                         } else {
-                            // FITUR 10: Dynamic Import & CommonJS (Dynamic require)
                             unsafeFiles.add(currentFile);
+                        }
+                    } else if (node.type === 'CallExpression' && node.callee.type === 'MemberExpression' &&
+                        node.callee.object.type === 'MetaProperty' && node.callee.object.meta.name === 'import' &&
+                        node.callee.object.property.name === 'meta' &&
+                        (node.callee.property.name === 'glob' || node.callee.property.name === 'globEager')) {
+                        if (node.arguments.length > 0 && (node.arguments[0].type === 'Literal' || node.arguments[0].type === 'TemplateLiteral')) {
+                            const pattern = node.arguments[0].type === 'Literal' ? node.arguments[0].value : node.arguments[0].quasis.map(q => q.value.raw).join('*');
+                            if (typeof pattern === 'string') {
+                                try {
+                                    const matchedFiles = glob.sync(pattern, { cwd: fileDir, absolute: false });
+                                    for (const relMatch of matchedFiles) {
+                                        const globPath = relMatch.startsWith('.') || relMatch.startsWith('/') ? relMatch : './' + relMatch;
+                                        importsToResolve.push({ path: globPath, names: ['*'], details: [{ imported: '*', local: '*' }], isGlob: true });
+                                    }
+                                } catch (_e) { }
+                            }
                         }
                     } else if (node.type === 'ImportDeclaration' && node.source?.value) {
                         importPath = node.source.value;
+                        isTypeOnly = node.importKind === 'type' || (node.specifiers && node.specifiers.length > 0 && node.specifiers.every(s => s.importKind === 'type'));
                         if (node.specifiers) {
                             node.specifiers.forEach(spec => {
-                                if (spec.type === 'ImportSpecifier') importedNames.push(spec.imported.name);
-                                else if (spec.type === 'ImportDefaultSpecifier') importedNames.push('default');
-                                else if (spec.type === 'ImportNamespaceSpecifier') {
-                                    // FITUR 6: Siapkan array, akan diisi saat AST traverse berjalan
-                                    namespaceMap.set(spec.local.name, { names: importedNames, fallbackToStar: false });
+                                if (spec.type === 'ImportSpecifier') {
+                                    importedNames.push(spec.imported.name);
+                                    importDetails.push({ imported: spec.imported.name, local: spec.local.name });
+                                } else if (spec.type === 'ImportDefaultSpecifier') {
+                                    importedNames.push('default');
+                                    importDetails.push({ imported: 'default', local: spec.local.name });
+                                } else if (spec.type === 'ImportNamespaceSpecifier') {
+                                    namespaceMap.set(spec.local.name, { names: importedNames, details: importDetails, fallbackToStar: false });
                                 }
                             });
                         }
                         if (importedNames.length === 0 && !namespaceMap.has(node.specifiers?.[0]?.local?.name)) {
                             importedNames.push('*'); // side-effect import
+                            importDetails.push({ imported: '*', local: '*' });
                         }
                     } else if ((node.type === 'ExportNamedDeclaration' || node.type === 'ExportAllDeclaration') && node.source?.value) {
                         importPath = node.source.value;
+                        isTypeOnly = node.exportKind === 'type' || (node.specifiers && node.specifiers.length > 0 && node.specifiers.every(s => s.exportKind === 'type'));
                         if (node.type === 'ExportAllDeclaration') {
                             importedNames.push('*');
+                            importDetails.push({ imported: '*', local: '*', isReExport: true });
                         } else if (node.specifiers) {
                             node.specifiers.forEach(spec => {
-                                if (spec.type === 'ExportSpecifier') importedNames.push(spec.local.name);
+                                if (spec.type === 'ExportSpecifier') {
+                                    importedNames.push(spec.local.name);
+                                    importDetails.push({ imported: spec.local.name, local: spec.exported.name, isReExport: true });
+                                }
                             });
                         }
                     } else if (node.type === 'ImportExpression' && node.source) {
                         if (node.source.type === 'Literal') {
                             importPath = node.source.value;
                             importedNames.push('*');
+                            importDetails.push({ imported: '*', local: '*' });
                         } else if (node.source.type === 'TemplateLiteral' && node.source.expressions.length === 0) {
                             importPath = node.source.quasis[0].value.raw;
                             importedNames.push('*');
+                            importDetails.push({ imported: '*', local: '*' });
+                        } else if (node.source.type === 'TemplateLiteral' && node.source.expressions.length > 0) {
+                            const globPattern = node.source.quasis.map(q => q.value.raw).join('*');
+                            if (globPattern.startsWith('.') || globPattern.startsWith('/')) {
+                                try {
+                                    const matchedFiles = glob.sync(globPattern, { cwd: fileDir, absolute: false });
+                                    for (const relMatch of matchedFiles) {
+                                        const globPath = relMatch.startsWith('.') || relMatch.startsWith('/') ? relMatch : './' + relMatch;
+                                        importsToResolve.push({ path: globPath, names: ['*'], details: [{ imported: '*', local: '*' }], isGlob: true });
+                                    }
+                                } catch (_e) { }
+                            } else {
+                                unsafeFiles.add(currentFile);
+                            }
                         } else {
                             unsafeFiles.add(currentFile);
                         }
                     }
 
                     if (importPath) {
-                        const isAlias = importPath.startsWith('@/') || importPath.startsWith('~/');
-                        if (importPath.startsWith('.') || importPath.startsWith('/') || path.isAbsolute(importPath) || isAlias) {
-                            importsToResolve.push({ path: importPath, names: importedNames });
+                        const isLocalOrAliasPrefix = importPath.startsWith('.') || 
+                                                     importPath.startsWith('/') || 
+                                                     path.isAbsolute(importPath) || 
+                                                     importPath.startsWith('#') || 
+                                                     importPath.startsWith('$') || 
+                                                     importPath.startsWith('~/') || 
+                                                     importPath.startsWith('@/');
+                        if (isLocalOrAliasPrefix) {
+                            importsToResolve.push({ path: importPath, names: importedNames, details: importDetails, isTypeOnly });
                         } else {
-                            // Untuk dependency NPM, kita rekam namanya, tapi kita juga coba berikan ke resolver
-                            // barangkali itu adalah alias di tsconfig yang tidak pakai prefix @ (misal: "components/Button")
                             const parts = importPath.split('/');
                             const pkgName = importPath.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
-                            importsToResolve.push({ path: importPath, names: importedNames, pkgName });
-                            // Note: pkgName akan di-add ke usedPackages nanti jika tidak berhasil di-resolve ke file lokal
+                            importsToResolve.push({ path: importPath, names: importedNames, details: importDetails, pkgName, isTypeOnly });
                         }
                     }
                 },
@@ -204,6 +273,7 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
             for (const nsMeta of namespaceMap.values()) {
                 if (nsMeta.fallbackToStar || nsMeta.names.length === 0) {
                     nsMeta.names.push('*');
+                    if (nsMeta.details) nsMeta.details.push({ imported: '*', local: '*', isNamespaceMember: true });
                 }
             }
 
@@ -218,16 +288,22 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
                         // kita catat saja sebagai package jika belum
                         if (imp.pkgName) usedPackages.add(imp.pkgName);
                     } else {
-                        edges.push({ from: currentFile, to: absolute, names: imp.names });
+                        edges.push({ from: currentFile, to: absolute, names: imp.names, isTypeOnly: Boolean(imp.isTypeOnly) });
 
                         if (!globalRegistry.usedExports.has(absolute)) {
                             globalRegistry.usedExports.set(absolute, new Set());
                         }
 
-                        // FITUR KNIP: Hanya tambahkan ke usedExports jika identifier import TERBUKTI digunakan di file ini!
-                        imp.names.forEach(name => {
-                            if (name === '*' || name === 'default' || usedIdentifiersInFile.has(name)) {
-                                globalRegistry.usedExports.get(absolute).add(name);
+                        // FITUR KNIP: Hanya tambahkan ke usedExports jika identifier import TERBUKTI digunakan di file ini atau merupakan re-export!
+                        const detailsToProcess = imp.details && imp.details.length > 0 ? imp.details : imp.names.map(n => ({ imported: n, local: n }));
+                        detailsToProcess.forEach(item => {
+                            const imported = typeof item === 'string' ? item : item.imported;
+                            const local = typeof item === 'string' ? item : item.local;
+                            const isReExport = typeof item === 'object' && item.isReExport;
+                            const isNamespaceMember = typeof item === 'object' && item.isNamespaceMember;
+
+                            if (imported === '*' || imported === 'default' || isReExport || isNamespaceMember || usedIdentifiersInFile.has(local)) {
+                                globalRegistry.usedExports.get(absolute).add(imported);
                             }
                         });
 
@@ -254,7 +330,7 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
         } catch (err) {
             // File gagal di-parse (syntax error, encoding, dll) → skip tapi beri warning
             const relPath = path.relative(projectRoot, currentFile);
-            if (err.name === 'ParseError') {
+            if (err.name === 'ParseError' && process.env.DEBUG) {
                 console.warn(`[!] Skip parse error: ${relPath} (line ${err.line || '?'}): ${err.message.split('\n')[0]}`);
             }
             // File tetap dianggap live (sudah masuk liveFiles) tapi tidak dianalisis lebih lanjut
@@ -272,7 +348,7 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
     for (const [file, usedNames] of globalRegistry.usedExports.entries()) {
         if (usedNames.has('*')) {
             try {
-                const allExportNames = await resolveBarrelExports(file);
+                const allExportNames = await resolveBarrelExports(file, projectRoot);
                 if (allExportNames.size > 0) {
                     usedNames.delete('*');
                     allExportNames.forEach(n => usedNames.add(n));
@@ -286,6 +362,7 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
 
     // 5. Pencarian Siklus Maut (Circular Dependencies)
     globalRegistry.circularDependencies = findCircularDependencies(edges);
+    globalRegistry.unsafeFiles = unsafeFiles;
 
     return { liveFiles, usedPackages, edges, unsafeFiles, globalRegistry };
 }
@@ -294,7 +371,7 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
  * Mendeteksi adanya siklus berputar (A -> B -> C -> A) di dalam graf impor.
  * Menggunakan algoritma Pewarnaan Node (White, Gray, Black) via DFS.
  */
-function findCircularDependencies(edges) {
+export function findCircularDependencies(edges) {
     const adjList = new Map();
 
     // Bangun Adjacency List
@@ -320,10 +397,22 @@ function findCircularDependencies(edges) {
                     cyclePath.push(neighbor); // A -> B -> C -> A
 
                     // Normalisasi agar tidak duplikat (A->B->A sama dengan B->A->B)
-                    const cycleKey = [...cyclePath].sort().join('|');
-                    const isDuplicate = cycles.some(c => [...c].sort().join('|') === cycleKey);
+                    const uniqueNodes = cyclePath.slice(0, -1);
+                    const cycleKey = [...uniqueNodes].sort().join('|');
+                    const isDuplicate = cycles.some(c => c.slice(0, -1).sort().join('|') === cycleKey);
 
                     if (!isDuplicate) {
+                        let isTypeOnlyCycle = true;
+                        for (let i = 0; i < cyclePath.length - 1; i++) {
+                            const u = cyclePath[i];
+                            const v = cyclePath[i + 1];
+                            const edgeObj = edges.find(e => e.from === u && e.to === v);
+                            if (!edgeObj || !edgeObj.isTypeOnly) {
+                                isTypeOnlyCycle = false;
+                                break;
+                            }
+                        }
+                        cyclePath.isTypeOnly = isTypeOnlyCycle;
                         cycles.push(cyclePath);
                     }
                 }

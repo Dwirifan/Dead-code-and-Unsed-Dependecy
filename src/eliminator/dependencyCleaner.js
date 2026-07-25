@@ -53,6 +53,6 @@ export async function removeUnusedDependencies(projectRoot, unusedDeps) {
 
         return validDeps.length;
     } catch (err) {
-        throw new Error(`Gagal menghapus dependensi. Perintah '${cmd} ${cmdArgs.join(' ')}' gagal: ${err.message}`);
+        throw new Error(`Gagal menghapus dependensi. Perintah '${cmd} ${cmdArgs.join(' ')}' gagal: ${err.message}`, { cause: err });
     }
 }

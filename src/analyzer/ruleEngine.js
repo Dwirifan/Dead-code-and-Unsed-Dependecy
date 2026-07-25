@@ -145,7 +145,7 @@ export class RuleEngine {
         try {
             const regex = new RegExp(rules.ignorePrefixedVariables);
             return regex.test(name);
-        } catch (e) {
+        } catch (_e) {
             return false; // Gagal compile regex
         }
     }

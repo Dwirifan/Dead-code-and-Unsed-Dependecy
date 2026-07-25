@@ -71,11 +71,30 @@ export function removeDeadCode(codeString, deadNodes, ruleEngine = null, elimina
         // Level 3 (Aggressive Delete) berjalan di bawah ini:
 
         // Tentukan batas baris penuh untuk node ini
-        const lineStart = findLineStart(codeString, start);
+        let effectiveStart = start;
+        if (dead.node && dead.node.leadingComments && dead.node.leadingComments.length > 0) {
+            effectiveStart = dead.node.leadingComments[0].range[0];
+        } else {
+            // Cek manual apakah ada JSDoc/multi-line comment tepat di atas lineStart
+            const beforeLine = codeString.substring(0, findLineStart(codeString, start));
+            const trimmedBefore = beforeLine.trimEnd();
+            if (trimmedBefore.endsWith('*/')) {
+                const commentStartIdx = trimmedBefore.lastIndexOf('/*');
+                if (commentStartIdx !== -1) {
+                    const lineOfComment = findLineStart(codeString, commentStartIdx);
+                    const prefix = codeString.substring(lineOfComment, commentStartIdx).trim();
+                    if (prefix === '') {
+                        effectiveStart = commentStartIdx;
+                    }
+                }
+            }
+        }
+
+        const lineStart = findLineStart(codeString, effectiveStart);
         const lineEnd = findLineEnd(codeString, end);
 
         // Cek apakah node ini adalah satu-satunya konten bermakna di baris tersebut
-        const beforeNode = codeString.substring(lineStart, start).trim();
+        const beforeNode = codeString.substring(lineStart, effectiveStart).trim();
         const afterNode = codeString.substring(end, lineEnd).trim();
 
         // Jika ada di baris sendiri (atau hanya ada koma/titik koma/spasi di sisa baris),
@@ -88,7 +107,7 @@ export function removeDeadCode(codeString, deadNodes, ruleEngine = null, elimina
         } else {
             // Node berbagi baris dengan kode lain (misal: const a = 1, b = 2)
             // Hapus hanya node-nya, lalu bersihkan koma/spasi yang menggantung
-            let removeStart = start;
+            let removeStart = effectiveStart;
             let removeEnd = end;
 
             // Cek dan hapus koma yang menggantung sesudah node

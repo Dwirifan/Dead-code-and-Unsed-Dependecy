@@ -45,7 +45,7 @@ export function registerScanCommand(program) {
                         const jsonResult = {
                             mode: 'single-file',
                             file: absolutePath,
-                            deadCode: deadNodes.map(n => ({ name: n.name, type: n.type, line: n.line, confidence: n.confidence || 'medium', status: n.status || 'review' })),
+                            deadCode: deadNodes.map(n => ({ name: n.name, type: n.type, line: n.line, confidence: n.confidence || 'medium', status: n.status || 'review', reason: n.reason || '' })),
                             totalIssues: deadNodes.length,
                             analysisTime: `${(performance.now() - startTime).toFixed(2)} ms`
                         };
@@ -61,13 +61,13 @@ export function registerScanCommand(program) {
                         if (deadCodeNodes.length > 0) {
                             console.log(chalk.bold.red(`\n[!] Temuan (Dead Code):`));
                             console.log(`   -> ${path.relative(process.cwd(), absolutePath)}`);
-                            deadCodeNodes.forEach(n => console.log(chalk.red(`      Line ${n.line}: [${n.type}] '${n.name}'`)));
+                            deadCodeNodes.forEach(n => console.log(chalk.red(`      Line ${n.line}: [${n.type}] '${n.name}' ${n.reason ? `- ${n.reason}` : ''}`)));
                         }
 
                         if (smellNodes.length > 0) {
                             console.log(chalk.bold.yellow(`\n[!] Temuan (Code Smells):`));
                             console.log(`   -> ${path.relative(process.cwd(), absolutePath)}`);
-                            smellNodes.forEach(n => console.log(chalk.yellow(`      Line ${n.line}: [${n.type}] '${n.name}'`)));
+                            smellNodes.forEach(n => console.log(chalk.yellow(`      Line ${n.line}: [${n.type}] '${n.name}' ${n.reason ? `- ${n.reason}` : ''}`)));
                         }
 
                         console.log(`\n[x] ${deadNodes.length} masalah ditemukan.`);
@@ -177,7 +177,6 @@ export function registerScanCommand(program) {
             }
 
             // FITUR 8: Duplicate Exports
-            let duplicateExportsCount = 0;
             if (graph.globalRegistry.projectExports) {
                 const duplicateExports = [];
                 for (const [exportName, files] of graph.globalRegistry.projectExports.entries()) {
@@ -195,7 +194,7 @@ export function registerScanCommand(program) {
                         console.log(`   - Ekspor ${chalk.yellow(`'${de.name}'`)} ditemukan di:`);
                         de.files.forEach(f => console.log(`      ↳ ${path.relative(absolutePath, f)}`));
                     });
-                    duplicateExportsCount = duplicateExports.length;
+                    const duplicateExportsCount = duplicateExports.length;
                     totalIssues += duplicateExportsCount;
                 }
             }
@@ -318,7 +317,7 @@ export function registerScanCommand(program) {
                             const statusIcon = n.status === 'safe' ? chalk.green('[SAFE]') :
                                 n.status === 'review' ? chalk.yellow('[REVIEW]') :
                                     chalk.red('[RISKY]');
-                            console.log(`      Line ${n.line}: '${n.name}' ${statusIcon}`);
+                            console.log(`      Line ${n.line}: '${n.name}' ${statusIcon} ${n.reason ? `- ${chalk.italic.gray(n.reason)}` : ''}`);
                         });
                     }
                 }
@@ -412,7 +411,8 @@ export function registerScanCommand(program) {
                         type: n.type,
                         line: n.line,
                         confidence: n.confidence || 'medium',
-                        status: n.status || 'review'
+                        status: n.status || 'review',
+                        reason: n.reason || ''
                     }))
                 };
                 // Tambahkan data unused deps jika ada

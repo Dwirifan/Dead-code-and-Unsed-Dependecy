@@ -250,7 +250,7 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
         }
     }
 
-    if (invalidEntries.length > 0) {
+    if (invalidEntries.length > 0 && process.env.DEBUG) {
         console.warn(`[!] Entry point tidak ditemukan (diabaikan):`);
         invalidEntries.forEach(e => console.warn(`    - ${path.relative(projectRoot, e)}`));
     }

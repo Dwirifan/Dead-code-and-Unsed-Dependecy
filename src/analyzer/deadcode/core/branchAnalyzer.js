@@ -136,7 +136,7 @@ function collectConstantMap(ast) {
  * @param {object} ast - File AST
  * @returns {Array} Array yang berisi dead nodes
  */
-export function findUnreachableBranches(ast) {
+export function findUnreachableBranches(ast, ruleEngine = null, fileName = null) {
     const unreachableNodes = [];
 
     // Phase 0: Kumpulkan constant values untuk propagation
@@ -310,24 +310,29 @@ export function findUnreachableBranches(ast) {
                 const body = node.body;
                 if (body && body.type === 'BlockStatement' && body.body.length === 0) {
                     const fnName = (node.id && node.id.name) || '(anonymous)';
-                    unreachableNodes.push({
-                        name: `Empty Function '${fnName}'`,
-                        type: 'EmptyBlock',
-                        line: node.loc ? node.loc.start.line : 0,
-                        node: node
-                    });
+                    if (!(ruleEngine && ruleEngine.isIgnoredVariable(fnName, fileName))) {
+                        unreachableNodes.push({
+                            name: `Empty Function '${fnName}'`,
+                            type: 'EmptyBlock',
+                            line: node.loc ? node.loc.start.line : 0,
+                            node: node
+                        });
+                    }
                 }
             }
 
             // Empty catch block (error silently swallowed)
             if (node.type === 'CatchClause') {
                 if (node.body && node.body.type === 'BlockStatement' && node.body.body.length === 0) {
-                    unreachableNodes.push({
-                        name: 'Empty Catch Block (error silently swallowed)',
-                        type: 'EmptyBlock',
-                        line: node.loc ? node.loc.start.line : 0,
-                        node: node
-                    });
+                    const paramName = node.param && node.param.type === 'Identifier' ? node.param.name : null;
+                    if (!(paramName && ruleEngine && ruleEngine.isIgnoredVariable(paramName, fileName))) {
+                        unreachableNodes.push({
+                            name: 'Empty Catch Block (error silently swallowed)',
+                            type: 'EmptyBlock',
+                            line: node.loc ? node.loc.start.line : 0,
+                            node: node
+                        });
+                    }
                 }
             }
         }

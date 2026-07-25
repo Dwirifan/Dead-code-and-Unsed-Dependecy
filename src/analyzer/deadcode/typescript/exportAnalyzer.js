@@ -1,6 +1,29 @@
 import estraverse from 'estraverse';
 import { extractIdentifiers } from '../core/destructuringExtractor.js';
 
+const PRESERVED_FRAMEWORK_EXPORTS = new Set([
+    'getServerSideProps', 'getStaticProps', 'getStaticPaths',
+    'metadata', 'generateMetadata', 'generateStaticParams',
+    'revalidate', 'dynamic', 'runtime', 'fetchCache',
+    'preferredRegion', 'maxDuration', 'alt', 'size',
+    'contentType', 'loader', 'action', 'meta', 'links',
+    'headers', 'handle', 'shouldRevalidate',
+    'GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'
+]);
+
+function hasFrameworkDirective(node) {
+    if (!node || !node.body) return false;
+    const body = Array.isArray(node.body) ? node.body : (node.body.body || []);
+    for (const stmt of body) {
+        if (stmt.type === 'ExpressionStatement' && stmt.expression && stmt.expression.type === 'Literal') {
+            const val = stmt.expression.value;
+            if (val === 'use server' || val === 'use client') return true;
+        }
+        if (stmt.directive === 'use server' || stmt.directive === 'use client') return true;
+    }
+    return false;
+}
+
 /**
  * Memastikan bahwa fungsi atau variabel yang diekspor diperiksa referensinya secara lintas file.
  */
@@ -17,7 +40,11 @@ export function markUsedExports(ast, globalScope, fileName, globalRegistry, rule
                  globalRegistry.projectExports.get(name).add(fileName);
              };
 
-             const checkUsage = (name) => {
+             const checkUsage = (name, nodeDecl = null) => {
+                 if (PRESERVED_FRAMEWORK_EXPORTS.has(name)) return true;
+                 if (hasFrameworkDirective(ast)) return true;
+                 if (nodeDecl && (hasFrameworkDirective(nodeDecl) || hasFrameworkDirective(nodeDecl.body))) return true;
+
                  const rules = ruleEngine && ruleEngine.rules;
                  
                  // Hybrid Rules: Jika di-export dan preserveExports ON, maka selamatkan.
@@ -27,6 +54,9 @@ export function markUsedExports(ast, globalScope, fileName, globalRegistry, rule
                  // Jika preserveExports === 'strict', lanjut ke pengecekan cross-file (globalRegistry)
 
                  if (!globalRegistry) return true; // Default konservatif: Jika tidak ada registri graf global, asumsikan dipakai
+                 if (globalRegistry.unsafeFiles && fileName && globalRegistry.unsafeFiles.has(fileName)) {
+                     return true; // Conservative bailout: File ini mengandung pola dinamis/eval/computed, selamatkan semua ekspor!
+                 }
                  
                  // Evaluasi Silang File Berbasis Call Graph (Ekspor -> Impor):
                  if (globalRegistry.usedExports && fileName) {
@@ -49,22 +79,42 @@ export function markUsedExports(ast, globalScope, fileName, globalRegistry, rule
                              const identifiers = extractIdentifiers(decl.id);
                              identifiers.forEach(({ name }) => {
                                  recordExport(name);
-                                 if (checkUsage(name)) globalScope.markUsed(name);
+                                 if (checkUsage(name, decl)) globalScope.markUsed(name);
                              });
                          });
                      }
                      if (node.declaration.type === 'FunctionDeclaration' && node.declaration.id) {
                          recordExport(node.declaration.id.name);
-                         if (checkUsage(node.declaration.id.name)) globalScope.markUsed(node.declaration.id.name);
+                         if (checkUsage(node.declaration.id.name, node.declaration)) globalScope.markUsed(node.declaration.id.name);
                      }
                      if (node.declaration.type === 'ClassDeclaration' && node.declaration.id) {
                          recordExport(node.declaration.id.name);
-                         if (checkUsage(node.declaration.id.name)) globalScope.markUsed(node.declaration.id.name);
+                         if (checkUsage(node.declaration.id.name, node.declaration)) globalScope.markUsed(node.declaration.id.name);
                      }
-                     // Dukungan TypeScript Types
-                     if (['TSInterfaceDeclaration', 'TSTypeAliasDeclaration', 'TSEnumDeclaration'].includes(node.declaration.type) && node.declaration.id) {
+                     // Dukungan TypeScript Types & Namespaces
+                     if (['TSInterfaceDeclaration', 'TSTypeAliasDeclaration', 'TSEnumDeclaration', 'TSDeclareFunction', 'TSImportEqualsDeclaration'].includes(node.declaration.type) && node.declaration.id) {
                          recordExport(node.declaration.id.name);
-                         if (checkUsage(node.declaration.id.name)) globalScope.markUsed(node.declaration.id.name);
+                         if (checkUsage(node.declaration.id.name, node.declaration)) globalScope.markUsed(node.declaration.id.name);
+                     }
+                     if (node.declaration.type === 'TSModuleDeclaration' && node.declaration.id) {
+                         const nsName = node.declaration.id.name;
+                         recordExport(nsName);
+                         if (checkUsage(nsName, node.declaration)) {
+                             globalScope.markUsed(nsName);
+                             if (node.declaration.body && node.declaration.body.body) {
+                                 node.declaration.body.body.forEach(stmt => {
+                                     if (stmt.type === 'ExportNamedDeclaration' && stmt.declaration) {
+                                         if (stmt.declaration.type === 'VariableDeclaration') {
+                                             stmt.declaration.declarations.forEach(d => {
+                                                 if (d.id && d.id.type === 'Identifier') globalScope.markUsed(d.id.name);
+                                             });
+                                         } else if (stmt.declaration.id) {
+                                             globalScope.markUsed(stmt.declaration.id.name);
+                                         }
+                                     }
+                                 });
+                             }
+                         }
                      }
                  }
                  // 2. Ekspor Spesifikator (export { A, B } atau export type { C })
@@ -73,8 +123,7 @@ export function markUsedExports(ast, globalScope, fileName, globalRegistry, rule
                          if (spec.exported && spec.exported.type === 'Identifier') {
                              const exportName = spec.exported.name;
                              recordExport(exportName);
-                             // Tandai yang diekspor (baik local name maupun exported name jika sama-sama ada)
-                             if (checkUsage(exportName)) {
+                             if (checkUsage(exportName, null)) {
                                  globalScope.markUsed(exportName);
                                  if (spec.local && spec.local.type === 'Identifier') {
                                      globalScope.markUsed(spec.local.name);
@@ -87,15 +136,13 @@ export function markUsedExports(ast, globalScope, fileName, globalRegistry, rule
              if (node.type === 'ExportDefaultDeclaration') {
                  recordExport('default');
                  if (node.declaration.type === 'Identifier') {
-                     if (checkUsage(node.declaration.name)) globalScope.markUsed(node.declaration.name);
+                     if (checkUsage(node.declaration.name, node.declaration)) globalScope.markUsed(node.declaration.name);
                  }
-                 // export default function Foo() { ... }
                  if (node.declaration.type === 'FunctionDeclaration' && node.declaration.id) {
-                     if (checkUsage(node.declaration.id.name)) globalScope.markUsed(node.declaration.id.name);
+                     if (checkUsage(node.declaration.id.name, node.declaration)) globalScope.markUsed(node.declaration.id.name);
                  }
-                 // export default class Bar { ... }
                  if (node.declaration.type === 'ClassDeclaration' && node.declaration.id) {
-                     if (checkUsage(node.declaration.id.name)) globalScope.markUsed(node.declaration.id.name);
+                     if (checkUsage(node.declaration.id.name, node.declaration)) globalScope.markUsed(node.declaration.id.name);
                  }
              }
              // Dukungan gaya ekspor CommonJS (module.exports.foo = foo)
@@ -103,7 +150,19 @@ export function markUsedExports(ast, globalScope, fileName, globalRegistry, rule
                  node.left.object.type === 'MemberExpression' && node.left.object.object.name === 'module') {
                  if (node.right.type === 'Identifier') {
                      recordExport(node.right.name);
-                     if (checkUsage(node.right.name)) globalScope.markUsed(node.right.name);
+                     if (checkUsage(node.right.name, null)) globalScope.markUsed(node.right.name);
+                 }
+             }
+             // Dukungan ExportAllDeclaration (export * from '...' dan export * as ns from '...')
+             if (node.type === 'ExportAllDeclaration') {
+                 if (node.exported && node.exported.type === 'Identifier') {
+                     const exportName = node.exported.name;
+                     recordExport(exportName);
+                     if (checkUsage(exportName, null)) {
+                         globalScope.markUsed(exportName);
+                     }
+                 } else {
+                     recordExport('*');
                  }
              }
         }

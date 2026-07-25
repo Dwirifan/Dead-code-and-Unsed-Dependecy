@@ -12,38 +12,42 @@ export function findDeadCode(ast, fileName = null, globalRegistry = null, ruleEn
     const deadCode = analyzeAstCode(ast, fileName, globalRegistry, ruleEngine);
 
     // 2. Unreachable Branches
-    const unreachableNodes = findUnreachableBranches(ast);
+    const unreachableNodes = findUnreachableBranches(ast, ruleEngine, fileName);
     unreachableNodes.forEach(node => {
-        const { confidence, status } = classifyConfidence(node.type);
+        const { confidence, status, reason } = classifyConfidence(node.type);
         node.confidence = confidence;
         node.status = status;
+        node.reason = reason;
     });
     deadCode.push(...unreachableNodes);
 
     // 3. Duplicate Conditions
     const duplicateConditions = findDuplicateConditions(ast);
     duplicateConditions.forEach(node => {
-        const { confidence, status } = classifyConfidence(node.type);
+        const { confidence, status, reason } = classifyConfidence(node.type);
         node.confidence = confidence;
         node.status = status;
+        node.reason = reason;
     });
     deadCode.push(...duplicateConditions);
 
     // 4. Unused Class Methods
     const unusedMethods = findUnusedClassMethods(ast, globalRegistry);
     unusedMethods.forEach(node => {
-        const { confidence, status } = classifyConfidence(node.type);
+        const { confidence, status, reason } = classifyConfidence(node.type);
         node.confidence = confidence;
         node.status = status;
+        node.reason = reason;
     });
     deadCode.push(...unusedMethods);
 
     // 5. Redundant Code
     const redundantNodes = findRedundantCode(ast);
     redundantNodes.forEach(node => {
-        const { confidence, status } = classifyConfidence(node.type);
+        const { confidence, status, reason } = classifyConfidence(node.type);
         node.confidence = confidence;
         node.status = status;
+        node.reason = reason;
     });
     deadCode.push(...redundantNodes);
 
@@ -52,14 +56,15 @@ export function findDeadCode(ast, fileName = null, globalRegistry = null, ruleEn
     const cfg = buildCFG(programBody);
     for (const block of cfg.unreachableBlocks) {
         for (const stmt of block.statements) {
-            const { confidence, status } = classifyConfidence('DeadCode');
+            const { confidence, status, reason } = classifyConfidence('DeadCode');
             deadCode.push({
                 name: 'CFG Unreachable Block',
                 type: 'DeadCode',
                 line: stmt.loc ? stmt.loc.start.line : 0,
                 node: stmt,
                 confidence,
-                status
+                status,
+                reason
             });
         }
     }
@@ -67,9 +72,10 @@ export function findDeadCode(ast, fileName = null, globalRegistry = null, ruleEn
     // 7. Path-Sensitive Analysis
     const pathFindings = analyzePathSensitive(ast);
     pathFindings.forEach(node => {
-        const { confidence, status } = classifyConfidence(node.type);
+        const { confidence, status, reason } = classifyConfidence(node.type);
         node.confidence = confidence;
         node.status = status;
+        node.reason = reason;
     });
     deadCode.push(...pathFindings);
 
@@ -77,9 +83,10 @@ export function findDeadCode(ast, fileName = null, globalRegistry = null, ruleEn
     const ruleConfig = ruleEngine ? ruleEngine.rules : {};
     const deadStores = analyzeDeadStores(ast, ruleConfig);
     deadStores.forEach(node => {
-        const { confidence, status } = classifyConfidence(node.type);
+        const { confidence, status, reason } = classifyConfidence(node.type);
         node.confidence = confidence;
         node.status = status;
+        node.reason = reason;
     });
     deadCode.push(...deadStores);
 
@@ -89,8 +96,10 @@ export function findDeadCode(ast, fileName = null, globalRegistry = null, ruleEn
     if (reactExtensions.has(fileExt)) {
         const reactFindings = analyzeReactSmells(ast);
         reactFindings.forEach(node => {
-            node.confidence = 'medium';
-            node.status = 'review';
+            const { confidence, status, reason } = classifyConfidence(node.type);
+            node.confidence = confidence || 'medium';
+            node.status = status || 'review';
+            node.reason = reason || 'Potensi bau kode (code smell) pada komponen atau hooks React.';
         });
         deadCode.push(...reactFindings);
     }
@@ -98,14 +107,15 @@ export function findDeadCode(ast, fileName = null, globalRegistry = null, ruleEn
     // 9. Internal Orphan Functions (Unused Local Functions)
     const { orphanFunctions } = buildCallGraph(ast);
     orphanFunctions.forEach(info => {
-        const { confidence, status } = classifyConfidence('Unused Function');
+        const { confidence, status, reason } = classifyConfidence('Function');
         deadCode.push({
             name: `Orphan Function '${info.name}'`,
             type: 'UnusedFunction',
             line: info.line,
             node: info.node,
             confidence: confidence,
-            status: status
+            status: status,
+            reason: reason
         });
     });
 
@@ -133,5 +143,17 @@ export function findDeadCode(ast, fileName = null, globalRegistry = null, ruleEn
         return !ignoredLines.has(item.line);
     });
 
-    return finalReport;
+    // Deduplikasi temuan berdasarkan baris dan nama elemen
+    const seenKeys = new Set();
+    const deduplicatedReport = [];
+    for (const item of finalReport) {
+        const cleanName = (item.name || '').replace(/^Orphan Function '([^']+)'$/, '$1');
+        const key = `${item.line}::${cleanName}`;
+        if (!seenKeys.has(key)) {
+            seenKeys.add(key);
+            deduplicatedReport.push(item);
+        }
+    }
+
+    return deduplicatedReport;
 }

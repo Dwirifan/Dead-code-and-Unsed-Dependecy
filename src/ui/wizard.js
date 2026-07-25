@@ -33,7 +33,7 @@ export async function launchWizard() {
             }
         ]);
         action = answer.action;
-    } catch (err) {
+    } catch (_err) {
         // Tangani Ctrl+C (ExitPromptError) agar tidak crash
         console.log(uiColors.muted('\n\n[.] Keluar. Sampai jumpa!\n'));
         process.exit(0);
@@ -84,7 +84,7 @@ export async function launchWizard() {
             ]);
             targetDirectory = answer.targetDirectory;
         }
-    } catch (err) {
+    } catch (_err) {
         console.log(uiColors.muted('\n\n[.] Keluar. Sampai jumpa!\n'));
         process.exit(0);
     }
@@ -139,8 +139,7 @@ export async function launchWizard() {
                             choices: [
                                 { name: 'Level 3 - Aggressive Delete', value: '3' },
                                 { name: 'Level 2 - Safe Refactor', value: '2' },
-                                { name: 'Level 1 - Safe Skip', value: '1' },
-                                { name: 'Level 0 - Dry Run', value: '0' }
+                                { name: 'Level 1 - Safe Skip', value: '1' }
                             ]
                         }
                     ]);

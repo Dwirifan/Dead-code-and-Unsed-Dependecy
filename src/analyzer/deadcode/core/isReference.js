@@ -47,6 +47,7 @@ export function isReference(node, parent, grandParent) {
 
     // Spesifikator Ekspor 
     if (parent.type === 'ExportSpecifier' && parent.exported === node) return false;
+    if (parent.type === 'ExportAllDeclaration' && parent.exported === node) return false;
 
     // Nama kelas deklarasi murni
     if (parent.type === 'ClassDeclaration' && parent.id === node) return false;
@@ -79,6 +80,8 @@ export function isReference(node, parent, grandParent) {
     if (parent.type === 'TSTypeAliasDeclaration' && parent.id === node) return false;
     if (parent.type === 'TSEnumDeclaration' && parent.id === node) return false;
     if (parent.type === 'TSModuleDeclaration' && parent.id === node) return false;
+    if (parent.type === 'TSImportEqualsDeclaration' && parent.id === node) return false;
+    if (parent.type === 'TSDeclareFunction' && parent.id === node) return false;
     if (parent.type === 'ClassExpression' && parent.id === node) return false;
 
     // TypeScript & Class: Nama properti (keys) BUKAN referensi variabel

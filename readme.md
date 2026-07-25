@@ -89,25 +89,47 @@ Displays backup history created by the `fix` command and allows restoration of p
 deadkiller history <path>
 ```
 
-## Configuration
+## Setup & Configuration
 
-You can customize DeadKiller's behavior by creating a `.deadkillerrc.json` file in your project's root directory:
+The easiest way to set up DeadKiller in your project is by using the interactive initialization command. It will scan your project and generate the appropriate configuration file.
 
-```json
-{
-  "mode": "vanilla",
-  "ignorePrefixedVariables": "^_",
-  "preserveExports": true,
-  "preserveFiles": [],
-  "ignoreDependencies": [],
-  "entryPoints": []
-}
+```bash
+deadkiller init
+```
+This command allows you to choose between two configuration formats:
+- **JavaScript Dinamis (`deadkiller.config.js`)** - Mendukung konfigurasi dinamis (opsi disarankan).
+- **JSON Statis (`.deadkillerrc.json`)**
+
+### Configuration Options
+
+Berikut adalah contoh konfigurasi penuh yang dihasilkan:
+
+```javascript
+// deadkiller.config.js
+export default {
+    mode: "react",
+    entryPoints: ["src/index.js"], // Opsional: Kosongkan array untuk Auto-Detection
+    ignorePrefixedVariables: "^_",
+    preserveExports: true,
+    preserveFiles: ["**/*.test.js", "__tests__"],
+    ignoreDependencies: [],
+    globals: [],
+    overrides: [
+        {
+            files: ["**/*.test.js", "tests/**/*.js"],
+            ignorePrefixedVariables: ".*",
+            preserveExports: true
+        }
+    ]
+};
 ```
 
-- **mode**: Framework mode (`vanilla`, `react`, or `next`).
-- **ignorePrefixedVariables**: Regex pattern to ignore specific variables (e.g., `^_` ignores `_unusedVar`).
-- **preserveExports**: Protects all exported functions and variables from deletion.
-- **preserveFiles**: Array of file paths to explicitly exclude from analysis.
+- **mode**: Framework mode (`vanilla`, `react`, `next`, `vue`).
+- **entryPoints**: Array dari path entry point. **Secara default, DeadKiller dapat mendeteksi entry point secara otomatis** berdasarkan `package.json` (`main`, `module`, `workspaces`), struktur framework (Next.js `pages/`, Nuxt `app.vue`, Svelte `App.svelte`), serta konfigurasi bundler (`vite.config.js`, `webpack.config.js`). Anda hanya perlu mengisinya secara manual jika auto-detection gagal atau untuk setup yang spesifik.
+- **ignorePrefixedVariables**: Regex untuk mengabaikan variabel tak terpakai spesifik (contoh: `^_` mengabaikan `_unusedVar`).
+- **preserveExports**: Atur ke `true` jika proyek adalah Library/NPM Package publik agar semua exported functions aman dari penghapusan. Atur ke `false` untuk aplikasi web biasa.
+- **preserveFiles**: Array berupa glob pattern untuk file/folder yang sama sekali tidak boleh dihapus.
+- **overrides**: Aturan khusus yang hanya diterapkan pada pattern file tertentu (contoh: mengabaikan pengecekan variabel di dalam file tests).
 
 ## Confidence and Safety Classification
 

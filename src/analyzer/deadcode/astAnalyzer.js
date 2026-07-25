@@ -11,6 +11,98 @@ import { BUILTIN_GLOBALS } from './core/globals.js';
 // Gabungkan Visitor Keys ESTree standar dengan ekstrasi TypeScript/JSX
 const visitorKeys = { ...estraverse.VisitorKeys, ...tsVisitorKeys };
 
+/**
+ * Mengecek apakah sebuah AST expression bersifat statis/pure (tidak memiliki side-effect saat dievaluasi).
+ */
+function isPureExpression(node) {
+    if (!node) return true; // Tidak ada inisialisasi (let x;) adalah pure
+
+    switch (node.type) {
+        case 'Literal':
+        case 'Identifier':
+        case 'ArrowFunctionExpression':
+        case 'FunctionExpression':
+        case 'ClassExpression':
+        case 'ThisExpression':
+        case 'Super':
+        case 'MetaProperty': // import.meta
+            return true;
+        case 'TemplateLiteral':
+            return node.expressions.every(isPureExpression);
+        case 'UnaryExpression':
+            return isPureExpression(node.argument);
+        case 'UpdateExpression':
+            return false; // ++x, x-- punya side effect
+        case 'BinaryExpression':
+        case 'LogicalExpression':
+            return isPureExpression(node.left) && isPureExpression(node.right);
+        case 'ConditionalExpression':
+            return isPureExpression(node.test) && isPureExpression(node.consequent) && isPureExpression(node.alternate);
+        case 'ArrayExpression':
+            return node.elements.every(elem => !elem || isPureExpression(elem));
+        case 'ObjectExpression':
+            return node.properties.every(prop => {
+                if (prop.type === 'SpreadElement') return isPureExpression(prop.argument);
+                return isPureExpression(prop.key) && isPureExpression(prop.value);
+            });
+        case 'MemberExpression':
+            return !node.computed ? isPureExpression(node.object) : (isPureExpression(node.object) && isPureExpression(node.property));
+        case 'CallExpression': {
+            let callName = '';
+            if (node.callee.type === 'Identifier') {
+                callName = node.callee.name;
+            } else if (node.callee.type === 'MemberExpression') {
+                const objName = node.callee.object.type === 'Identifier' ? node.callee.object.name : '';
+                const propName = !node.callee.computed && node.callee.property.type === 'Identifier' ? node.callee.property.name : '';
+                if (objName && propName) callName = `${objName}.${propName}`;
+            }
+
+            const pureWhitelist = new Set([
+                'path.dirname', 'path.resolve', 'path.join', 'path.basename', 'path.extname', 'path.normalize',
+                'fileURLToPath', 'require', 'Symbol', 'Symbol.for', 'Object.create', 'Object.freeze',
+                'Object.assign', 'Object.defineProperty', 'Object.keys', 'Object.values', 'Object.entries',
+                'Array.isArray', 'Boolean', 'String', 'Number', 'parseInt', 'parseFloat'
+            ]);
+
+            if (pureWhitelist.has(callName)) {
+                return node.arguments.every(arg => !arg || isPureExpression(arg));
+            }
+            return false;
+        }
+        default:
+            return false;
+    }
+}
+
+/**
+ * Smart Background Analysis 3 Lapis: Mengecek apakah variabel yang berawalan ignore
+ * (seperti _req, _e, atau __dirname) sebenarnya adalah 100% Dead Code mandiri tanpa side effect.
+ */
+function is100PercentDeadIgnoredVariable(info) {
+    if (!info || !info.node) return false;
+
+    // Lapis 1 & 2: Bukan parameter, bukan catch parameter, bukan import, bukan class/function
+    if (['Parameter', 'CatchParameter', 'Import', 'Class', 'Function'].includes(info.type)) {
+        return false;
+    }
+
+    // Pastikan ini adalah deklarasi variabel biasa
+    if (info.type !== 'Variable') {
+        return false;
+    }
+
+    // Pastikan deklarasi adalah mandiri (Identifier), BUKAN hasil destructuring (ArrayPattern / ObjectPattern)
+    if (info.node.type === 'VariableDeclarator') {
+        if (!info.node.id || info.node.id.type !== 'Identifier') {
+            return false; // Terikat sintaks destructuring (misal: const { pwd: _pwd, ...rest } = obj)
+        }
+        // Lapis 3: Evaluasi side effect pada inisialisasinya
+        return isPureExpression(info.node.init);
+    }
+
+    return false;
+}
+
 export function analyzeAstCode(ast, fileName = null, globalRegistry = null, ruleEngine = null) {
     const allScopes = [];
     const globalScope = new Scope();
@@ -20,6 +112,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
     let scopeStack = [globalScope];
     let scopeTypeStack = ['global']; 
     const parentStack = []; 
+    const ownerStack = []; 
 
     // Phase 1: Murni memetakan Variable Scope & Referensi Variabel
     estraverse.traverse(ast, {
@@ -121,6 +214,16 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                 });
             }
 
+            if (node.type === 'TSImportEqualsDeclaration' && node.id) {
+                const isTypeImport = node.isTypeOnly || node.importKind === 'type';
+                const declarationType = isTypeImport ? 'UnusedType' : 'Variable';
+                currentScope.addDeclaration(node.id.name, declarationType, node.loc ? node.loc.start.line : 0, node.id, { isImport: true });
+            }
+
+            if (node.type === 'ExportAllDeclaration' && node.exported && node.exported.type === 'Identifier') {
+                currentScope.addDeclaration(node.exported.name, 'Variable', node.loc.start.line, node.exported, { isImport: true, isExport: true });
+            }
+
             // Pendataan TypeScript-only Deklarasi (Interface, Type Alias, Enum)
             if (node.type === 'TSInterfaceDeclaration' && node.id) {
                 currentScope.addDeclaration(node.id.name, 'UnusedType', node.loc.start.line, node);
@@ -140,10 +243,22 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                 }
             }
             if (node.type === 'TSModuleDeclaration' && node.id) {
-                currentScope.addDeclaration(node.id.name, 'Variable', node.loc.start.line, node);
+                currentScope.addDeclaration(node.id.name, 'Variable', node.loc ? node.loc.start.line : 0, node);
+            }
+            if (node.type === 'TSDeclareFunction' && node.id) {
+                currentScope.addDeclaration(node.id.name, 'Function', node.loc ? node.loc.start.line : 0, node);
             }
             if (node.type === 'TSTypeParameter' && node.name && node.name.type === 'Identifier') {
                 currentScope.addDeclaration(node.name.name, 'UnusedType', node.loc.start.line, node);
+            }
+
+            // Melacak owner untuk Fixed-Point Iterative Elimination
+            if (node.type === 'VariableDeclarator') {
+                const identifiers = extractIdentifiers(node.id);
+                const declarationKind = (parent && parent.type === 'VariableDeclaration') ? parent.kind : 'let';
+                const targetScope = (declarationKind === 'var') ? findFunctionScope(scopeStack, scopeTypeStack) : currentScope;
+                const declInfos = identifiers.map(({ name }) => targetScope.declarations.get(name)).filter(Boolean);
+                ownerStack.push(declInfos.length > 0 ? declInfos : null);
             }
 
             // Implicit JSX React Usage (Older React)
@@ -151,7 +266,8 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
             if (node.type === 'JSXElement' || node.type === 'JSXFragment') {
                 const reactRuntime = ruleEngine && ruleEngine.rules ? ruleEngine.rules.reactRuntime : 'classic';
                 if (reactRuntime === 'classic') {
-                    currentScope.addReadReference('React', node);
+                    const currentOwners = ownerStack.length > 0 ? ownerStack[ownerStack.length - 1] : null;
+                    currentScope.addReadReference('React', node, currentOwners);
                 }
             }
 
@@ -159,6 +275,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
             if (node.type === 'Identifier' || node.type === 'JSXIdentifier') {
                 const grandParent = parentStack.length >= 3 ? parentStack[parentStack.length - 3] : null;
                 if (isReference(node, parent, grandParent)) {
+                    const currentOwners = ownerStack.length > 0 ? ownerStack[ownerStack.length - 1] : null;
                     const isWriteContext = (
                         (parent.type === 'AssignmentExpression' && parent.left === node && parent.operator === '=')
                     );
@@ -169,17 +286,17 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     );
 
                     if (isCompoundWrite) {
-                        currentScope.addReadReference(node.name, node);
-                        currentScope.addWriteReference(node.name, node);
+                        currentScope.addReadReference(node.name, node, currentOwners);
+                        currentScope.addWriteReference(node.name, node, currentOwners);
                     } else if (isWriteContext) {
-                        currentScope.addWriteReference(node.name, node);
+                        currentScope.addWriteReference(node.name, node, currentOwners);
                     } else {
-                        currentScope.addReadReference(node.name, node);
+                        currentScope.addReadReference(node.name, node, currentOwners);
                         
                         // FITUR 6 & 7: Deteksi properti pada Namespace / Enum
                         if (parent.type === 'MemberExpression' && parent.object === node && !parent.computed && parent.property.type === 'Identifier') {
                             const memberKey = `${node.name}.${parent.property.name}`;
-                            currentScope.addReadReference(memberKey, parent.property);
+                            currentScope.addReadReference(memberKey, parent.property, currentOwners);
                         }
                     }
                 }
@@ -187,6 +304,9 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
         },
         leave: function (node, parent) {
             parentStack.pop();
+            if (node.type === 'VariableDeclarator') {
+                ownerStack.pop();
+            }
             if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)) {
                 scopeStack.pop();
                 scopeTypeStack.pop();
@@ -203,8 +323,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     currentScope = scopeStack[scopeStack.length - 1];
                 }
             }
-        },
-        keys: visitorKeys
+        }
     });
 
     // Phase 2: Hubungkan Expor / Lintas Modul
@@ -213,6 +332,61 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
     // Phase 3: Analisis Scope
     allScopes.forEach(s => s.resolve());
 
+    // Phase 3.5: Fixed-Point Iterative Elimination (Cascading Dead Code Detection)
+    // Melakukan konvergensi loop dalam memori untuk mendeteksi dead code berantai dalam 1 scan.
+    const deadDeclarations = new Set();
+    let newlyDead = [];
+
+    allScopes.forEach(scope => {
+        scope.declarations.forEach((info, name) => {
+            if (info.readCount === 0 && info.type !== 'CatchParameter') {
+                const isIgnored = ruleEngine && ruleEngine.isIgnoredVariable(name, fileName);
+                if (!isIgnored || is100PercentDeadIgnoredVariable(info)) {
+                    deadDeclarations.add(info);
+                    newlyDead.push(info);
+                }
+            }
+        });
+    });
+
+    while (newlyDead.length > 0) {
+        const nextDead = [];
+        
+        allScopes.forEach(scope => {
+            // Evaluasi Read References
+            scope.readReferences.forEach(ref => {
+                if (!ref.active || !ref.targetDecl || !ref.owners) return;
+                const allOwnersDead = ref.owners.every(owner => deadDeclarations.has(owner));
+                if (allOwnersDead) {
+                    ref.active = false;
+                    ref.targetDecl.readCount--;
+                    if (ref.targetDecl.readCount === 0) {
+                        ref.targetDecl.used = false;
+                        if (ref.targetDecl.type !== 'CatchParameter' && !deadDeclarations.has(ref.targetDecl)) {
+                            const isIgnored = ruleEngine && ruleEngine.isIgnoredVariable(ref.targetDecl.name, fileName);
+                            if (!isIgnored || is100PercentDeadIgnoredVariable(ref.targetDecl)) {
+                                deadDeclarations.add(ref.targetDecl);
+                                nextDead.push(ref.targetDecl);
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Evaluasi Write References (supaya writeCount akurat saat writernya sudah mati)
+            scope.writeReferences.forEach(ref => {
+                if (!ref.active || !ref.targetDecl || !ref.owners) return;
+                const allOwnersDead = ref.owners.every(owner => deadDeclarations.has(owner));
+                if (allOwnersDead) {
+                    ref.active = false;
+                    ref.targetDecl.writeCount--;
+                }
+            });
+        });
+
+        newlyDead = nextDead;
+    }
+
     // Phase 4: Pengumpulan Dead Variables
     const deadCode = [];
     const processedParents = new Set();
@@ -220,8 +394,11 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
 
     allScopes.forEach(scope => {
         scope.declarations.forEach((info, name) => {
-            if (!info.used && info.type !== 'CatchParameter' && !(ruleEngine && ruleEngine.isIgnoredVariable(name, fileName))) {
-                allDeadNames.add(name);
+            if (!info.used && info.type !== 'CatchParameter') {
+                const isIgnored = ruleEngine && ruleEngine.isIgnoredVariable(name, fileName);
+                if (!isIgnored || is100PercentDeadIgnoredVariable(info)) {
+                    allDeadNames.add(name);
+                }
             }
         });
     });
@@ -230,7 +407,8 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
        scope.declarations.forEach((info, name) => {
            if (!info.used) {
                if (info.type === 'CatchParameter') return; // JANGAN laporkan parameter catch karena menghapusnya bisa merusak sintaks (catch ())
-               if (ruleEngine && ruleEngine.isIgnoredVariable(name, fileName)) return;
+               const isIgnored = ruleEngine && ruleEngine.isIgnoredVariable(name, fileName);
+               if (isIgnored && !is100PercentDeadIgnoredVariable(info)) return;
 
                let targetNode = info.node;
 
@@ -260,10 +438,10 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     info.node.type === 'ImportSpecifier' ||
                     info.node.type === 'ImportDefaultSpecifier' ||
                     info.node.type === 'ImportNamespaceSpecifier' ||
-                    (info.node.type === 'Identifier' && info.parentNode && info.parentNode.type === 'ImportDeclaration')
+                    (info.node.type === 'Identifier' && info.parentNode && (info.parentNode.type === 'ImportDeclaration' || info.parentNode.isImport))
                 );
 
-                const { confidence, status } = classifyConfidence(effectiveType, { isImport });
+                const { confidence, status, reason } = classifyConfidence(effectiveType, { isImport });
 
                 deadCode.push({
                     name,
@@ -271,7 +449,8 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     line: info.line,
                     node: targetNode,
                     confidence,
-                    status
+                    status,
+                    reason
                 });
            }
        });
@@ -287,14 +466,15 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                 if (!localName) continue;
                 const key = `${modulePath}::${localName}`;
                 if (importMap.has(key)) {
-                    const { confidence, status } = classifyConfidence('DuplicateImport');
+                    const { confidence, status, reason } = classifyConfidence('DuplicateImport');
                     deadCode.push({
                         name: `Duplicate import '${localName}' from '${modulePath}'`,
                         type: 'DuplicateImport',
                         line: spec.loc ? spec.loc.start.line : node.loc.start.line,
                         node: node,
                         confidence,
-                        status
+                        status,
+                        reason
                     });
                 } else {
                     importMap.set(key, true);

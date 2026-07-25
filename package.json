@@ -11,7 +11,9 @@
   },
   "scripts": {
     "test": "vitest run --passWithNoTests",
-    "coverage": "vitest run --coverage"
+    "coverage": "vitest run --coverage",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
   },
   "keywords": [],
   "author": "",
@@ -33,7 +35,9 @@
     "ora": "^9.3.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@vitest/coverage-v8": "^4.1.8",
+    "eslint": "^10.8.0",
     "vitest": "^4.1.8"
   }
 }

@@ -114,7 +114,7 @@ function _detectTooManyStates(ast, findings, threshold, visitorKeys) {
  * Mendeteksi komponen fungsional React yang menerima terlalu banyak props
  * (melebihi batas threshold yang ditentukan).
  */
-function _detectTooManyProps(ast, findings, threshold, visitorKeys) {
+function _detectTooManyProps(ast, findings, threshold, _visitorKeys) {
     const topLevelFunctions = _collectTopLevelFunctions(ast);
 
     for (const fn of topLevelFunctions) {
