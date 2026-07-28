@@ -144,7 +144,7 @@ export async function removeUnusedDependencies(projectRoot, unusedDeps) {
             throw new Error(`Exited with code ${result.status}${signalDetail}${outputDetail}`);
         }
 
-        return uniqueDeps.length;
+        return { removed: uniqueDeps };
     } catch (err) {
         throw new Error(`Gagal menghapus dependensi. Perintah '${displayCommand}' gagal: ${err.message}`, { cause: err });
     }
