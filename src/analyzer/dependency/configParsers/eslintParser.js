@@ -1,131 +1,136 @@
 import fs from 'fs-extra';
 import path from 'path';
+import {
+    collectStaticConfigValues,
+    createIncompletePropertyDiagnostic,
+    getPropertyName,
+    parseStaticJavaScriptConfig,
+    visitAst,
+} from './staticConfigParser.js';
 
-/**
- * ESLint Config Parser
- *
- * Terinspirasi dari depcheck/src/special/eslint.js
- *
- * Membaca file konfigurasi ESLint dan mengekstrak nama paket NPM yang
- * benar-benar digunakan di dalamnya (plugins, parsers, dan extends/configs).
- *
- * File konfigurasi yang didukung:
- *   - .eslintrc.json
- *   - .eslintrc.js / .eslintrc.cjs
- *   - eslint.config.js / eslint.config.mjs (format flat config ESLint v9+)
- *   - Field "eslintConfig" di dalam package.json
- */
-
-/**
- * Menormalkan nama plugin ESLint ke nama paket NPM lengkap.
- * Contoh: "react" → "eslint-plugin-react"
- *         "@typescript-eslint/typescript" → "@typescript-eslint/eslint-plugin-typescript"
- *
- * @param {string} name
- * @returns {string}
- */
 function normalizePluginName(name) {
-    if (!name) return null;
+    if (!name || typeof name !== 'string') return null;
     if (name.startsWith('@')) {
-        // Scoped package: @scope/name → @scope/eslint-plugin-name (jika belum ada prefix)
-        const [scope, rest] = name.split('/');
-        if (!rest) return `${scope}/eslint-plugin`;
-        if (rest.startsWith('eslint-plugin')) return name;
-        return `${scope}/eslint-plugin-${rest}`;
+        const [scope, packageName] = name.split('/');
+        if (!packageName) return `${scope}/eslint-plugin`;
+        if (packageName.startsWith('eslint-plugin')) return `${scope}/${packageName}`;
+        return `${scope}/eslint-plugin-${packageName}`;
     }
     if (name.startsWith('eslint-plugin-')) return name;
     return `eslint-plugin-${name}`;
 }
 
-/**
- * Menormalkan nama config/extends ESLint ke nama paket NPM lengkap.
- * Contoh: "airbnb" → "eslint-config-airbnb"
- *         "plugin:react/recommended" → "eslint-plugin-react"
- *
- * @param {string} name
- * @returns {string|null}
- */
 function normalizeConfigName(name) {
-    if (!name) return null;
-    // Built-in configs — bukan paket eksternal
+    if (!name || typeof name !== 'string') return null;
     if (name === 'eslint:recommended' || name === 'eslint:all') return null;
-    // Format flat config path lokal
     if (name.startsWith('./') || name.startsWith('../') || path.isAbsolute(name)) return null;
 
-    // "plugin:react/recommended" → ambil nama plugin
     if (name.startsWith('plugin:')) {
-        const pluginPart = name.slice(7); // "react/recommended"
-        const pluginName = pluginPart.split('/')[0]; // "react"
+        const pluginPath = name.slice('plugin:'.length);
+        const parts = pluginPath.split('/');
+        const pluginName = pluginPath.startsWith('@')
+            ? parts.slice(0, 2).join('/')
+            : parts[0];
         return normalizePluginName(pluginName);
     }
 
-    // Scoped config: "@scope/name" → "@scope/eslint-config-name"
     if (name.startsWith('@')) {
-        const [scope, rest] = name.split('/');
-        if (!rest) return `${scope}/eslint-config`;
-        if (rest.startsWith('eslint-config')) return name;
-        return `${scope}/eslint-config-${rest}`;
+        const [scope, packageName] = name.split('/');
+        if (!packageName) return `${scope}/eslint-config`;
+        if (packageName.startsWith('eslint-config')) return `${scope}/${packageName}`;
+        return `${scope}/eslint-config-${packageName}`;
     }
 
-    if (name.startsWith('eslint-config-')) return name;
-    return `eslint-config-${name}`;
+    const packageName = name.split('/')[0];
+    if (packageName.startsWith('eslint-config-')) return packageName;
+    return `eslint-config-${packageName}`;
 }
 
-/**
- * Mengekstrak daftar paket yang digunakan dari satu objek config ESLint.
- *
- * @param {object} config - Objek konfigurasi ESLint yang sudah diparsing
- * @returns {string[]} - Daftar nama paket NPM yang ditemukan
- */
-function extractPackagesFromConfig(config) {
-    if (!config || typeof config !== 'object') return [];
+function addEslintObjectPackages(config, packages) {
+    if (!config || typeof config !== 'object') return;
 
-    const packages = new Set();
+    if (Array.isArray(config)) {
+        config.forEach(entry => addEslintObjectPackages(entry, packages));
+        return;
+    }
 
-    // Ekstrak plugins
     const plugins = config.plugins || [];
-    const pluginList = Array.isArray(plugins) ? plugins : Object.keys(plugins);
-    for (const plugin of pluginList) {
-        const normalized = normalizePluginName(plugin);
-        if (normalized) packages.add(normalized);
+    if (Array.isArray(plugins)) {
+        for (const plugin of plugins) {
+            const normalized = normalizePluginName(plugin);
+            if (normalized) packages.add(normalized);
+        }
+    } else if (plugins && typeof plugins === 'object') {
+        // Flat config memakai alias sebagai key. Nilai objek tidak dapat dipetakan
+        // ke nama paket dari JSON, jadi jangan menebak berdasarkan alias.
     }
 
-    // Ekstrak parser (mis. @typescript-eslint/parser)
-    if (config.parser && typeof config.parser === 'string') {
-        packages.add(config.parser);
-    }
+    if (typeof config.parser === 'string') packages.add(config.parser);
+    if (typeof config.languageOptions?.parser === 'string') packages.add(config.languageOptions.parser);
 
-    // Ekstrak extends / configs
-    const extendsArray = config.extends
+    const extensions = config.extends
         ? (Array.isArray(config.extends) ? config.extends : [config.extends])
         : [];
-    for (const ext of extendsArray) {
-        const normalized = normalizeConfigName(ext);
+    for (const extension of extensions) {
+        const normalized = normalizeConfigName(extension);
         if (normalized) packages.add(normalized);
     }
 
-    // Rekursif ke overrides (untuk format ESLint lama)
     if (Array.isArray(config.overrides)) {
-        for (const override of config.overrides) {
-            for (const pkg of extractPackagesFromConfig(override)) {
-                packages.add(pkg);
-            }
-        }
+        config.overrides.forEach(entry => addEslintObjectPackages(entry, packages));
     }
+}
 
-    return [...packages];
+function extractPackagesFromStaticAst(staticResult, filePath) {
+    const packages = new Set(staticResult.packages);
+    const diagnostics = [...staticResult.diagnostics];
+    if (!staticResult.ast) return { packages, diagnostics };
+
+    visitAst(staticResult.ast, (node) => {
+        if (node.type !== 'Property') return;
+        const propertyName = getPropertyName(node);
+        if (!['plugins', 'parser', 'extends'].includes(propertyName)) return;
+
+        const isFlatPluginObject = propertyName === 'plugins' && node.value?.type === 'ObjectExpression';
+        const extracted = collectStaticConfigValues(
+            node.value,
+            staticResult.importedBindings,
+            { objectValues: isFlatPluginObject },
+        );
+
+        for (const value of extracted.values) {
+            const normalized = propertyName === 'plugins'
+                ? normalizePluginName(value)
+                : propertyName === 'extends'
+                    ? normalizeConfigName(value)
+                    : value;
+            if (normalized) packages.add(normalized);
+        }
+
+        if (!extracted.complete) {
+            diagnostics.push(createIncompletePropertyDiagnostic(filePath, propertyName, node.value));
+        }
+    });
+
+    return { packages, diagnostics };
+}
+
+function parserResult(packages, diagnostics, files) {
+    return {
+        packages,
+        diagnostics,
+        files,
+        complete: !diagnostics.some(d => d.affectsDependencyClassification),
+    };
 }
 
 /**
- * Membaca dan mengurai file konfigurasi ESLint dari direktori proyek.
- *
- * @param {string} projectRoot - Path direktori akar proyek
- * @returns {Promise<string[]>} - Daftar paket NPM yang digunakan oleh ESLint
+ * Versi detail yang tidak pernah mengeksekusi JavaScript config.
  */
-export async function parseEslintConfig(projectRoot) {
-    const usedPackages = new Set();
-
-    // --- Prioritas 1: File konfigurasi ESLint tersendiri ---
+export async function parseEslintConfigDetailed(projectRoot) {
+    const packages = new Set();
+    const diagnostics = [];
+    const files = [];
     const configFiles = [
         '.eslintrc.json',
         '.eslintrc.js',
@@ -135,66 +140,73 @@ export async function parseEslintConfig(projectRoot) {
         'eslint.config.js',
         'eslint.config.mjs',
         'eslint.config.cjs',
+        'eslint.config.ts',
+        'eslint.config.mts',
+        'eslint.config.cts',
     ];
 
     for (const configFile of configFiles) {
         const configPath = path.join(projectRoot, configFile);
         if (!await fs.pathExists(configPath)) continue;
+        files.push(configPath);
 
         try {
-            let config;
-            if (configFile.endsWith('.json') || configFile.endsWith('.yaml') || configFile.endsWith('.yml')) {
-                // JSON / YAML — baca sebagai teks lalu parse
-                const raw = await fs.readFile(configPath, 'utf-8');
-                config = JSON.parse(raw);
+            const raw = await fs.readFile(configPath, 'utf-8');
+            if (configFile.endsWith('.json')) {
+                addEslintObjectPackages(JSON.parse(raw), packages);
+            } else if (configFile.endsWith('.yaml') || configFile.endsWith('.yml')) {
+                diagnostics.push({
+                    source: configPath,
+                    code: 'CONFIG_FORMAT_UNSUPPORTED',
+                    severity: 'warning',
+                    message: 'ESLint YAML config tidak dieksekusi atau ditebak; dependency config diperlakukan sebagai unknown.',
+                    line: null,
+                    affectsDependencyClassification: true,
+                });
             } else {
-                // JS config — gunakan dynamic import
-                // CATATAN: Untuk .eslintrc.js yang menggunakan CJS (module.exports), gunakan createRequire
-                const { createRequire } = await import('module');
-                const require = createRequire(import.meta.url);
-                try {
-                    config = require(configPath);
-                } catch {
-                    // Coba dynamic import sebagai fallback (ESM)
-                    const mod = await import(configPath);
-                    config = mod.default || mod;
-                }
+                const result = extractPackagesFromStaticAst(
+                    parseStaticJavaScriptConfig(raw, configPath),
+                    configPath,
+                );
+                result.packages.forEach(pkg => packages.add(pkg));
+                diagnostics.push(...result.diagnostics);
             }
-
-            // Flat config (Array) — ESLint v9+
-            if (Array.isArray(config)) {
-                for (const entry of config) {
-                    for (const pkg of extractPackagesFromConfig(entry)) {
-                        usedPackages.add(pkg);
-                    }
-                }
-            } else {
-                for (const pkg of extractPackagesFromConfig(config)) {
-                    usedPackages.add(pkg);
-                }
-            }
-            break; // Cukup baca satu file config ESLint
         } catch (err) {
-            // Abaikan error parsing — file mungkin menggunakan syntax yang tidak didukung
-            if (process.env.DEBUG) console.warn(err);
+            diagnostics.push({
+                source: configPath,
+                code: 'CONFIG_READ_FAILED',
+                severity: 'warning',
+                message: `Gagal membaca ESLint config secara statis: ${err.message}`,
+                line: null,
+                affectsDependencyClassification: true,
+            });
         }
     }
 
-    // --- Prioritas 2: Field "eslintConfig" di dalam package.json ---
     const pkgPath = path.join(projectRoot, 'package.json');
     if (await fs.pathExists(pkgPath)) {
         try {
             const pkg = await fs.readJson(pkgPath);
-            if (pkg.eslintConfig) {
-                for (const pkgName of extractPackagesFromConfig(pkg.eslintConfig)) {
-                    usedPackages.add(pkgName);
-                }
-            }
+            if (pkg.eslintConfig) addEslintObjectPackages(pkg.eslintConfig, packages);
         } catch (err) {
-            // Abaikan error baca package.json
-            if (process.env.DEBUG) console.warn(err);
+            diagnostics.push({
+                source: pkgPath,
+                code: 'PACKAGE_CONFIG_READ_FAILED',
+                severity: 'warning',
+                message: `Gagal membaca package.json#eslintConfig: ${err.message}`,
+                line: null,
+                affectsDependencyClassification: true,
+            });
         }
     }
 
-    return [...usedPackages];
+    return parserResult(packages, diagnostics, files);
+}
+
+/**
+ * API lama dipertahankan: Array<string>.
+ */
+export async function parseEslintConfig(projectRoot) {
+    const result = await parseEslintConfigDetailed(projectRoot);
+    return [...result.packages];
 }

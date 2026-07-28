@@ -67,8 +67,7 @@ export function markUsedExports(ast, globalScope, fileName, globalRegistry, rule
                      // Dalam mode strict, kita sengaja tidak me-return true jika tidak ada yang import.
                      return false;
                  }
-                 // Fallback metodologi usang (Global registry lama)
-                 return globalRegistry.usages.has(name);
+                 return false;
              };
 
              if (node.type === 'ExportNamedDeclaration') {

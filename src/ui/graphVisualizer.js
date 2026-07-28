@@ -95,9 +95,42 @@ export function generateMermaidGraph(graph, rootDir, pkgData = { dependencies: {
 
     // === 2. Statistik ===
     const totalEdges = cyEdges.length;
-    const allDeps = new Set(Object.keys({ ...pkgData.dependencies, ...pkgData.devDependencies }));
-    const usedDeps = [...allDeps].filter(d => graph.usedPackages.has(d)).sort();
-    const unusedDeps = [...allDeps].filter(d => !graph.usedPackages.has(d)).sort();
+    const allDeps = new Set(Object.keys({
+        ...pkgData.dependencies,
+        ...pkgData.devDependencies,
+        ...pkgData.peerDependencies,
+        ...pkgData.optionalDependencies
+    }));
+    const nonRemovalSections = new Set(Object.keys({
+        ...pkgData.peerDependencies,
+        ...pkgData.optionalDependencies
+    }));
+    const dependencyReport = reportData?.dependencyReport;
+    const unusedSet = new Set([
+        ...(dependencyReport?.unused || []),
+        ...(dependencyReport?.deadDevDeps || [])
+    ]);
+    const unknownSet = new Set([
+        ...(dependencyReport?.uncertain || []),
+        ...(dependencyReport?.uncertainDevDeps || [])
+    ]);
+
+    // Tanpa DependencyReport, absennya package dari graph hanya berarti UNKNOWN,
+    // bukan bukti bahwa package aman dihapus.
+    if (!dependencyReport) {
+        for (const dependency of allDeps) {
+            if (!graph.usedPackages.has(dependency)) unknownSet.add(dependency);
+        }
+    }
+    for (const dependency of nonRemovalSections) {
+        if (!graph.usedPackages.has(dependency)) unknownSet.add(dependency);
+    }
+
+    const unusedDeps = [...allDeps].filter(d => unusedSet.has(d)).sort();
+    const unknownDeps = [...allDeps].filter(d => unknownSet.has(d) && !unusedSet.has(d)).sort();
+    const usedDeps = [...allDeps]
+        .filter(d => !unusedSet.has(d) && !unknownSet.has(d))
+        .sort();
 
     // === 3. Legend per direktori ===
     const legendItems = Object.entries(dirColorMap)
@@ -108,7 +141,7 @@ export function generateMermaidGraph(graph, rootDir, pkgData = { dependencies: {
     const buildDepList = (deps, emptyKey) => {
         if (deps.length === 0)
             return `<li class="empty-msg" data-i18n="${emptyKey}"></li>`;
-        return deps.map(d => `<li><span class="dep-dot"></span>${d}</li>`).join('');
+        return deps.map(d => `<li><span class="dep-dot"></span>${_escapeHtml(d)}</li>`).join('');
     };
 
     // === 5. Kamus Bilingual ===
@@ -121,9 +154,11 @@ export function generateMermaidGraph(graph, rootDir, pkgData = { dependencies: {
             totalDep: 'Total Dependensi',
             graphTitle: 'Graf Keterlacakan Kode',
             usedTitle: 'Dep. Terpakai',
-            unusedTitle: 'Dep. Mati',
+            unusedTitle: 'Kandidat Tidak Terpakai',
+            unknownTitle: 'Status Belum Pasti',
             emptyUsed: 'Tidak ada dependensi terpakai.',
-            emptyUnused: 'Proyek sangat bersih!',
+            emptyUnused: 'Tidak ada kandidat dependency tidak terpakai.',
+            emptyUnknown: 'Tidak ada dependency berstatus belum pasti.',
             legendTitle: 'Direktori',
             tipZoom: 'Scroll untuk zoom · Drag node untuk pindah · Klik untuk sorot',
             reportTitle: 'Laporan Dead Code',
@@ -148,9 +183,11 @@ export function generateMermaidGraph(graph, rootDir, pkgData = { dependencies: {
             totalDep: 'Total Dependencies',
             graphTitle: 'Code Traceability Graph',
             usedTitle: 'Used Deps.',
-            unusedTitle: 'Dead Deps.',
+            unusedTitle: 'Unused Candidates',
+            unknownTitle: 'Unknown Status',
             emptyUsed: 'No dependencies found in use.',
-            emptyUnused: 'Project is perfectly clean!',
+            emptyUnused: 'No unused dependency candidates.',
+            emptyUnknown: 'No dependencies with unknown status.',
             legendTitle: 'Directories',
             tipZoom: 'Scroll to zoom · Drag nodes to move · Click to highlight',
             reportTitle: 'Dead Code Report',
@@ -399,6 +436,8 @@ export function generateMermaidGraph(graph, rootDir, pkgData = { dependencies: {
             --green-bg:  #ECFDF5;
             --red:       #DC2626;
             --red-bg:    #FFF1F2;
+            --yellow:    #B45309;
+            --yellow-bg: #FFFBEB;
             --radius:    12px;
             --shadow:    0 1px 3px rgba(0,0,0,0.06);
         }
@@ -454,6 +493,7 @@ export function generateMermaidGraph(graph, rootDir, pkgData = { dependencies: {
         }
         .badge.green { background: var(--green-bg); color: var(--green); border-color: #A7F3D0; }
         .badge.red   { background: var(--red-bg);   color: var(--red);   border-color: #FECACA; }
+        .badge.yellow { background: var(--yellow-bg); color: var(--yellow); border-color: #FDE68A; }
 
         /* Stats strip */
         .stats-strip {
@@ -536,9 +576,11 @@ export function generateMermaidGraph(graph, rootDir, pkgData = { dependencies: {
         .dep-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
         .used   .dep-dot { background: var(--green); }
         .unused .dep-dot { background: var(--red); }
+        .unknown .dep-dot { background: var(--yellow); }
         .empty-msg { color: var(--text-3) !important; font-style: italic; }
         .card.used   .card-header h2 { color: var(--green); }
         .card.unused .card-header h2 { color: var(--red); }
+        .card.unknown .card-header h2 { color: var(--yellow); }
 
 
 
@@ -643,6 +685,7 @@ export function generateMermaidGraph(graph, rootDir, pkgData = { dependencies: {
         body.dark .badge         { background: #0d419d30; color: var(--accent); border-color: #1f3a6e; }
         body.dark .badge.green   { background: var(--green-bg); color: var(--green); border-color: #1a472a; }
         body.dark .badge.red     { background: var(--red-bg);   color: var(--red);   border-color: #5c1f1f; }
+        body.dark .badge.yellow  { background: #78350f30; color: #FBBF24; border-color: #78350f; }
         body.dark #cy-graph       { background: linear-gradient(135deg, #0d1117 0%, #161b22 100%); }
         body.dark .ctrl-btn       { background: #161b22; color: #8b949e; border-color: #30363d; }
         body.dark .ctrl-btn:hover { background: #1c2333; color: #58a6ff; border-color: #1f3a6e; }
@@ -678,7 +721,8 @@ export function generateMermaidGraph(graph, rootDir, pkgData = { dependencies: {
             <div class="badge-row">
                 <span class="badge">${validFiles.length} <span data-i18n="filesActive">Active Files</span></span>
                 <span class="badge green">${usedDeps.length} <span data-i18n="usedTitle">Used Deps.</span></span>
-                <span class="badge red">${unusedDeps.length} <span data-i18n="unusedTitle">Dead Deps.</span></span>
+                <span class="badge red">${unusedDeps.length} <span data-i18n="unusedTitle">Unused Candidates</span></span>
+                <span class="badge yellow">${unknownDeps.length} <span data-i18n="unknownTitle">Unknown Status</span></span>
             </div>
         </div>
     </header>
@@ -756,10 +800,23 @@ export function generateMermaidGraph(graph, rootDir, pkgData = { dependencies: {
                     <svg class="card-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
                     </svg>
-                    <h2><span data-i18n="unusedTitle">Dead Deps.</span> (${unusedDeps.length})</h2>
+                    <h2><span data-i18n="unusedTitle">Unused Candidates</span> (${unusedDeps.length})</h2>
                 </div>
                 <ul class="dep-list unused">
                     ${buildDepList(unusedDeps, 'emptyUnused')}
+                </ul>
+            </div>
+
+            <!-- Unknown Deps -->
+            <div class="card unknown">
+                <div class="card-header">
+                    <svg class="card-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M8.227 9a3.773 3.773 0 117.546 0c0 2.25-1.886 2.625-3.023 3.75-.568.562-.75 1.125-.75 2.25m0 3h.008v.008H12V18z" />
+                    </svg>
+                    <h2><span data-i18n="unknownTitle">Unknown Status</span> (${unknownDeps.length})</h2>
+                </div>
+                <ul class="dep-list unknown">
+                    ${buildDepList(unknownDeps, 'emptyUnknown')}
                 </ul>
             </div>
 
@@ -903,13 +960,16 @@ function _buildReportSection(reportData) {
 
     if (unsafeFiles.length > 0) {
         html += `
-        <div class="card" style="margin-bottom:1.25rem">
+        <div class="card" style="margin-bottom:1.25rem; border-left: 4px solid #D97706;">
             <div class="card-header">
                 <svg class="card-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z" /></svg>
-                <h2 style="color:#D97706"><span data-i18n="unsafeTitle">Dynamic Files</span> (${unsafeFiles.length})</h2>
+                <h2 style="color:#D97706"><span data-i18n="unsafeTitle">Conservative Safety Fallback: Dynamic Files</span> (${unsafeFiles.length})</h2>
             </div>
+            <p style="color:#4B5563; font-size:0.875rem; margin-bottom:0.75rem; line-height:1.4;">
+                <strong>Limited Accuracy Disclosure:</strong> File-file berikut mengandung pola kode dinamis (seperti <code>eval</code>, <code>with</code>, <em>computed property</em>, atau <em>dynamic require/import</em>). Untuk mencegah <em>False Positive</em> dan menjaga keamanan kode produksi, DeadKiller mengaktifkan mode <strong>Conservative Safety Fallback</strong> dan menyelamatkan seluruh ekspor dari file-file ini.
+            </p>
             <ul class="report-file-list">
-                ${unsafeFiles.map(f => '<li>\u26A0\uFE0F ' + _escapeHtml(f) + '</li>').join('')}
+                ${unsafeFiles.map(f => '<li>\u26A0\uFE0F <code>' + _escapeHtml(f) + '</code></li>').join('')}
             </ul>
         </div>`;
     }

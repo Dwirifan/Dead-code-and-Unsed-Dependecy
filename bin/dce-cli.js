@@ -12,6 +12,7 @@ import { registerTraceCommand } from '../src/commands/traceCommand.js';
 import { registerWatchCommand } from '../src/commands/watchCommand.js';
 import { registerReportCommand } from '../src/commands/reportCommand.js';
 import { registerInitCommand } from '../src/commands/initCommand.js';
+import { registerUndoCommand } from '../src/commands/undoCommand.js';
 
 // ── Global Ctrl+C handler ──────────────────────────────────────────────────
 // Inquirer v9+ melempar ExitPromptError saat user menekan Ctrl+C.
@@ -44,6 +45,7 @@ registerTraceCommand(program);
 registerWatchCommand(program);
 registerReportCommand(program);
 registerInitCommand(program);
+registerUndoCommand(program);
 
 // ── Engine Startup Orchestrator ───────────────────────────────────────────
 // Tanpa argumen → launch interactive wizard

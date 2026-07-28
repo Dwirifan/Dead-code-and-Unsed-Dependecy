@@ -1,6 +1,7 @@
 import fs from 'fs-extra';
 import path from 'path';
 import { pathToFileURL } from 'url';
+import micromatch from 'micromatch';
 
 /**
  * Mesin Aturan (Rule Engine) untuk memvalidasi apakah dead code
@@ -14,6 +15,7 @@ export class RuleEngine {
             mode: 'vanilla',               // Mode framework: 'vanilla' | 'react' | 'next'
             ignorePrefixedVariables: "^_", // Abaikan variabel berawalan '_'
             preserveExports: true,         // Lindungi fungsi/variabel yg di-export
+            preserveUnsafeFiles: true,     // Lindungi file dinamis (Conservative Safety Fallback)
             preserveFiles: [],             // Lindungi file dari penghapusan
             ignoreDependencies: [],        // Dependensi yang tidak dianggap unused
             entryPoints: [],               // Entry points khusus tambahan
@@ -112,15 +114,9 @@ export class RuleEngine {
         if (this.rules.overrides && Array.isArray(this.rules.overrides)) {
             for (const override of this.rules.overrides) {
                 if (override.files && Array.isArray(override.files)) {
-                    // Evaluasi kecocokan file terhadap target overrides
-                    const isMatch = override.files.some(pattern => {
-                        if (pattern.includes('*')) {
-                            // Konversi glob sederhana ke Regex (cth: **/*.test.js -> .*\.test\.js)
-                            const regexStr = pattern.replace(/\./g, '\\.').replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*');
-                            return new RegExp(`^${regexStr}$`).test(relativePath) || new RegExp(`${regexStr}$`).test(relativePath);
-                        }
-                        return relativePath.includes(pattern);
-                    });
+                    // Evaluasi kecocokan file terhadap target overrides menggunakan micromatch (dukung negasi & array)
+                    const isMatch = micromatch([relativePath], override.files).length > 0 ||
+                                    override.files.some(pattern => !pattern.startsWith('!') && !pattern.includes('*') && relativePath.includes(pattern));
 
                     if (isMatch) {
                         resolvedRules = { ...resolvedRules, ...override };

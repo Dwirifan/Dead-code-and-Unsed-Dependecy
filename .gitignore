@@ -46,10 +46,8 @@ pids
 catatan.txt
 todo.txt
 .deadkiller_backup/
+test/coverage/
 
 # Draft Skripsi / Iterasi
 Draft Skripsi/
 Draft Iterasi/
-
-# Test
-test/

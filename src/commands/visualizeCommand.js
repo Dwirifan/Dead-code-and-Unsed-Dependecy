@@ -6,6 +6,7 @@ import ora from 'ora';
 import { generateMermaidGraph } from '../ui/graphVisualizer.js';
 import { parseCode } from '../parser/astParser.js';
 import { findDeadCode } from '../analyzer/deadcode/index.js';
+import { analyzeProjectDependencies } from '../analyzer/dependency/dependencyReportService.js';
 import { RuleEngine } from '../analyzer/ruleEngine.js';
 import { buildGraphWithInteractiveFallback } from './commandHelpers.js';
 
@@ -36,6 +37,21 @@ export function registerVisualizeCommand(program) {
                 const pkgPath = path.join(absolutePath, 'package.json');
                 let pkgData = { dependencies: {}, devDependencies: {} };
                 if (fs.existsSync(pkgPath)) pkgData = await fs.readJson(pkgPath);
+
+                let dependencyReport;
+                try {
+                    dependencyReport = await analyzeProjectDependencies(absolutePath, graph, ruleEngine);
+                } catch (err) {
+                    dependencyReport = {
+                        unused: [],
+                        deadDevDeps: [],
+                        uncertain: Object.keys(pkgData.dependencies || {}),
+                        uncertainDevDeps: Object.keys(pkgData.devDependencies || {}),
+                        diagnostics: [{ message: err.message }],
+                        analysisComplete: false,
+                        safety: { reasons: [`Analisis dependency gagal: ${err.message}`] }
+                    };
+                }
 
                 // === Kumpulkan data Dead Code untuk ditampilkan di dashboard ===
                 const allDeadNodes = [];
@@ -70,7 +86,8 @@ export function registerVisualizeCommand(program) {
                     reviewNodes: allDeadNodes.filter(n => n.status === 'review'),
                     riskyNodes: allDeadNodes.filter(n => n.status === 'risky'),
                     deadFiles,
-                    unsafeFiles: graph.unsafeFiles ? [...graph.unsafeFiles].map(f => path.relative(absolutePath, f)) : []
+                    unsafeFiles: graph.unsafeFiles ? [...graph.unsafeFiles].map(f => path.relative(absolutePath, f)) : [],
+                    dependencyReport
                 };
 
                 const htmlContent = generateMermaidGraph(graph, absolutePath, pkgData, reportData);

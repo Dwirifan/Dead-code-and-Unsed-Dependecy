@@ -6,8 +6,14 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'html'],
       include: ['src/**/*.js'],
-      exclude: ['src/ui/**', 'src/commands/**'], // Focus coverage on the core analyzer logic
-      reportsDirectory: 'test/coverage'
+      exclude: ['src/ui/**'],
+      reportsDirectory: 'test/coverage',
+      thresholds: {
+        statements: 55,
+        branches: 50,
+        functions: 60,
+        lines: 55
+      }
     },
   },
 });

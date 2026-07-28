@@ -121,6 +121,18 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
         enter: function (node, parent) {
             parentStack.push(node);
 
+            // Deteksi Pola Dinamis (Conservative Bailout: require(var), eval, with, computed member)
+            if (globalRegistry && fileName) {
+                if (!globalRegistry.unsafeFiles) globalRegistry.unsafeFiles = new Set();
+                if ((node.type === 'CallExpression' && node.callee.name === 'eval') ||
+                    (node.type === 'WithStatement') ||
+                    (node.type === 'MemberExpression' && node.computed && node.property.type !== 'Literal') ||
+                    (node.type === 'CallExpression' && node.callee.name === 'require' && node.arguments.length > 0 && node.arguments[0].type !== 'Literal' && node.arguments[0].type !== 'TemplateLiteral') ||
+                    (node.type === 'ImportExpression' && node.source && node.source.type !== 'Literal' && (node.source.type !== 'TemplateLiteral' || node.source.expressions.length > 0))) {
+                    globalRegistry.unsafeFiles.add(fileName);
+                }
+            }
+
             // Pembuatan Jangkauan (Scope)
             if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)) {
                 const newScope = new Scope(currentScope);
@@ -176,7 +188,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
             // Pendataan Deklarasi Class
             if (node.type === 'ClassDeclaration' && node.id) {
                 if (currentScope.parent) {
-                    currentScope.parent.addDeclaration(node.id.name, 'Variable', node.loc.start.line, node);
+                    currentScope.parent.addDeclaration(node.id.name, 'UnusedClass', node.loc.start.line, node);
                 }
             }
 
@@ -274,7 +286,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
             // Pelacakan Referensi Penggunaan
             if (node.type === 'Identifier' || node.type === 'JSXIdentifier') {
                 const grandParent = parentStack.length >= 3 ? parentStack[parentStack.length - 3] : null;
-                if (isReference(node, parent, grandParent)) {
+                if (isReference(node, parent, grandParent, parentStack)) {
                     const currentOwners = ownerStack.length > 0 ? ownerStack[ownerStack.length - 1] : null;
                     const isWriteContext = (
                         (parent.type === 'AssignmentExpression' && parent.left === node && parent.operator === '=')
@@ -287,9 +299,9 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
 
                     if (isCompoundWrite) {
                         currentScope.addReadReference(node.name, node, currentOwners);
-                        currentScope.addWriteReference(node.name, node, currentOwners);
+                        currentScope.addWriteReference(node.name, parent, currentOwners);
                     } else if (isWriteContext) {
-                        currentScope.addWriteReference(node.name, node, currentOwners);
+                        currentScope.addWriteReference(node.name, parent, currentOwners);
                     } else {
                         currentScope.addReadReference(node.name, node, currentOwners);
                         
@@ -301,6 +313,8 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     }
                 }
             }
+
+
         },
         leave: function (node, parent) {
             parentStack.pop();
@@ -441,7 +455,29 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     (info.node.type === 'Identifier' && info.parentNode && (info.parentNode.type === 'ImportDeclaration' || info.parentNode.isImport))
                 );
 
-                const { confidence, status, reason } = classifyConfidence(effectiveType, { isImport });
+                let isImpureWrite = false;
+                if (effectiveType === 'WriteOnly') {
+                    // Evaluasi inisialisasi: let x = db.save()
+                    if (info.node && info.node.type === 'VariableDeclarator' && info.node.init && !isPureExpression(info.node.init)) {
+                        isImpureWrite = true;
+                    }
+                    // Evaluasi setiap assignment: x = db.save() atau x++
+                    if (!isImpureWrite && info.writeNodes && info.writeNodes.length > 0) {
+                        for (const wn of info.writeNodes) {
+                            if (!wn) continue;
+                            if (wn.type === 'AssignmentExpression' && !isPureExpression(wn.right)) {
+                                isImpureWrite = true;
+                                break;
+                            }
+                            if (wn.type === 'UpdateExpression' || wn.type === 'CallExpression') {
+                                isImpureWrite = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                const { confidence, status, reason } = classifyConfidence(effectiveType, { isImport, isImpureWrite });
 
                 deadCode.push({
                     name,

@@ -27,12 +27,25 @@ export function classifyConfidence(type, info = {}) {
             // Interface/Type/Enum TypeScript yang tidak dipakai
             return { confidence: 'high', status: 'safe', reason: 'Tipe/Interface/Alias TypeScript dideklarasikan tetapi tidak pernah digunakan.' };
 
+        case 'UnusedClass':
+            return { confidence: 'high', status: 'safe', reason: 'Kelas dideklarasikan tetapi tidak pernah diinstansiasi atau digunakan dalam kode.' };
+
         case 'UnusedEnumMember':
             return { confidence: 'high', status: 'safe', reason: 'Anggota Enum tidak pernah direferensikan dalam logika aplikasi.' };
 
         case 'WriteOnly':
-            // Variable yang hanya ditulis tapi tidak pernah dibaca
-            return { confidence: 'medium', status: 'review', reason: 'Variabel hanya diberi nilai (assign) tetapi nilainya tidak pernah dibaca (perlu peninjauan side-effect).' };
+            if (info && info.isImpureWrite) {
+                return {
+                    confidence: 'medium',
+                    status: 'review',
+                    reason: 'Variabel Write-Only memiliki penugasan dengan efek samping (side-effect seperti panggilan fungsi/IO). Kebijakan: Hanya hapus deklarasi variabelnya, tetapi pertahankan instruksi eksekusi fungsinya.'
+                };
+            }
+            return {
+                confidence: 'high',
+                status: 'safe',
+                reason: 'Variabel hanya diberi nilai (assign) dengan ekspresi murni (pure) tetapi nilainya tidak pernah dibaca (aman untuk dihapus sepenuhnya).'
+            };
 
         case 'DeadStore':
             // Penugasan berulang sia-sia (Wasted Computation)
@@ -65,7 +78,16 @@ export function classifyConfidence(type, info = {}) {
 
         // === LOW CONFIDENCE (Berisiko tinggi) ===
         case 'ClassMethod':
-            return { confidence: 'low', status: 'risky', reason: 'Metode kelas tidak terdeteksi dipanggil secara eksplisit (risiko dipanggil via dynamic/framework callback).' };
+            if (info && info.hasDecorator) {
+                return { confidence: 'low', status: 'risky', reason: 'Metode kelas menggunakan dekorator refleksi/framework (berisiko tinggi jika dihapus).' };
+            }
+            if (info && (info.isPrivate || info.accessibility === 'private')) {
+                return { confidence: 'high', status: 'safe', reason: 'Metode privat (#/private) tidak pernah dipanggil di dalam kelasnya sendiri (100% aman dihapus).' };
+            }
+            if (info && (info.isProtected || info.accessibility === 'protected') && info.isLeafClass) {
+                return { confidence: 'high', status: 'safe', reason: 'Metode protected pada leaf class (tanpa kelas turunan) tidak pernah dipanggil (aman dihapus).' };
+            }
+            return { confidence: 'low', status: 'risky', reason: 'Metode publik atau berpotensi diwarisi tidak terdeteksi dipanggil secara eksplisit (risiko dipanggil via eksternal/framework callback).' };
 
         case 'Parameter':
             return { confidence: 'low', status: 'risky', reason: 'Parameter fungsi tidak digunakan dalam tubuh fungsi (risiko mengubah tanda tangan/API fungsi jika dihapus).' };

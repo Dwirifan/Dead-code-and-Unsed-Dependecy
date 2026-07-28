@@ -1,49 +1,86 @@
-import { parseEslintConfig } from './eslintParser.js';
-import { parseBabelConfig } from './babelParser.js';
+import { parseEslintConfigDetailed } from './eslintParser.js';
+import { parseBabelConfigDetailed } from './babelParser.js';
+import { parsePackageJsonConfigDetailed } from './packageJsonConfigParser.js';
+
+const PARSERS = [
+    { name: 'eslint', run: parseEslintConfigDetailed },
+    { name: 'babel', run: parseBabelConfigDetailed },
+    { name: 'package-json-implicit', run: parsePackageJsonConfigDetailed },
+];
 
 /**
- * Config Parser Runner (Orkestrasi)
+ * Kontrak detail untuk consumer baru.
  *
- * Bertanggung jawab menjalankan seluruh config parser yang tersedia
- * dan menggabungkan hasilnya menjadi satu Set nama paket NPM yang
- * benar-benar digunakan dalam file-file konfigurasi di proyek.
- *
- * Hasil Set ini kemudian digunakan oleh dependencyAnalyzer.js untuk
- * memutuskan apakah sebuah devDependency benar-benar mati (Dead DevDep)
- * atau masih digunakan di dalam sebuah file konfigurasi.
- *
- * Config Parsers yang tersedia:
- *   - eslintParser  : membaca .eslintrc.* / eslint.config.* / package.json#eslintConfig
- *   - babelParser   : membaca babel.config.* / .babelrc / package.json#babel
- *
- * Menambah parser baru cukup dengan:
- *   1. Membuat file baru di folder ini (misal: jestParser.js)
- *   2. Meng-import dan menambahkannya ke dalam fungsi `runConfigParsers` di bawah.
+ * @returns {Promise<{
+ *   usedPackages: Set<string>,
+ *   diagnostics: Array<object>,
+ *   files: string[],
+ *   complete: boolean
+ * }>}
  */
+export async function runConfigParsersDetailed(projectRoot) {
+    const usedPackages = new Set();
+    const diagnostics = [];
+    const files = [];
+
+    const results = await Promise.allSettled(
+        PARSERS.map(parser => parser.run(projectRoot)),
+    );
+
+    results.forEach((result, index) => {
+        const parserName = PARSERS[index].name;
+        if (result.status === 'rejected') {
+            diagnostics.push({
+                source: projectRoot,
+                parser: parserName,
+                code: 'CONFIG_PARSER_FAILED',
+                severity: 'warning',
+                message: `${parserName} config parser gagal: ${result.reason?.message || result.reason}`,
+                line: null,
+                affectsDependencyClassification: true,
+            });
+            return;
+        }
+
+        const detail = result.value;
+        for (const pkg of detail.packages || []) {
+            if (pkg) usedPackages.add(pkg);
+        }
+        diagnostics.push(...(detail.diagnostics || []).map(item => ({
+            parser: parserName,
+            ...item,
+        })));
+        files.push(...(detail.files || []));
+    });
+
+    return {
+        usedPackages,
+        diagnostics,
+        files: [...new Set(files)],
+        complete: !diagnostics.some(item => item.affectsDependencyClassification),
+    };
+}
 
 /**
- * Menjalankan seluruh config parsers dan menggabungkan hasilnya.
- *
- * @param {string} projectRoot - Path absolut direktori akar proyek
- * @returns {Promise<Set<string>>} - Set berisi nama paket NPM yang digunakan di config files
+ * API lama dipertahankan sebagai Set<string>. Metadata baru ditempelkan secara
+ * non-enumerable agar iterasi/serialisasi consumer lama tidak berubah.
  */
 export async function runConfigParsers(projectRoot) {
-    const configUsedPackages = new Set();
-
-    // Jalankan semua parser secara paralel untuk efisiensi
-    const results = await Promise.allSettled([
-        parseEslintConfig(projectRoot),
-        parseBabelConfig(projectRoot),
-    ]);
-
-    for (const result of results) {
-        if (result.status === 'fulfilled' && Array.isArray(result.value)) {
-            for (const pkg of result.value) {
-                if (pkg) configUsedPackages.add(pkg);
-            }
-        }
-        // Jika 'rejected', abaikan dan lanjutkan — parser lain tetap berjalan
-    }
-
-    return configUsedPackages;
+    const result = await runConfigParsersDetailed(projectRoot);
+    const packages = result.usedPackages;
+    Object.defineProperties(packages, {
+        diagnostics: {
+            value: result.diagnostics,
+            enumerable: false,
+        },
+        files: {
+            value: result.files,
+            enumerable: false,
+        },
+        complete: {
+            value: result.complete,
+            enumerable: false,
+        },
+    });
+    return packages;
 }

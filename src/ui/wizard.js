@@ -5,6 +5,8 @@ import path from 'path';
 import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { showBanner, uiColors } from './theme.js';
+import { collectDepCandidates } from '../commands/showDepsCommand.js';
+import { removeUnusedDependencies } from '../eliminator/dependencyCleaner.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -112,7 +114,7 @@ export async function launchWizard() {
                     { name: '1. Ya, Eksekusi Fix Sekarang (Bersihkan dead code & dependensi)', value: 'fix' }
                 ];
                 if (!isAdvanced) {
-                    choices.push({ name: '2. Pindai Ulang dengan Detail Linter AST (--advanced)', value: 'advanced' });
+                    choices.push({ name: '2. Pindai Ulang dengan Mode Advanced (Lihat item REVIEW & RISKY)', value: 'advanced' });
                 }
                 choices.push({ name: isAdvanced ? '2. Tidak, Keluar' : '3. Tidak, Keluar', value: 'exit' });
 
@@ -131,16 +133,27 @@ export async function launchWizard() {
                     continue; // Loop kembali untuk eksekusi ulang
                 } else if (nextAction === 'fix') {
                     keepScanning = false;
+
+                    // Level 3 hanya tersedia jika pengguna sudah melihat item REVIEW & RISKY
+                    // (yaitu setelah menjalankan scan --advanced). Konsisten dengan UX:
+                    // "Jangan tawarkan penghapusan sesuatu yang belum pernah kamu lihat."
+                    const elimChoices = [];
+                    if (isAdvanced) {
+                        elimChoices.push({ name: 'Level 3 - Aggressive Delete', value: '3' });
+                    }
+                    elimChoices.push({ name: 'Level 2 - Safe Refactor', value: '2' });
+                    elimChoices.push({ name: 'Level 1 - Safe Skip', value: '1' });
+
+                    if (!isAdvanced) {
+                        console.log(uiColors.muted('  ℹ  Level 3 (Aggressive) tidak tersedia — gunakan --advanced terlebih dahulu untuk melihat item REVIEW & RISKY.\n'));
+                    }
+
                     const { elimLevel } = await inquirer.prompt([
                         {
                             type: 'list',
                             name: 'elimLevel',
                             message: 'Pilih Tingkat Agresi Penghapusan (Elimination Level):',
-                            choices: [
-                                { name: 'Level 3 - Aggressive Delete', value: '3' },
-                                { name: 'Level 2 - Safe Refactor', value: '2' },
-                                { name: 'Level 1 - Safe Skip', value: '1' }
-                            ]
+                            choices: elimChoices
                         }
                     ]);
 
@@ -157,6 +170,62 @@ export async function launchWizard() {
                 // Ctrl+C — abaikan saja
                 if (process.env.DEBUG) console.warn(err);
                 keepScanning = false;
+            }
+        } else if (action === 'show-deps') {
+            // --- Tawarkan opsi fix khusus dependensi setelah tampilan show-deps ---
+            keepScanning = false;
+            try {
+                const absTarget = path.resolve(targetDirectory);
+                const { runtimeCandidates, devCandidates } = await collectDepCandidates(absTarget);
+                const allCandidates = [...runtimeCandidates, ...devCandidates];
+
+                if (allCandidates.length === 0) {
+                    console.log(uiColors.success('\n  ✔ Tidak ada dependensi yang perlu dihapus.\n'));
+                } else {
+                    const { wantFix } = await inquirer.prompt([{
+                        type: 'confirm',
+                        name: 'wantFix',
+                        message: `Ditemukan ${allCandidates.length} kandidat dependensi yang tidak digunakan. Hapus sekarang?`,
+                        default: false
+                    }]);
+
+                    if (wantFix) {
+                        const { selected } = await inquirer.prompt([{
+                            type: 'checkbox',
+                            name: 'selected',
+                            message: 'Pilih dependensi yang ingin dihapus dari package.json:',
+                            choices: [
+                                ...(runtimeCandidates.length > 0
+                                    ? [new inquirer.Separator('── Runtime Dependencies ──'), ...runtimeCandidates]
+                                    : []),
+                                ...(devCandidates.length > 0
+                                    ? [new inquirer.Separator('── devDependencies ──'), ...devCandidates]
+                                    : [])
+                            ]
+                        }]);
+
+                        if (selected.length === 0) {
+                            console.log(uiColors.muted('\n  [.] Tidak ada yang dipilih. Dibatalkan.\n'));
+                        } else {
+                            try {
+                                const result = await removeUnusedDependencies(absTarget, selected);
+                                if (result?.removed?.length > 0) {
+                                    console.log(uiColors.success(`\n  ✔ Berhasil menghapus: ${result.removed.join(', ')} dari package.json.`));
+                                    console.log(uiColors.muted('  Jalankan `npm install` / `pnpm install` untuk memperbarui node_modules.\n'));
+                                } else {
+                                    console.log(uiColors.warning('\n  [!] Tidak ada perubahan yang diterapkan.\n'));
+                                }
+                            } catch (fixErr) {
+                                console.error(uiColors.danger(`\n  [ERROR] Gagal menghapus dependensi: ${fixErr.message}\n`));
+                            }
+                        }
+                    } else {
+                        console.log(uiColors.muted('\n  [.] Dibatalkan. Tidak ada perubahan.\n'));
+                    }
+                }
+            } catch (err) {
+                // Ctrl+C atau error — abaikan saja
+                if (process.env.DEBUG) console.warn(err);
             }
         } else {
             keepScanning = false;

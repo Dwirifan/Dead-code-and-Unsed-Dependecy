@@ -34,7 +34,7 @@ export function findDeadCode(ast, fileName = null, globalRegistry = null, ruleEn
     // 4. Unused Class Methods
     const unusedMethods = findUnusedClassMethods(ast, globalRegistry);
     unusedMethods.forEach(node => {
-        const { confidence, status, reason } = classifyConfidence(node.type);
+        const { confidence, status, reason } = classifyConfidence(node.type, node.info);
         node.confidence = confidence;
         node.status = status;
         node.reason = reason;
@@ -143,17 +143,75 @@ export function findDeadCode(ast, fileName = null, globalRegistry = null, ruleEn
         return !ignoredLines.has(item.line);
     });
 
-    // Deduplikasi temuan berdasarkan baris dan nama elemen
-    const seenKeys = new Set();
-    const deduplicatedReport = [];
-    for (const item of finalReport) {
-        const cleanName = (item.name || '').replace(/^Orphan Function '([^']+)'$/, '$1');
-        const key = `${item.line}::${cleanName}`;
-        if (!seenKeys.has(key)) {
-            seenKeys.add(key);
-            deduplicatedReport.push(item);
+    // Pilar 4: Pemangkasan Hierarki AST (Parent-Child Pruning)
+    // Jika sebuah blok/node (seperti UnusedFunction, DeadBranch, atau DeadCode) mati,
+    // hapus semua temuan anomali lain yang berada di dalam rentang lokasi AST node mati tersebut.
+    const parentDeadTypes = new Set(['DeadBranch', 'DeadCode', 'UnreachableCode', 'UnusedClass']);
+    const parentDeadNodes = finalReport.filter(item => item && item.node && item.node.loc && parentDeadTypes.has(item.type));
+
+    const hierarchicallyPrunedReport = finalReport.filter(item => {
+        if (!item || !item.node || !item.node.loc) return true;
+        for (const parentItem of parentDeadNodes) {
+            if (item === parentItem) continue;
+            const pLoc = parentItem.node.loc;
+            const cLoc = item.node.loc;
+            if (!pLoc || !cLoc || !pLoc.start || !pLoc.end || !cLoc.start || !cLoc.end) continue;
+
+            const startsAfterOrEqual = (cLoc.start.line > pLoc.start.line) || (cLoc.start.line === pLoc.start.line && (cLoc.start.column || 0) >= (pLoc.start.column || 0));
+            const endsBeforeOrEqual = (cLoc.end.line < pLoc.end.line) || (cLoc.end.line === pLoc.end.line && (cLoc.end.column || 0) <= (pLoc.end.column || 0));
+
+            if (startsAfterOrEqual && endsBeforeOrEqual) {
+                if (cLoc.start.line === pLoc.start.line && cLoc.end.line === pLoc.end.line && cLoc.start.column === pLoc.start.column) {
+                    continue;
+                }
+                return false; // Hapus temuan anak dari laporan (Pruned!)
+            }
+        }
+        return true;
+    });
+
+    // Deduplikasi & Pruning Berbasis Lokasi AST (Location-Based Report Deduplication / Pruning)
+    const byLine = new Map();
+    for (const item of hierarchicallyPrunedReport) {
+        if (!item || !item.line) continue;
+        if (!byLine.has(item.line)) byLine.set(item.line, []);
+        byLine.get(item.line).push(item);
+    }
+
+    const prunedReport = [];
+    for (const [lineNo, itemsOnLine] of byLine.entries()) {
+        const hasContradiction = itemsOnLine.some(it => (it.name || '').includes('Contradictory'));
+        const hasBranch = itemsOnLine.some(it => (it.type === 'DeadBranch' && !(it.name || '').includes('Contradictory')) || (it.name || '').includes('Branch') || (it.name || '').includes('Loop'));
+
+        if (hasContradiction && hasBranch) {
+            // Logika Pruning: Jika pada koordinat baris AST yang sama terdapat Contradictory Expression dan Unreachable Branch,
+            // lebur menjadi satu pesan gabungan.
+            const sample = itemsOnLine[0];
+            prunedReport.push({
+                ...sample,
+                name: 'Dead Branch due to Contradictory Condition (always false)',
+                type: 'DeadBranch',
+                line: lineNo,
+                confidence: 'high',
+                status: 'safe',
+                reason: 'Percabangan tidak akan pernah dieksekusi karena kondisi evaluasi selalu bernilai salah (kontradiktif).'
+            });
+        } else {
+            // Deduplikasi reguler pada baris yang sama berdasarkan tipe dan nama elemen
+            const seenTypes = new Set();
+            for (const item of itemsOnLine) {
+                const cleanName = (item.name || '').replace(/^Orphan Function '([^']+)'$/, '$1');
+                const dedupeKey = `${item.type}::${cleanName}`;
+                if (!seenTypes.has(dedupeKey)) {
+                    seenTypes.add(dedupeKey);
+                    prunedReport.push(item);
+                }
+            }
         }
     }
 
-    return deduplicatedReport;
+    // Urutkan kembali berdasarkan nomor baris agar pelaporan teratur
+    prunedReport.sort((a, b) => (a.line || 0) - (b.line || 0));
+
+    return prunedReport;
 }

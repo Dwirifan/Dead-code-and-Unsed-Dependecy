@@ -23,11 +23,21 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # 4. Proses compile/build (Aktifkan baris di bawah ini jika proyek Anda menggunakan TypeScript atau bundler)
+      # 4. Validasi kualitas wajib sebelum publikasi
+      - name: Run lint
+        run: npm run lint
+
+      - name: Run tests
+        run: npm test
+
+      - name: Enforce coverage thresholds
+        run: npm run coverage
+
+      # 5. Proses compile/build (Aktifkan baris di bawah ini jika proyek Anda menggunakan TypeScript atau bundler)
       # - name: Build package
       #   run: npm run build
 
-      # 5. Mempublikasikan ke npm menggunakan token yang aman di GitHub Secrets
+      # 6. Mempublikasikan ke npm menggunakan token yang aman di GitHub Secrets
       - name: Publish to npm
         run: npm publish --access public
         env:

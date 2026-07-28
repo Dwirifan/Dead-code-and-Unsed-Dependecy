@@ -30,6 +30,7 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
 
     // Status Pencatatan Keamanan (Bailout Heuristics) & Memori Analisis
     const unsafeFiles = new Set();
+    const dynamicDependencyFiles = new Set();
     const globalRegistry = {
         usedExports: new Map(), // file -> Set of used exported names
         exports: new Map(), // Exported/Declared Names -> { isUnused, file } (legacy)
@@ -37,7 +38,8 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
         classMethodCalls: new Map(), // className -> Set<methodName> (cross-file tracking)
         calledMethods: new Set(), // methodName (all called method names across project)
         unresolvedImports: [], // { file, importPath } (Fitur 5: Broken Links)
-        projectExports: new Map() // exportName -> Set<filePath> (Fitur 8: Duplicate Exports)
+        projectExports: new Map(), // exportName -> Set<filePath> (Fitur 8: Duplicate Exports)
+        reExportLinks: [] // { fromFile, fromExport, toFile, toExport }
     };
 
     // Filter antrian awal
@@ -136,7 +138,12 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
                     let importDetails = [];
                     let isTypeOnly = false;
 
-                    if (node.type === 'CallExpression' && node.callee.name === 'require') {
+                    const isRequireCall = node.type === 'CallExpression' && node.callee.name === 'require';
+                    const isRequireResolveCall = node.type === 'CallExpression' && node.callee.type === 'MemberExpression' &&
+                        node.callee.object && node.callee.object.name === 'require' &&
+                        node.callee.property && node.callee.property.name === 'resolve';
+
+                    if (isRequireCall || isRequireResolveCall) {
                         if (node.arguments.length > 0 && node.arguments[0].type === 'Literal') {
                             importPath = node.arguments[0].value;
                             importedNames = ['*']; // Conservative fallback
@@ -166,9 +173,11 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
                                 } catch (_e) { }
                             } else {
                                 unsafeFiles.add(currentFile);
+                                dynamicDependencyFiles.add(currentFile);
                             }
                         } else {
                             unsafeFiles.add(currentFile);
+                            dynamicDependencyFiles.add(currentFile);
                         }
                     } else if (node.type === 'CallExpression' && node.callee.type === 'MemberExpression' &&
                         node.callee.object.type === 'MetaProperty' && node.callee.object.meta.name === 'import' &&
@@ -241,9 +250,11 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
                                 } catch (_e) { }
                             } else {
                                 unsafeFiles.add(currentFile);
+                                dynamicDependencyFiles.add(currentFile);
                             }
                         } else {
                             unsafeFiles.add(currentFile);
+                            dynamicDependencyFiles.add(currentFile);
                         }
                     }
 
@@ -254,7 +265,9 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
                                                      importPath.startsWith('#') || 
                                                      importPath.startsWith('$') || 
                                                      importPath.startsWith('~/') || 
-                                                     importPath.startsWith('@/');
+                                                     importPath.startsWith('@/') ||
+                                                     importPath.startsWith('@workspace/') ||
+                                                     importPath.startsWith('workspace:');
                         if (isLocalOrAliasPrefix) {
                             importsToResolve.push({ path: importPath, names: importedNames, details: importDetails, isTypeOnly });
                         } else {
@@ -302,8 +315,10 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
                             const isReExport = typeof item === 'object' && item.isReExport;
                             const isNamespaceMember = typeof item === 'object' && item.isNamespaceMember;
 
-                            if (imported === '*' || imported === 'default' || isReExport || isNamespaceMember || usedIdentifiersInFile.has(local)) {
+                            if (imported === '*' || imported === 'default' || (isReExport && imported === '*') || isNamespaceMember || usedIdentifiersInFile.has(local)) {
                                 globalRegistry.usedExports.get(absolute).add(imported);
+                            } else if (isReExport) {
+                                globalRegistry.reExportLinks.push({ fromFile: currentFile, fromExport: local, toFile: absolute, toExport: imported });
                             }
                         });
 
@@ -360,11 +375,32 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
         }
     }
 
+    // End-Consumer Tracing: Propagasi re-export backwards dari konsumen akhir (Level 3)
+    let reExportChanged = true;
+    while (reExportChanged) {
+        reExportChanged = false;
+        for (const link of globalRegistry.reExportLinks) {
+            const fromUsed = globalRegistry.usedExports.get(link.fromFile);
+            if (fromUsed && (fromUsed.has(link.fromExport) || fromUsed.has('*'))) {
+                let toUsed = globalRegistry.usedExports.get(link.toFile);
+                if (!toUsed) {
+                    toUsed = new Set();
+                    globalRegistry.usedExports.set(link.toFile, toUsed);
+                }
+                if (!toUsed.has(link.toExport)) {
+                    toUsed.add(link.toExport);
+                    reExportChanged = true;
+                }
+            }
+        }
+    }
+
     // 5. Pencarian Siklus Maut (Circular Dependencies)
     globalRegistry.circularDependencies = findCircularDependencies(edges);
     globalRegistry.unsafeFiles = unsafeFiles;
+    globalRegistry.dynamicDependencyFiles = dynamicDependencyFiles;
 
-    return { liveFiles, usedPackages, edges, unsafeFiles, globalRegistry };
+    return { liveFiles, usedPackages, edges, unsafeFiles, dynamicDependencyFiles, globalRegistry };
 }
 
 /**

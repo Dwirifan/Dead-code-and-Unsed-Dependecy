@@ -7,7 +7,7 @@
  * @param {object} [grandParent] - Titik kakek/leluhur dari node (untuk membaca konteks)
  * @returns {boolean} Bernilai 'true' jika node adalah referensi pemanggilan
  */
-export function isReference(node, parent, grandParent) {
+export function isReference(node, parent, grandParent, ancestors = null) {
     if (!parent) return false;
     
     // Kasus-kasus Deklarasi (BUKAN Referensi Pemanggilan)
@@ -75,7 +75,15 @@ export function isReference(node, parent, grandParent) {
     // Pola Pengisian (AssignmentPattern)
     if (parent.type === 'AssignmentPattern' && parent.left === node) return false;
 
-    // TypeScript: Deklarasi nama Interface, Type Alias, Enum, dan Class Expression
+    // TypeScript: Deklarasi dan abstraksi tipe (Pilar 2)
+    // 1. Parameter dalam definisi tipe fungsi/method (misal: (sections: HelpSection[]) => void) BUKAN referensi variabel runtime
+    if (parent.type === 'TSFunctionType' && parent.params && parent.params.includes(node)) return false;
+    if (parent.type === 'TSCallSignatureDeclaration' && parent.params && parent.params.includes(node)) return false;
+    if (parent.type === 'TSConstructSignatureDeclaration' && parent.params && parent.params.includes(node)) return false;
+    if (parent.type === 'TSMethodSignature' && parent.params && parent.params.includes(node)) return false;
+    if (parent.type === 'TSDeclareFunction' && parent.params && parent.params.includes(node)) return false;
+
+    // 2. Deklarasi nama Interface, Type Alias, Enum, Module, dan Generics
     if (parent.type === 'TSInterfaceDeclaration' && parent.id === node) return false;
     if (parent.type === 'TSTypeAliasDeclaration' && parent.id === node) return false;
     if (parent.type === 'TSEnumDeclaration' && parent.id === node) return false;
@@ -83,18 +91,33 @@ export function isReference(node, parent, grandParent) {
     if (parent.type === 'TSImportEqualsDeclaration' && parent.id === node) return false;
     if (parent.type === 'TSDeclareFunction' && parent.id === node) return false;
     if (parent.type === 'ClassExpression' && parent.id === node) return false;
+    if (parent.type === 'TSTypeParameter' && parent.name === node) return false;
 
-    // TypeScript & Class: Nama properti (keys) BUKAN referensi variabel
+    // 3. Nama properti (keys) pada tipe/kelas BUKAN referensi variabel runtime
     if ((parent.type === 'PropertyDefinition' || parent.type === 'ClassProperty') && parent.key === node && !parent.computed) return false;
     if (parent.type === 'TSPropertySignature' && parent.key === node && !parent.computed) return false;
     if (parent.type === 'TSMethodSignature' && parent.key === node && !parent.computed) return false;
     if (parent.type === 'TSIndexSignature') return false;
-
-    // TypeScript: Nama properti di TSEnumMember bukan referensi
     if (parent.type === 'TSEnumMember' && parent.id === node) return false;
 
-    // TypeScript: Parameter Generik
-    if (parent.type === 'TSTypeParameter' && parent.name === node) return false;
+    // 4. Isolasi Scope Sadar-Tipe (Ancestry Check untuk Pilar 2):
+    // Jika identifier berada di dalam node abstraksi tipe (TSTypeAliasDeclaration, TSInterfaceDeclaration, TSFunctionType, TSTypeLiteral, TSDeclareFunction)
+    // dan BUKAN merupakan TSTypeReference (yang merujuk pada tipe yang dideklarasikan/diimpor), abaikan dari graf analisis eksekusi runtime!
+    const typeAbstractionTypes = new Set(['TSTypeAliasDeclaration', 'TSInterfaceDeclaration', 'TSFunctionType', 'TSTypeLiteral', 'TSDeclareFunction']);
+    if (ancestors && Array.isArray(ancestors)) {
+        const inTypeAbstraction = ancestors.some(a => a && typeAbstractionTypes.has(a.type));
+        if (inTypeAbstraction) {
+            if (parent.type !== 'TSTypeReference' && parent.type !== 'TSQualifiedName' && parent.type !== 'TSExpressionWithTypeArguments') {
+                return false;
+            }
+        }
+    } else {
+        if (typeAbstractionTypes.has(parent.type) || (grandParent && typeAbstractionTypes.has(grandParent.type))) {
+            if (parent.type !== 'TSTypeReference' && parent.type !== 'TSQualifiedName' && parent.type !== 'TSExpressionWithTypeArguments') {
+                return false;
+            }
+        }
+    }
 
     return true; // Jika lolos semua jebakan di atas, maka ini adalah The Real Reference
 }

@@ -51,7 +51,6 @@ export class ParseCache {
                 return { ast: cached.ast, code: cached.code };
             }
         } catch (err) {
-            // File mungkin sudah dihapus
             if (process.env.DEBUG) console.warn(err);
         }
 

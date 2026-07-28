@@ -9,25 +9,110 @@ import estraverse from 'estraverse';
  * @param {Map<string, any>} [constMap] - Peta konstanta yang diketahui nilainya
  * @returns {{ falsy: boolean, truthy: boolean, static: boolean }}
  */
+/**
+ * Evaluasi nilai statis dari sebuah node AST (literal, array kosong, properti string/array, optional chaining).
+ */
+function evaluateStaticValue(node, constMap = null) {
+    if (!node) return { static: false, value: undefined };
+
+    if (node.type === 'Literal') {
+        return { static: true, value: node.value };
+    }
+    if (node.type === 'Identifier' && node.name === 'undefined') {
+        return { static: true, value: undefined };
+    }
+    if (node.type === 'Identifier' && constMap && constMap.has(node.name)) {
+        return { static: true, value: constMap.get(node.name) };
+    }
+    if (node.type === 'ArrayExpression') {
+        const elements = node.elements.map(e => (e && e.type === 'Literal') ? e.value : undefined);
+        return { static: true, value: elements };
+    }
+    if (node.type === 'ObjectExpression') {
+        return { static: true, value: {} };
+    }
+    // Optional Chaining (?. / ??)
+    if (node.type === 'ChainExpression') {
+        const inner = node.expression;
+        if (inner && (inner.type === 'MemberExpression' || inner.type === 'OptionalMemberExpression' || inner.type === 'CallExpression' || inner.type === 'OptionalCallExpression')) {
+            const targetObj = inner.object || inner.callee;
+            const objVal = evaluateStaticValue(targetObj, constMap);
+            if (objVal.static && (objVal.value === null || objVal.value === undefined)) {
+                return { static: true, value: undefined };
+            }
+            if (objVal.static && inner.property && !inner.computed && inner.property.name === 'length' && (typeof objVal.value === 'string' || Array.isArray(objVal.value))) {
+                return { static: true, value: objVal.value.length };
+            }
+        }
+    }
+    if (node.type === 'LogicalExpression' && node.operator === '??') {
+        const leftVal = evaluateStaticValue(node.left, constMap);
+        if (leftVal.static) {
+            if (leftVal.value !== null && leftVal.value !== undefined) return leftVal;
+            return evaluateStaticValue(node.right, constMap);
+        }
+    }
+    // Member Expression: str.length, arr.length, arr[0]
+    if (node.type === 'MemberExpression' || node.type === 'OptionalMemberExpression') {
+        const objVal = evaluateStaticValue(node.object, constMap);
+        if (objVal.static && (objVal.value === null || objVal.value === undefined) && node.optional) {
+            return { static: true, value: undefined };
+        }
+        if (objVal.static && !node.computed && node.property.name === 'length' && (typeof objVal.value === 'string' || Array.isArray(objVal.value))) {
+            return { static: true, value: objVal.value.length };
+        }
+        if (objVal.static && node.computed && node.property.type === 'Literal' && node.property.value === 'length' && (typeof objVal.value === 'string' || Array.isArray(objVal.value))) {
+            return { static: true, value: objVal.value.length };
+        }
+        if (objVal.static && Array.isArray(objVal.value) && node.computed && node.property.type === 'Literal' && typeof node.property.value === 'number') {
+            return { static: true, value: objVal.value[node.property.value] };
+        }
+    }
+    // Call Expression: "".trim(), "".charAt(0)
+    if (node.type === 'CallExpression' || node.type === 'OptionalCallExpression') {
+        if (node.callee && (node.callee.type === 'MemberExpression' || node.callee.type === 'OptionalMemberExpression')) {
+            const objVal = evaluateStaticValue(node.callee.object, constMap);
+            if (objVal.static && (objVal.value === null || objVal.value === undefined) && (node.optional || node.callee.optional)) {
+                return { static: true, value: undefined };
+            }
+            if (objVal.static && typeof objVal.value === 'string' && !node.callee.computed) {
+                if (node.callee.property.name === 'trim') return { static: true, value: objVal.value.trim() };
+                if (node.callee.property.name === 'charAt' && node.arguments.length > 0 && node.arguments[0].type === 'Literal') {
+                    return { static: true, value: objVal.value.charAt(node.arguments[0].value) };
+                }
+            }
+        }
+    }
+    // Binary Expression: str.length === 0, arr.length > 0, str === ""
+    if (node.type === 'BinaryExpression') {
+        const leftVal = evaluateStaticValue(node.left, constMap);
+        const rightVal = evaluateStaticValue(node.right, constMap);
+        if (leftVal.static && rightVal.static) {
+            switch (node.operator) {
+                case '===': case '==': return { static: true, value: leftVal.value === rightVal.value };
+                case '!==': case '!=': return { static: true, value: leftVal.value !== rightVal.value };
+                case '>': return { static: true, value: leftVal.value > rightVal.value };
+                case '<': return { static: true, value: leftVal.value < rightVal.value };
+                case '>=': return { static: true, value: leftVal.value >= rightVal.value };
+                case '<=': return { static: true, value: leftVal.value <= rightVal.value };
+            }
+        }
+    }
+    return { static: false, value: undefined };
+}
+
+/**
+ * Evaluasi apakah sebuah AST expression bersifat statis (always truthy/falsy).
+ * Mendukung: Literal, Identifier(undefined), UnaryExpression(!), LogicalExpression(&&, ||, ??),
+ * Constant Propagation, String/Collection Length, dan Optional Chaining.
+ */
 function evaluateStaticBool(node, constMap = null) {
     if (!node) return { falsy: false, truthy: false, static: false };
 
-    // Literal: false, 0, null, "" → falsy; true, 1, "abc" → truthy
-    if (node.type === 'Literal') {
-        return { falsy: !node.value, truthy: !!node.value, static: true };
-    }
-
-    // undefined → always falsy
-    if (node.type === 'Identifier' && node.name === 'undefined') {
-        return { falsy: true, truthy: false, static: true };
-    }
-
-    // ═══ CONSTANT PROPAGATION ═══
-    // Jika identifier diketahui sebagai const dengan nilai literal, evaluasi nilainya.
-    // Contoh: const FLAG = false; if (FLAG) { dead }
-    if (node.type === 'Identifier' && constMap && constMap.has(node.name)) {
-        const value = constMap.get(node.name);
-        return { falsy: !value, truthy: !!value, static: true };
+    // Evaluasi berbasis nilai semantik lintas-tipe (Pilar 1)
+    const valResult = evaluateStaticValue(node, constMap);
+    if (valResult.static) {
+        return { falsy: !valResult.value, truthy: !!valResult.value, static: true };
     }
 
     // void 0 → always undefined → falsy
@@ -46,11 +131,11 @@ function evaluateStaticBool(node, constMap = null) {
     // Double negasi: !!expr
     if (node.type === 'UnaryExpression' && node.operator === '!' &&
         node.argument.type === 'UnaryExpression' && node.argument.operator === '!') {
-        const inner = evaluateStaticBool(node.argument.argument, constMap);
-        if (inner.static) return inner;
+            const inner = evaluateStaticBool(node.argument.argument, constMap);
+            if (inner.static) return inner;
     }
 
-    // LogicalExpression: && dan || dengan literal
+    // LogicalExpression: && dan || dengan literal / symbolic value
     if (node.type === 'LogicalExpression') {
         const left = evaluateStaticBool(node.left, constMap);
         const right = evaluateStaticBool(node.right, constMap);
@@ -91,24 +176,32 @@ function collectConstantMap(ast) {
         if (node.type === 'VariableDeclaration' && node.kind === 'const') {
             for (const decl of node.declarations) {
                 if (decl.id && decl.id.type === 'Identifier' && decl.init) {
-                    // Hanya track literal values (string, number, boolean, null)
                     if (decl.init.type === 'Literal') {
                         constMap.set(decl.id.name, decl.init.value);
                     }
-                    // Track undefined
                     if (decl.init.type === 'Identifier' && decl.init.name === 'undefined') {
                         constMap.set(decl.id.name, undefined);
+                    }
+                    if (decl.init.type === 'ArrayExpression') {
+                        const elements = decl.init.elements.map(e => (e && e.type === 'Literal') ? e.value : undefined);
+                        constMap.set(decl.id.name, elements);
+                    }
+                    if (decl.init.type === 'ObjectExpression') {
+                        constMap.set(decl.id.name, {});
                     }
                 }
             }
         }
-        // ExportNamedDeclaration yang membungkus VariableDeclaration
         if (node.type === 'ExportNamedDeclaration' && node.declaration &&
             node.declaration.type === 'VariableDeclaration' && node.declaration.kind === 'const') {
             for (const decl of node.declaration.declarations) {
                 if (decl.id && decl.id.type === 'Identifier' && decl.init) {
                     if (decl.init.type === 'Literal') {
                         constMap.set(decl.id.name, decl.init.value);
+                    }
+                    if (decl.init.type === 'ArrayExpression') {
+                        const elements = decl.init.elements.map(e => (e && e.type === 'Literal') ? e.value : undefined);
+                        constMap.set(decl.id.name, elements);
                     }
                 }
             }
@@ -117,6 +210,20 @@ function collectConstantMap(ast) {
     return constMap;
 }
 
+
+/**
+ * Mengekstrak nomor baris awal dari sebuah blok percabangan (consequent/alternate/loop body).
+ * Jika berupa BlockStatement dengan body tidak kosong, kembalikan baris dari statement pertama di dalamnya.
+ */
+function getBranchStartLine(branch, fallbackNode) {
+    if (branch && branch.type === 'BlockStatement' && branch.body && branch.body.length > 0) {
+        const firstStmt = branch.body[0];
+        if (firstStmt.loc) return firstStmt.loc.start.line;
+    }
+    if (branch && branch.loc) return branch.loc.start.line;
+    if (fallbackNode && fallbackNode.loc) return fallbackNode.loc.start.line;
+    return 0;
+}
 
 /**
  * Menganalisis dead branch, unreachable code, empty blocks, dan loop patterns.
@@ -155,14 +262,14 @@ export function findUnreachableBranches(ast, ruleEngine = null, fileName = null)
                     unreachableNodes.push({
                         name: 'Unreachable Branch (always false)',
                         type: 'DeadBranch',
-                        line: node.consequent.loc ? node.consequent.loc.start.line : node.loc.start.line,
+                        line: getBranchStartLine(node.consequent, node),
                         node: node.consequent
                     });
                 } else if (result.static && result.truthy && node.alternate) {
                     unreachableNodes.push({
                         name: 'Unreachable Branch (always true)',
                         type: 'DeadBranch',
-                        line: node.alternate.loc ? node.alternate.loc.start.line : node.loc.start.line,
+                        line: getBranchStartLine(node.alternate, node),
                         node: node.alternate
                     });
                 }
@@ -209,7 +316,7 @@ export function findUnreachableBranches(ast, ruleEngine = null, fileName = null)
                     unreachableNodes.push({
                         name: 'Dead Loop (condition always false)',
                         type: 'DeadBranch',
-                        line: node.body.loc ? node.body.loc.start.line : node.loc.start.line,
+                        line: getBranchStartLine(node.body, node),
                         node: node.body
                     });
                 }
@@ -221,7 +328,24 @@ export function findUnreachableBranches(ast, ruleEngine = null, fileName = null)
                     unreachableNodes.push({
                         name: 'Dead Loop (condition always false)',
                         type: 'DeadBranch',
-                        line: node.body.loc ? node.body.loc.start.line : node.loc.start.line,
+                        line: getBranchStartLine(node.body, node),
+                        node: node.body
+                    });
+                }
+            }
+
+            // Pilar 1: Dead Loop pada array/koleksi kosong (for of / for in)
+            if (node.type === 'ForOfStatement' || node.type === 'ForInStatement') {
+                const rightVal = evaluateStaticValue(node.right, constMap);
+                if (rightVal.static && (
+                    (Array.isArray(rightVal.value) && rightVal.value.length === 0) ||
+                    (typeof rightVal.value === 'string' && rightVal.value.length === 0) ||
+                    (rightVal.value && typeof rightVal.value === 'object' && Object.keys(rightVal.value).length === 0)
+                )) {
+                    unreachableNodes.push({
+                        name: 'Dead Loop (collection is empty)',
+                        type: 'DeadBranch',
+                        line: getBranchStartLine(node.body, node),
                         node: node.body
                     });
                 }

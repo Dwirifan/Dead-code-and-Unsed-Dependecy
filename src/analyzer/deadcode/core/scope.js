@@ -20,7 +20,7 @@ export class Scope {
     addDeclaration(name, type, line, node, parentNode = null) {
         // Hanya meregistrasi jika belum pernah dideklarasikan di scope ini (hindari duplikasi)
         if (!this.declarations.has(name)) {
-            this.declarations.set(name, { type, line, node, parentNode, used: false, readCount: 0, writeCount: 0 });
+            this.declarations.set(name, { type, line, node, parentNode, used: false, readCount: 0, writeCount: 0, writeNodes: [] });
         }
     }
 
@@ -73,6 +73,10 @@ export class Scope {
         if (this.declarations.has(name)) {
             const decl = this.declarations.get(name);
             decl.writeCount++;
+            if (originalNode) {
+                decl.writeNodes = decl.writeNodes || [];
+                decl.writeNodes.push(originalNode);
+            }
             if (refObj) refObj.targetDecl = decl;
             // TIDAK menandai used = true; write-only variable tetap dianggap dead
         } else if (this.parent) {

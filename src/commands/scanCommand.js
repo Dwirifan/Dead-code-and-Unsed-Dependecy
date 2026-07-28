@@ -7,7 +7,7 @@ import { performance } from 'perf_hooks';
 import { parseCode } from '../parser/astParser.js';
 import { ParseCache } from '../parser/parseCache.js';
 import { findDeadCode } from '../analyzer/deadcode/index.js';
-import { findUnusedDependencies } from '../analyzer/dependency/dependencyAnalyzer.js';
+import { analyzeProjectDependencies } from '../analyzer/dependency/dependencyReportService.js';
 import { RuleEngine } from '../analyzer/ruleEngine.js';
 import { buildGraphWithInteractiveFallback } from './commandHelpers.js';
 
@@ -99,23 +99,42 @@ export function registerScanCommand(program) {
 
             // Peringatan file dengan pola dinamis (eval, computed property, dynamic import)
             if (graph.unsafeFiles && graph.unsafeFiles.size > 0) {
-                console.log(chalk.yellow(`\n[!] ${graph.unsafeFiles.size} file mengandung pola dinamis (eval/computed property/dynamic import).`));
-                console.log(chalk.gray('    Akurasi analisis pada file ini mungkin berkurang:'));
+                console.log(chalk.yellow(`\n================================================================================`));
+                console.log(chalk.yellow(`[!] CONSERVATIVE SAFETY FALLBACK: Dynamic Code Detected (${graph.unsafeFiles.size} file)`));
+                console.log(chalk.yellow(`================================================================================`));
+                console.log(chalk.gray(`Peringatan: File berikut mengandung pola dinamis (eval, with, computed property,`));
+                console.log(chalk.gray(`dynamic require/import) yang membatasi akurasi analisis statis.`));
+                console.log(chalk.gray(`Untuk mencegah False Positive (salah hapus), DeadKiller mengaktifkan mode`));
+                console.log(chalk.gray(`Conservative Safety Fallback: seluruh ekspor dari file ini DISELAMATKAN.`));
+                console.log(chalk.gray(`--------------------------------------------------------------------------------`));
                 for (const uf of graph.unsafeFiles) {
-                    console.log(chalk.gray(`    - ${path.relative(absolutePath, uf)}`));
+                    console.log(chalk.gray(` - ${path.relative(absolutePath, uf)}`));
                 }
+                console.log(chalk.yellow(`================================================================================\n`));
             }
 
-            // Dependensi tidak terpakai — dianalisis oleh modul dependencyAnalyzer
+            // Satu laporan dependency dipakai ulang oleh output manusia dan JSON
+            // agar hasil antar-interface tetap konsisten.
+            let dependencyReport = null;
+            let dependencyAnalysisError = null;
             try {
-                const depReport = await findUnusedDependencies(absolutePath, graph.usedPackages, ruleEngine);
+                dependencyReport = await analyzeProjectDependencies(absolutePath, graph, ruleEngine);
+                const depReport = dependencyReport;
 
                 // (1) Unused Runtime Dependencies
                 if (depReport.unused.length > 0) {
                     console.log(`\n[+] [Unused Dependencies] (${depReport.totalUnused} dari ${depReport.totalDeclared} runtime deps):`);
                     depReport.unused.forEach(d => console.log(`   - ${d}`));
-                } else {
+                } else if (!depReport.uncertain?.length) {
                     console.log('[+] [Runtime Dependencies]: Clean');
+                } else {
+                    console.log('[?] [Runtime Dependencies]: Tidak ada kandidat unused berkepercayaan tinggi.');
+                }
+
+                if (depReport.uncertain?.length > 0) {
+                    console.log(chalk.yellow(`\n[?] [Unknown Dependencies] (${depReport.uncertain.length}) — bukti belum lengkap, tidak aman dihapus:`));
+                    depReport.uncertain.forEach(d => console.log(`   - ${chalk.yellow(d)}`));
+                    depReport.safety?.reasons?.forEach(reason => console.log(chalk.gray(`     alasan: ${reason}`)));
                 }
 
                 // (2) Missing Dependencies (pakai di kode tapi tidak di package.json)
@@ -136,11 +155,20 @@ export function registerScanCommand(program) {
                     console.log(chalk.yellow(`\n[~] [Dead DevDependencies] (${depReport.deadDevDeps.length}) — Terdaftar di devDependencies tapi tidak ditemukan di kode, scripts, maupun config:`));
                     depReport.deadDevDeps.forEach(d => console.log(`   - ${chalk.yellow(d)}`));
                 }
-            } catch (err) {
-                // package.json tidak ditemukan atau gagal diparsing — lewati analisis dependensi
-                if (process.env.DEBUG) {
-                    console.warn(`[Warning] Gagal menganalisis dependensi proyek:`, err.message);
+                if (depReport.uncertainDevDeps?.length > 0) {
+                    console.log(chalk.yellow(`\n[?] [Unknown DevDependencies] (${depReport.uncertainDevDeps.length}) — perlu review manual:`));
+                    depReport.uncertainDevDeps.forEach(d => console.log(`   - ${chalk.yellow(d)}`));
                 }
+                if (depReport.diagnostics?.length > 0) {
+                    console.log(chalk.yellow('\n[?] [Dependency Diagnostics]:'));
+                    depReport.diagnostics.forEach(item => {
+                        const message = typeof item === 'string' ? item : item.message || JSON.stringify(item);
+                        console.log(chalk.gray(`   - ${message}`));
+                    });
+                }
+            } catch (err) {
+                dependencyAnalysisError = err.message;
+                console.warn(chalk.yellow(`[Warning] Analisis dependency gagal; status dependency dianggap UNKNOWN: ${err.message}`));
             }
 
             // Dead files — normalisasi path glob ke format OS lokal
@@ -353,7 +381,6 @@ export function registerScanCommand(program) {
                     printedAny = true;
                     totalIssues += groupedItems.risky.length;
                 }
-
                 if (groupedItems.other.length > 0) {
                     printedAny = true;
                     console.log(`\n${chalk.gray('[Other]')}`);
@@ -363,11 +390,11 @@ export function registerScanCommand(program) {
                     totalIssues += groupedItems.other.length;
                 }
             } else {
+                // Mode basic: sembunyikan review/risky/other, hanya tampilkan info tersembunyi
                 const hiddenCount = groupedItems.review.length + groupedItems.risky.length + groupedItems.other.length;
                 if (hiddenCount > 0) {
                     console.log(`\n${chalk.gray(`   [i] Disembunyikan ${hiddenCount} peringatan lanjutan AST Linter.`)}`);
                     console.log(`${chalk.gray(`       (Gunakan flag --advanced untuk melihat detailnya)`)}`);
-                    totalIssues += hiddenCount; // Tetap dihitung di statistik total
                 }
             }
 
@@ -377,16 +404,24 @@ export function registerScanCommand(program) {
 
             // Tampilkan Summary Statistics Box
             if (!jsonMode) {
+                const isAdvancedMode = options.advanced || false;
+                // Mode basic: Total Issues = hanya SAFE. Mode advanced: seluruh temuan.
+                const displayedIssues = isAdvancedMode
+                    ? totalIssues
+                    : groupedItems.safe.length;
+
                 console.log('\n┌──────────────────────────────────────────────┐');
                 console.log('│ ' + chalk.bold('📊 SCAN SUMMARY STATISTICS') + '                   │');
                 console.log('├──────────────────────────────────────────────┤');
                 console.log(`│ Total Files Analyzed : ${String(filesToAnalyze.size).padEnd(21)} │`);
                 console.log(`│ Dead Files Found     : ${String(deadFiles.length).padEnd(21)} │`);
-                console.log(`│ Total Issues         : ${String(totalIssues).padEnd(21)} │`);
+                console.log(`│ Total Issues         : ${String(displayedIssues).padEnd(21)} │`);
                 console.log('├──────────────────────────────────────────────┤');
                 console.log(`│ 🟢 Safe to Remove    : ${String(groupedItems.safe.length).padEnd(21)} │`);
-                console.log(`│ 🟡 Needs Review      : ${String(groupedItems.review.length).padEnd(21)} │`);
-                console.log(`│ 🔴 Risky Actions     : ${String(groupedItems.risky.length).padEnd(21)} │`);
+                if (isAdvancedMode) {
+                    console.log(`│ 🟡 Needs Review      : ${String(groupedItems.review.length).padEnd(21)} │`);
+                    console.log(`│ 🔴 Risky Actions     : ${String(groupedItems.risky.length).padEnd(21)} │`);
+                }
                 console.log('├──────────────────────────────────────────────┤');
                 console.log(`│ ⏱️  Scan Time        : ${String(duration + ' ms').padEnd(21)} │`);
                 console.log('└──────────────────────────────────────────────┘\n');
@@ -404,6 +439,17 @@ export function registerScanCommand(program) {
                     },
                     unsafeFiles: graph.unsafeFiles ? [...graph.unsafeFiles].map(f => path.relative(absolutePath, f)) : [],
                     unusedDependencies: [],
+                    uncertainDependencies: [],
+                    missingDependencies: [],
+                    missingBinaries: [],
+                    deadDevDependencies: [],
+                    uncertainDevDependencies: [],
+                    dependencyAnalysis: {
+                        complete: false,
+                        reasons: [],
+                        diagnostics: [],
+                        error: dependencyAnalysisError
+                    },
                     deadFiles: deadFiles.map(f => path.relative(absolutePath, f)),
                     deadCode: allDeadNodes.map(n => ({
                         file: path.relative(absolutePath, n.file),
@@ -415,16 +461,19 @@ export function registerScanCommand(program) {
                         reason: n.reason || ''
                     }))
                 };
-                // Tambahkan data unused deps jika ada
-                try {
-                    const depReport = await findUnusedDependencies(absolutePath, graph.usedPackages, ruleEngine);
-                    jsonResult.unusedDependencies = depReport.unused;
-                    jsonResult.missingDependencies = depReport.missing || [];
-                    jsonResult.deadDevDependencies = depReport.deadDevDeps || [];
-                } catch (err) {
-                    if (process.env.DEBUG) {
-                        console.warn(`[Warning] Gagal mengambil laporan unused dependencies untuk JSON:`, err.message);
-                    }
+                if (dependencyReport) {
+                    jsonResult.unusedDependencies = dependencyReport.unused || [];
+                    jsonResult.uncertainDependencies = dependencyReport.uncertain || [];
+                    jsonResult.missingDependencies = dependencyReport.missing || [];
+                    jsonResult.missingBinaries = dependencyReport.missingBinaries || [];
+                    jsonResult.deadDevDependencies = dependencyReport.deadDevDeps || [];
+                    jsonResult.uncertainDevDependencies = dependencyReport.uncertainDevDeps || [];
+                    jsonResult.dependencyAnalysis = {
+                        complete: dependencyReport.analysisComplete,
+                        reasons: dependencyReport.safety?.reasons || [],
+                        diagnostics: dependencyReport.diagnostics || [],
+                        error: null
+                    };
                 }
 
                 // Output JSON (tanpa menghapus terminal — biarkan user lihat warning sebelumnya)

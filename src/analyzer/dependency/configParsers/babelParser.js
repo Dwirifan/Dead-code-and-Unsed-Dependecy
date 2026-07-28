@@ -1,129 +1,133 @@
 import fs from 'fs-extra';
 import path from 'path';
+import {
+    collectStaticConfigValues,
+    createIncompletePropertyDiagnostic,
+    getPropertyName,
+    parseStaticJavaScriptConfig,
+    visitAst,
+} from './staticConfigParser.js';
 
-/**
- * Babel Config Parser
- *
- * Terinspirasi dari depcheck/src/special/babel.js
- *
- * Membaca file konfigurasi Babel dan mengekstrak nama paket NPM yang
- * benar-benar digunakan di dalamnya (plugins dan presets).
- *
- * File konfigurasi yang didukung:
- *   - babel.config.json
- *   - babel.config.js / babel.config.cjs / babel.config.mjs
- *   - .babelrc / .babelrc.json / .babelrc.js
- *   - Field "babel" di dalam package.json
- */
+function unwrapBabelEntry(entry) {
+    return Array.isArray(entry) ? entry[0] : entry;
+}
 
-/**
- * Menormalkan nama plugin Babel ke nama paket NPM lengkap.
- * Contoh: "transform-runtime" → "babel-plugin-transform-runtime"
- *         "@babel/proposal-class-properties" → "@babel/plugin-proposal-class-properties"
- *
- * @param {string|Array} plugin - Nama plugin (string) atau [name, options]
- * @returns {string|null}
- */
 function normalizePluginName(plugin) {
-    // Babel mengizinkan format [pluginName, options] — ambil nama saja
-    const name = Array.isArray(plugin) ? plugin[0] : plugin;
+    const name = unwrapBabelEntry(plugin);
     if (!name || typeof name !== 'string') return null;
-    // Path lokal — bukan paket
     if (name.startsWith('./') || name.startsWith('../') || path.isAbsolute(name)) return null;
 
     if (name.startsWith('@babel/')) {
-        // @babel/syntax-xxx atau @babel/plugin-xxx
-        if (name.includes('/plugin-') || name.includes('/syntax-')) return name;
-        const rest = name.replace('@babel/', '');
-        return `@babel/plugin-${rest}`;
+        if (name.includes('/plugin-') || name.includes('/syntax-')) return name.split('/').slice(0, 2).join('/');
+        return `@babel/plugin-${name.slice('@babel/'.length).split('/')[0]}`;
     }
-    if (name.startsWith('babel-plugin-')) return name;
-    return `babel-plugin-${name}`;
+
+    if (name.startsWith('@')) {
+        const [scope, packageName] = name.split('/');
+        if (!packageName) return `${scope}/babel-plugin`;
+        if (packageName.startsWith('babel-plugin')) return `${scope}/${packageName}`;
+        return `${scope}/babel-plugin-${packageName}`;
+    }
+
+    const packageName = name.split('/')[0];
+    if (packageName.startsWith('babel-plugin-')) return packageName;
+    return `babel-plugin-${packageName}`;
 }
 
-/**
- * Menormalkan nama preset Babel ke nama paket NPM lengkap.
- * Contoh: "env" → "babel-preset-env"
- *         "@babel/env" → "@babel/preset-env"
- *
- * @param {string|Array} preset - Nama preset (string) atau [name, options]
- * @returns {string|null}
- */
 function normalizePresetName(preset) {
-    const name = Array.isArray(preset) ? preset[0] : preset;
+    const name = unwrapBabelEntry(preset);
     if (!name || typeof name !== 'string') return null;
     if (name.startsWith('./') || name.startsWith('../') || path.isAbsolute(name)) return null;
 
     if (name.startsWith('@babel/')) {
-        if (name.includes('/preset-')) return name;
-        const rest = name.replace('@babel/', '');
-        return `@babel/preset-${rest}`;
+        if (name.includes('/preset-')) return name.split('/').slice(0, 2).join('/');
+        return `@babel/preset-${name.slice('@babel/'.length).split('/')[0]}`;
     }
-    if (name.startsWith('babel-preset-')) return name;
-    return `babel-preset-${name}`;
+
+    if (name.startsWith('@')) {
+        const [scope, packageName] = name.split('/');
+        if (!packageName) return `${scope}/babel-preset`;
+        if (packageName.startsWith('babel-preset')) return `${scope}/${packageName}`;
+        return `${scope}/babel-preset-${packageName}`;
+    }
+
+    const packageName = name.split('/')[0];
+    if (packageName.startsWith('babel-preset-')) return packageName;
+    return `babel-preset-${packageName}`;
 }
 
-/**
- * Mengekstrak daftar paket yang digunakan dari satu objek config Babel.
- *
- * @param {object} config - Objek konfigurasi Babel yang sudah diparsing
- * @returns {string[]} - Daftar nama paket NPM yang ditemukan
- */
-function extractPackagesFromConfig(config) {
-    if (!config || typeof config !== 'object') return [];
+function addBabelObjectPackages(config, packages) {
+    if (!config || typeof config !== 'object') return;
 
-    const packages = new Set();
-
-    // Ekstrak plugins
-    const plugins = config.plugins || [];
-    for (const plugin of plugins) {
+    for (const plugin of config.plugins || []) {
         const normalized = normalizePluginName(plugin);
         if (normalized) packages.add(normalized);
     }
 
-    // Ekstrak presets
-    const presets = config.presets || [];
-    for (const preset of presets) {
+    for (const preset of config.presets || []) {
         const normalized = normalizePresetName(preset);
         if (normalized) packages.add(normalized);
     }
 
-    // Rekursif ke env-specific config (contoh: { env: { test: { plugins: [...] } } })
     if (config.env && typeof config.env === 'object') {
-        for (const envConfig of Object.values(config.env)) {
-            for (const pkg of extractPackagesFromConfig(envConfig)) {
-                packages.add(pkg);
-            }
-        }
+        Object.values(config.env).forEach(entry => addBabelObjectPackages(entry, packages));
     }
-
-    // Rekursif ke overrides
     if (Array.isArray(config.overrides)) {
-        for (const override of config.overrides) {
-            for (const pkg of extractPackagesFromConfig(override)) {
-                packages.add(pkg);
-            }
-        }
+        config.overrides.forEach(entry => addBabelObjectPackages(entry, packages));
     }
+}
 
-    return [...packages];
+function extractPackagesFromStaticAst(staticResult, filePath) {
+    const packages = new Set(staticResult.packages);
+    const diagnostics = [...staticResult.diagnostics];
+    if (!staticResult.ast) return { packages, diagnostics };
+
+    visitAst(staticResult.ast, (node) => {
+        if (node.type !== 'Property') return;
+        const propertyName = getPropertyName(node);
+        if (propertyName !== 'plugins' && propertyName !== 'presets') return;
+
+        const extracted = collectStaticConfigValues(
+            node.value,
+            staticResult.importedBindings,
+            { tupleFirst: true },
+        );
+        for (const value of extracted.values) {
+            const normalized = propertyName === 'plugins'
+                ? normalizePluginName(value)
+                : normalizePresetName(value);
+            if (normalized) packages.add(normalized);
+        }
+        if (!extracted.complete) {
+            diagnostics.push(createIncompletePropertyDiagnostic(filePath, propertyName, node.value));
+        }
+    });
+
+    return { packages, diagnostics };
+}
+
+function parserResult(packages, diagnostics, files) {
+    return {
+        packages,
+        diagnostics,
+        files,
+        complete: !diagnostics.some(d => d.affectsDependencyClassification),
+    };
 }
 
 /**
- * Membaca dan mengurai file konfigurasi Babel dari direktori proyek.
- *
- * @param {string} projectRoot - Path direktori akar proyek
- * @returns {Promise<string[]>} - Daftar paket NPM yang digunakan oleh Babel
+ * Versi detail yang hanya membaca/parse config, tidak pernah mengeksekusinya.
  */
-export async function parseBabelConfig(projectRoot) {
-    const usedPackages = new Set();
-
-    // --- Prioritas 1: File konfigurasi Babel tersendiri ---
+export async function parseBabelConfigDetailed(projectRoot) {
+    const packages = new Set();
+    const diagnostics = [];
+    const files = [];
     const configFiles = [
         'babel.config.json',
         'babel.config.js',
         'babel.config.cjs',
         'babel.config.mjs',
+        'babel.config.ts',
         '.babelrc',
         '.babelrc.json',
         '.babelrc.js',
@@ -133,53 +137,56 @@ export async function parseBabelConfig(projectRoot) {
     for (const configFile of configFiles) {
         const configPath = path.join(projectRoot, configFile);
         if (!await fs.pathExists(configPath)) continue;
+        files.push(configPath);
 
         try {
-            let config;
+            const raw = await fs.readFile(configPath, 'utf-8');
             if (configFile.endsWith('.json') || configFile === '.babelrc') {
-                const raw = await fs.readFile(configPath, 'utf-8');
-                config = JSON.parse(raw);
+                addBabelObjectPackages(JSON.parse(raw), packages);
             } else {
-                // JS config — gunakan createRequire untuk mendukung CJS
-                const { createRequire } = await import('module');
-                const require = createRequire(import.meta.url);
-                try {
-                    config = require(configPath);
-                } catch {
-                    const mod = await import(configPath);
-                    config = mod.default || mod;
-                }
-                // Jika config adalah fungsi (babel.config.js bisa mengekspor fungsi)
-                if (typeof config === 'function') {
-                    config = config({ env: () => false, cache: () => undefined });
-                }
+                const result = extractPackagesFromStaticAst(
+                    parseStaticJavaScriptConfig(raw, configPath),
+                    configPath,
+                );
+                result.packages.forEach(pkg => packages.add(pkg));
+                diagnostics.push(...result.diagnostics);
             }
-
-            for (const pkg of extractPackagesFromConfig(config)) {
-                usedPackages.add(pkg);
-            }
-            break; // Cukup baca satu file config Babel
         } catch (err) {
-            // Abaikan error parsing
-            if (process.env.DEBUG) console.warn(err);
+            diagnostics.push({
+                source: configPath,
+                code: 'CONFIG_READ_FAILED',
+                severity: 'warning',
+                message: `Gagal membaca Babel config secara statis: ${err.message}`,
+                line: null,
+                affectsDependencyClassification: true,
+            });
         }
     }
 
-    // --- Prioritas 2: Field "babel" di dalam package.json ---
     const pkgPath = path.join(projectRoot, 'package.json');
     if (await fs.pathExists(pkgPath)) {
         try {
             const pkg = await fs.readJson(pkgPath);
-            if (pkg.babel) {
-                for (const pkgName of extractPackagesFromConfig(pkg.babel)) {
-                    usedPackages.add(pkgName);
-                }
-            }
+            if (pkg.babel) addBabelObjectPackages(pkg.babel, packages);
         } catch (err) {
-            // Abaikan error baca package.json
-            if (process.env.DEBUG) console.warn(err);
+            diagnostics.push({
+                source: pkgPath,
+                code: 'PACKAGE_CONFIG_READ_FAILED',
+                severity: 'warning',
+                message: `Gagal membaca package.json#babel: ${err.message}`,
+                line: null,
+                affectsDependencyClassification: true,
+            });
         }
     }
 
-    return [...usedPackages];
+    return parserResult(packages, diagnostics, files);
+}
+
+/**
+ * API lama dipertahankan: Array<string>.
+ */
+export async function parseBabelConfig(projectRoot) {
+    const result = await parseBabelConfigDetailed(projectRoot);
+    return [...result.packages];
 }

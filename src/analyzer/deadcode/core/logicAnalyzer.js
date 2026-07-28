@@ -130,15 +130,116 @@ function hasContradiction(node) {
                     if (a.operator === '<=' && b.operator === '>' && b.right.value >= a.right.value) return true;
                 }
             }
+
+            // Pola 4: String & Collection Length Contradiction (Pilar 1)
+            // str === '' && str.length > 0 → kontradiksi
+            if (isCollectionLengthContradiction(a, b) || isCollectionLengthContradiction(b, a)) {
+                return true;
+            }
         }
     }
 
     return false;
 }
 
+/**
+ * Deteksi kontradiksi koleksi/string (Pola 4)
+ * Contoh: str === '' dengan str.length > 0 atau arr.length === 0 dengan arr[0]
+ */
+function isCollectionLengthContradiction(emptyNode, nonEmptyNode) {
+    const emptyTarget = getEmptyCollectionTarget(emptyNode);
+    if (!emptyTarget) return false;
+    const nonEmptyTarget = getNonEmptyCollectionTarget(nonEmptyNode);
+    return nonEmptyTarget && emptyTarget === nonEmptyTarget;
+}
+
+function getTargetKey(node) {
+    if (!node) return null;
+    if (node.type === 'Identifier') return node.name;
+    if (node.type === 'MemberExpression' && !node.computed) {
+        const objKey = getTargetKey(node.object);
+        if (objKey && (node.property.type === 'Identifier' || node.property.type === 'PrivateIdentifier')) {
+            return `${objKey}.${node.property.name}`;
+        }
+    }
+    if (node.type === 'ThisExpression') return 'this';
+    return null;
+}
+
+function getEmptyCollectionTarget(node) {
+    if (node.type !== 'BinaryExpression') return null;
+    const isEq = node.operator === '===' || node.operator === '==';
+    const isLt = node.operator === '<' || node.operator === '<=';
+
+    // x === '' atau this.name === ''
+    if (isEq && node.right.type === 'Literal' && node.right.value === '') {
+        const key = getTargetKey(node.left);
+        if (key) return key;
+    }
+    if (isEq && node.left.type === 'Literal' && node.left.value === '') {
+        const key = getTargetKey(node.right);
+        if (key) return key;
+    }
+    // x.length === 0 atau x.length < 1
+    if (node.left.type === 'MemberExpression' && !node.left.computed && node.left.property.name === 'length') {
+        const objKey = getTargetKey(node.left.object);
+        if (objKey) {
+            if (isEq && node.right.type === 'Literal' && node.right.value === 0) return objKey;
+            if (isLt && node.right.type === 'Literal' && (node.right.value === 1 || (node.operator === '<=' && node.right.value === 0))) return objKey;
+        }
+    }
+    return null;
+}
+
+function getNonEmptyCollectionTarget(node) {
+    if (node.type === 'MemberExpression' && node.computed) {
+        return getTargetKey(node.object); // akses elemen misal arr[0]
+    }
+    if (node.type === 'CallExpression' && node.callee.type === 'MemberExpression' && !node.callee.computed) {
+        if (['trim', 'charAt'].includes(node.callee.property.name)) {
+            return getTargetKey(node.callee.object);
+        }
+    }
+    if (node.type !== 'BinaryExpression') return null;
+    const isNeq = node.operator === '!==' || node.operator === '!=';
+    const isGt = node.operator === '>' || node.operator === '>=';
+
+    // x !== '' atau this.name !== ''
+    if (isNeq && node.right.type === 'Literal' && node.right.value === '') {
+        const key = getTargetKey(node.left);
+        if (key) return key;
+    }
+    if (isNeq && node.left.type === 'Literal' && node.left.value === '') {
+        const key = getTargetKey(node.right);
+        if (key) return key;
+    }
+    // x.length > 0 atau x.length >= 1
+    if (node.left.type === 'MemberExpression' && !node.left.computed && node.left.property.name === 'length') {
+        const objKey = getTargetKey(node.left.object);
+        if (objKey) {
+            if (isGt && node.right.type === 'Literal' && (node.right.value === 0 || (node.operator === '>=' && node.right.value === 1))) return objKey;
+        }
+    }
+    return null;
+}
+
 
 /**
- * Menganalisis kondisi logika duplikat dan kontradiksi yang menyebabkan Unreachable Code.
+ * Mengekstrak nomor baris awal dari sebuah blok percabangan (consequent/alternate).
+ * Jika berupa BlockStatement dengan body tidak kosong, kembalikan baris dari statement pertama di dalamnya.
+ */
+function getBranchStartLine(branch, fallbackNode) {
+    if (branch && branch.type === 'BlockStatement' && branch.body && branch.body.length > 0) {
+        const firstStmt = branch.body[0];
+        if (firstStmt.loc) return firstStmt.loc.start.line;
+    }
+    if (branch && branch.loc) return branch.loc.start.line;
+    if (fallbackNode && fallbackNode.loc) return fallbackNode.loc.start.line;
+    return 0;
+}
+
+/**
+ * Menganalisis kondisi logika duplikat dan kontradiksi yang menyebabkan Unreachable Code / Branch.
  * 
  * Deteksi:
  *   1. Duplicate If Condition: if(a){} else if(a){} → blok kedua dead
@@ -156,7 +257,7 @@ export function findDuplicateConditions(ast) {
 
     estraverse.traverse(ast, {
         fallback: 'iteration',
-        enter(node) {
+        enter(node, parent) {
             // ═══════════════════════════════════════════════════
             // 1. Duplicate If Conditions (if ... else if chain)
             // ═══════════════════════════════════════════════════
@@ -187,10 +288,21 @@ export function findDuplicateConditions(ast) {
                 // 2. Condition Contradiction in the IF test itself
                 // ═══════════════════════════════════════════════════
                 if (hasContradiction(node.test)) {
+                    // Laporan 1: Menunjuk tepat ke ekspresi kondisi yang kontradiktif
+                    const exprLine = node.test.loc ? node.test.loc.start.line : (node.loc ? node.loc.start.line : 0);
                     deadNodes.push({
-                        name: 'Contradictory Condition (always false)',
+                        name: 'Contradictory Expression (always false)',
                         type: 'DeadBranch',
-                        line: node.consequent.loc ? node.consequent.loc.start.line : node.loc.start.line,
+                        line: exprLine,
+                        node: node.test
+                    });
+
+                    // Laporan 2: Menunjuk tepat ke blok kode percabangan yang tidak terjangkau akibat kondisi di atas
+                    const branchLine = getBranchStartLine(node.consequent, node);
+                    deadNodes.push({
+                        name: 'Dead Branch Block (unreachable)',
+                        type: 'DeadBranch',
+                        line: branchLine,
                         node: node.consequent
                     });
                 }
@@ -250,13 +362,18 @@ export function findDuplicateConditions(ast) {
             // 5. Standalone Contradiction in any LogicalExpression
             // ═══════════════════════════════════════════════════
             if (node.type === 'LogicalExpression' && node.operator === '&&') {
-                // Hanya cek jika parent bukan IfStatement (sudah di-handle di atas)
-                if (hasContradiction(node)) {
-                    // Cek apakah ini di dalam condition yang belum di-handle
-                    // (contoh: while(x && !x), ternary, dll)
+                // Skip jika parent adalah IfStatement/Loop yang sudah di-handle di atas
+                const isHandledCondition = parent && (
+                    (parent.type === 'IfStatement' && parent.test === node) ||
+                    (parent.type === 'WhileStatement' && parent.test === node) ||
+                    (parent.type === 'ForStatement' && parent.test === node) ||
+                    (parent.type === 'ConditionalExpression' && parent.test === node)
+                );
+
+                if (!isHandledCondition && hasContradiction(node)) {
                     deadNodes.push({
                         name: 'Contradictory Expression (always false)',
-                        type: 'DeadCode',
+                        type: 'DeadBranch',
                         line: node.loc ? node.loc.start.line : 0,
                         node: node
                     });

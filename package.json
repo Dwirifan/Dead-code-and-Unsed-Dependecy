@@ -6,11 +6,15 @@
   "bin": {
     "deadkiller": "./bin/dce-cli.js"
   },
+  "files": [
+    "bin",
+    "src"
+  ],
   "directories": {
     "test": "test"
   },
   "scripts": {
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "coverage": "vitest run --coverage",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
@@ -32,6 +36,7 @@
     "globals": "^17.7.0",
     "inquirer": "^12.11.1",
     "magic-string": "^0.30.21",
+    "micromatch": "^4.0.8",
     "ora": "^9.3.0"
   },
   "devDependencies": {

@@ -1,13 +1,136 @@
 import MagicString from 'magic-string';
+import { parse } from '@typescript-eslint/typescript-estree';
+
+/**
+ * Memeriksa apakah string kode valid secara sintaksis menggunakan parser AST.
+ */
+function isValidSyntax(code) {
+    try {
+        parse(code, {
+            loc: false,
+            range: false,
+            jsx: true,
+            comment: false,
+            errorOnUnknownASTType: false,
+            allowHashBang: true
+        });
+        return true;
+    } catch (_e) {
+        return false;
+    }
+}
+
+/**
+ * Menerapkan manipulasi MagicString untuk satu node dead code tunggal.
+ */
+function applySingleNodeRemoval(ms, codeString, dead, ruleEngine, eliminationLevel) {
+    const [start, end] = dead.node.range;
+
+    // Level 1: Lazy Load (React Components)
+    if (eliminationLevel <= 1 && dead.type === 'ReactComponent') {
+        return;
+    }
+
+    // Level 2 & 3: Empty Body untuk API Publik (Parameter & ClassMethod)
+    if (dead.type === 'ClassMethod' || dead.type === 'Parameter' || dead.type === 'FunctionDeclaration') {
+        if (eliminationLevel >= 2) {
+            if (dead.node.value && dead.node.value.body && dead.node.value.body.range) {
+                const bodyStart = dead.node.value.body.range[0];
+                const bodyEnd = dead.node.value.body.range[1];
+                ms.overwrite(bodyStart, bodyEnd, '{}');
+            } else if (dead.type === 'Parameter') {
+                if (ruleEngine && ruleEngine.rules && ruleEngine.rules.eliminator && ruleEngine.rules.eliminator.autoRenameUnusedParameters) {
+                    const paramText = codeString.substring(start, end);
+                    if (!paramText.startsWith('_')) {
+                        ms.prependRight(start, '_');
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    // Penanganan Auto-Refactoring untuk EmptyBlock (Catch kosong, dll)
+    if (dead.type === 'EmptyBlock') {
+        if (ruleEngine && ruleEngine.rules && ruleEngine.rules.eliminator && ruleEngine.rules.eliminator.autoRemoveEmptyBlocks) {
+            const blockText = codeString.substring(start, end);
+            if (blockText.includes('{')) {
+                const openBraceIdx = start + blockText.indexOf('{') + 1;
+                ms.appendRight(openBraceIdx, '\n/* [DeadKiller] Auto-Refactored */\nif (process.env.DEBUG) console.warn("Empty Block Reached");\n');
+            }
+        }
+        return;
+    }
+
+    // Level 3 (Aggressive Delete)
+    let effectiveStart = start;
+    if (dead.node && dead.node.leadingComments && dead.node.leadingComments.length > 0) {
+        effectiveStart = dead.node.leadingComments[0].range[0];
+    } else {
+        const beforeLine = codeString.substring(0, findLineStart(codeString, start));
+        const trimmedBefore = beforeLine.trimEnd();
+        if (trimmedBefore.endsWith('*/')) {
+            const commentStartIdx = trimmedBefore.lastIndexOf('/*');
+            if (commentStartIdx !== -1) {
+                const lineOfComment = findLineStart(codeString, commentStartIdx);
+                const prefix = codeString.substring(lineOfComment, commentStartIdx).trim();
+                if (prefix === '') {
+                    effectiveStart = commentStartIdx;
+                }
+            }
+        }
+    }
+
+    const lineStart = findLineStart(codeString, effectiveStart);
+    const lineEnd = findLineEnd(codeString, end);
+
+    const beforeNode = codeString.substring(lineStart, effectiveStart).trim();
+    const afterNode = codeString.substring(end, lineEnd).trim();
+
+    const afterIsTrailing = afterNode === '' || afterNode === ';' || afterNode === ',';
+    if (beforeNode === '' && afterIsTrailing) {
+        const fullLineEnd = consumeNewline(codeString, lineEnd);
+        ms.remove(lineStart, fullLineEnd);
+    } else {
+        let removeStart = effectiveStart;
+        let removeEnd = end;
+
+        const afterSlice = codeString.substring(removeEnd, lineEnd);
+        const trailingComma = afterSlice.match(/^\s*,\s*/);
+        if (trailingComma) {
+            removeEnd += trailingComma[0].length;
+        } else {
+            const beforeSlice = codeString.substring(lineStart, removeStart);
+            const leadingComma = beforeSlice.match(/,\s*$/);
+            if (leadingComma) {
+                removeStart -= leadingComma[0].length;
+            }
+        }
+
+        const remainingBefore = codeString.substring(lineStart, removeStart).trim();
+        const remainingAfter = codeString.substring(removeEnd, lineEnd).trim();
+        const isEmptyDeclaration = /^(const|let|var)$/.test(remainingBefore) &&
+            (remainingAfter === '' || remainingAfter === ';');
+
+        const isEmptyImport = /^import\s*\{?$/.test(remainingBefore) &&
+            /^\}?\s*from\s+['"][^'"]+['"];?$/.test(remainingAfter);
+
+        if (isEmptyDeclaration || isEmptyImport) {
+            const fullLineEnd = consumeNewline(codeString, lineEnd);
+            ms.remove(lineStart, fullLineEnd);
+        } else {
+            ms.remove(removeStart, removeEnd);
+        }
+    }
+}
 
 /**
  * Menghapus dead code dari kode sumber asli menggunakan manipulasi string presisi (koordinat posisi).
- * Menggunakan algoritma `magic-string` untuk membedah node mati tanpa merusak format tulisan asli,
- * komentar, spasi, atau anotasi tipe TypeScript yang tak terkait.
+ * Menggunakan algoritma `magic-string` untuk membedah node mati dan memvalidasi hasil AST
+ * untuk mencegah kerusakan sintaks struktural.
  *
  * @param {string} codeString - Teks kode sumber mentah/asli.
  * @param {Array} deadNodes - Daftar objek dead code { name, type, line, node }.
- *                            Setiap node wajib memiliki properti `range` bertipe [start, end].
  * @returns {string} String kode sumber yang telah suci dari dead code.
  */
 export function removeDeadCode(codeString, deadNodes, ruleEngine = null, eliminationLevel = 3) {
@@ -16,134 +139,52 @@ export function removeDeadCode(codeString, deadNodes, ruleEngine = null, elimina
         return codeString;
     }
 
-    const ms = new MagicString(codeString);
-
-    // Filter node yang benar-benar tidak boleh dihapus secara struktural
-    // (misal: else if gantung)
     const STRUCTURAL_UNFIXABLE = new Set(['DuplicateCondition']);
-    
-    // Sortir dari belakang ke depan agar index tidak bergeser
     const sortedNodes = [...deadNodes]
         .filter(d => d.node && d.node.range && !STRUCTURAL_UNFIXABLE.has(d.type))
         .sort((a, b) => b.node.range[0] - a.node.range[0]);
 
+    if (sortedNodes.length === 0) {
+        return codeString;
+    }
+
+    // 1. Fast Path: Coba hapus seluruh node sekaligus
+    const fastMs = new MagicString(codeString);
     for (const dead of sortedNodes) {
-        const [start, end] = dead.node.range;
+        applySingleNodeRemoval(fastMs, codeString, dead, ruleEngine, eliminationLevel);
+    }
+    const fastResult = fastMs.toString();
 
-        // Level 1: Lazy Load (React Components)
-        // Saat ini dilewatkan sebagai perlindungan awal (Safe skip)
-        if (eliminationLevel <= 1 && dead.type === 'ReactComponent') {
-            continue; 
+    // Validasi parse ulang AST pasca-transformasi
+    if (isValidSyntax(fastResult)) {
+        return fastResult;
+    }
+
+    // 2. Fallback Path (Safe Incremental Elimination): Uji satu per satu jika batch removal merusak sintaks
+    if (process.env.DEBUG) {
+        console.warn('[CodeCleaner] Batch removal merusak sintaks. Beralih ke verifikasi AST incremental.');
+    }
+
+    const acceptedNodes = [];
+    for (const dead of sortedNodes) {
+        const testMs = new MagicString(codeString);
+        for (const accepted of acceptedNodes) {
+            applySingleNodeRemoval(testMs, codeString, accepted, ruleEngine, eliminationLevel);
         }
+        applySingleNodeRemoval(testMs, codeString, dead, ruleEngine, eliminationLevel);
 
-        // Level 2 & 3: Empty Body untuk API Publik (Parameter & ClassMethod)
-        // Kita TIDAK PERNAH menghapus utuh API Signature, meskipun di Level 3
-        if (dead.type === 'ClassMethod' || dead.type === 'Parameter' || dead.type === 'FunctionDeclaration') {
-            if (eliminationLevel >= 2) {
-                if (dead.node.value && dead.node.value.body && dead.node.value.body.range) {
-                    const bodyStart = dead.node.value.body.range[0];
-                    const bodyEnd = dead.node.value.body.range[1];
-                    ms.overwrite(bodyStart, bodyEnd, '{}');
-                } else if (dead.type === 'Parameter') {
-                    if (ruleEngine && ruleEngine.rules.eliminator && ruleEngine.rules.eliminator.autoRenameUnusedParameters) {
-                        const paramText = codeString.substring(start, end);
-                        if (!paramText.startsWith('_')) {
-                            ms.prependRight(start, '_');
-                        }
-                    }
-                }
-            }
-            continue; // Skip dari aggressive delete
-        }
-
-        // Penanganan Auto-Refactoring untuk EmptyBlock (Catch kosong, dlL)
-        if (dead.type === 'EmptyBlock') {
-            if (ruleEngine && ruleEngine.rules.eliminator && ruleEngine.rules.eliminator.autoRemoveEmptyBlocks) {
-                const blockText = codeString.substring(start, end);
-                if (blockText.includes('{')) {
-                    const openBraceIdx = start + blockText.indexOf('{') + 1;
-                    ms.appendRight(openBraceIdx, '\n/* [DeadKiller] Auto-Refactored */\nif (process.env.DEBUG) console.warn("Empty Block Reached");\n');
-                }
-            }
-            continue; // Skip dari aggressive delete
-        }
-
-        // Level 3 (Aggressive Delete) berjalan di bawah ini:
-
-        // Tentukan batas baris penuh untuk node ini
-        let effectiveStart = start;
-        if (dead.node && dead.node.leadingComments && dead.node.leadingComments.length > 0) {
-            effectiveStart = dead.node.leadingComments[0].range[0];
-        } else {
-            // Cek manual apakah ada JSDoc/multi-line comment tepat di atas lineStart
-            const beforeLine = codeString.substring(0, findLineStart(codeString, start));
-            const trimmedBefore = beforeLine.trimEnd();
-            if (trimmedBefore.endsWith('*/')) {
-                const commentStartIdx = trimmedBefore.lastIndexOf('/*');
-                if (commentStartIdx !== -1) {
-                    const lineOfComment = findLineStart(codeString, commentStartIdx);
-                    const prefix = codeString.substring(lineOfComment, commentStartIdx).trim();
-                    if (prefix === '') {
-                        effectiveStart = commentStartIdx;
-                    }
-                }
-            }
-        }
-
-        const lineStart = findLineStart(codeString, effectiveStart);
-        const lineEnd = findLineEnd(codeString, end);
-
-        // Cek apakah node ini adalah satu-satunya konten bermakna di baris tersebut
-        const beforeNode = codeString.substring(lineStart, effectiveStart).trim();
-        const afterNode = codeString.substring(end, lineEnd).trim();
-
-        // Jika ada di baris sendiri (atau hanya ada koma/titik koma/spasi di sisa baris),
-        // hapus seluruh baris agar tidak menyisakan baris kosong.
-        const afterIsTrailing = afterNode === '' || afterNode === ';' || afterNode === ',';
-        if (beforeNode === '' && afterIsTrailing) {
-            // Hapus seluruh baris termasuk newline di akhirnya
-            const fullLineEnd = consumeNewline(codeString, lineEnd);
-            ms.remove(lineStart, fullLineEnd);
-        } else {
-            // Node berbagi baris dengan kode lain (misal: const a = 1, b = 2)
-            // Hapus hanya node-nya, lalu bersihkan koma/spasi yang menggantung
-            let removeStart = effectiveStart;
-            let removeEnd = end;
-
-            // Cek dan hapus koma yang menggantung sesudah node
-            const afterSlice = codeString.substring(removeEnd, lineEnd);
-            const trailingComma = afterSlice.match(/^\s*,\s*/);
-            if (trailingComma) {
-                removeEnd += trailingComma[0].length;
-            } else {
-                // Cek dan hapus koma yang menggantung sebelum node
-                const beforeSlice = codeString.substring(lineStart, removeStart);
-                const leadingComma = beforeSlice.match(/,\s*$/);
-                if (leadingComma) {
-                    removeStart -= leadingComma[0].length;
-                }
-            }
-
-            // Cek apakah setelah penghapusan, hanya tersisa keyword kosong (const/let/var ;)
-            const remainingBefore = codeString.substring(lineStart, removeStart).trim();
-            const remainingAfter = codeString.substring(removeEnd, lineEnd).trim();
-            const isEmptyDeclaration = /^(const|let|var)$/.test(remainingBefore) &&
-                (remainingAfter === '' || remainingAfter === ';');
-
-            // Cek apakah menyisakan impor kosong seperti: import  from 'fs'; atau import { } from 'fs';
-            const isEmptyImport = /^import\s*\{?$/.test(remainingBefore) && 
-                /^\}?\s*from\s+['"][^'"]+['"];?$/.test(remainingAfter);
-
-            if (isEmptyDeclaration || isEmptyImport) {
-                const fullLineEnd = consumeNewline(codeString, lineEnd);
-                ms.remove(lineStart, fullLineEnd);
-            } else {
-                ms.remove(removeStart, removeEnd);
-            }
+        if (isValidSyntax(testMs.toString())) {
+            acceptedNodes.push(dead);
+        } else if (process.env.DEBUG) {
+            console.warn(`[CodeCleaner] Menolak penghapusan node ${dead.type} '${dead.name}' karena merusak sintaks struktural.`);
         }
     }
 
-    return ms.toString();
+    const finalMs = new MagicString(codeString);
+    for (const accepted of acceptedNodes) {
+        applySingleNodeRemoval(finalMs, codeString, accepted, ruleEngine, eliminationLevel);
+    }
+    return finalMs.toString();
 }
 
 /**
