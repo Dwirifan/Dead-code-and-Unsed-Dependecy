@@ -26,6 +26,7 @@ export function registerFixCommand(program) {
         .argument('<path>', 'Path ke file tunggal (.js/.ts) atau direktori proyek')
         .description('Deteksi dan hapus dead code. Mendukung satu file maupun seluruh proyek.')
         .option('-l, --level <number>', 'Tingkat agresi penghapusan (0: Dry-run, 1-2: Safe refactor, 3: Aggressive)', '3')
+        .option('-y, --yes', 'Konfirmasi otomatis fix SAFE; dependency REVIEW tidak dipilih')
         .action(async (targetPath, options) => {
             const inquirer = (await import('inquirer')).default;
             const level = parseInt(options.level, 10);
@@ -42,14 +43,14 @@ export function registerFixCommand(program) {
             // MODE A: FILE TUNGGAL — analisis langsung, tidak perlu graph
             // ================================================================
             if (stats.isFile()) {
-                await _fixSingleFile(absolutePath, startTime, inquirer, level);
+                await _fixSingleFile(absolutePath, startTime, inquirer, level, options.yes);
                 return;
             }
 
             // ================================================================
             // MODE B: DIREKTORI — analisis seluruh proyek via graph
             // ================================================================
-            await _fixDirectory(absolutePath, startTime, inquirer, level);
+            await _fixDirectory(absolutePath, startTime, inquirer, level, options.yes);
         });
 }
 
@@ -73,7 +74,7 @@ async function _findProjectRoot(startDir) {
     return path.resolve(startDir);
 }
 
-async function _fixSingleFile(absolutePath, startTime, inquirer, level = 3) {
+async function _fixSingleFile(absolutePath, startTime, inquirer, level = 3, autoConfirm = false) {
     console.log(chalk.cyan(`\n[>] Fix mode: file tunggal — ${path.basename(absolutePath)}\n`));
 
     let code;
@@ -157,7 +158,7 @@ async function _fixSingleFile(absolutePath, startTime, inquirer, level = 3) {
         return;
     }
 
-    const { ok } = await inquirer.prompt([{
+    const { ok } = autoConfirm ? { ok: true } : await inquirer.prompt([{
         type: 'confirm', name: 'ok',
         message: `Terapkan eliminasi (Level ${level}) pada ${nodesToProcess.length} item di file ini? (backup otomatis dibuat)`,
         default: true
@@ -195,7 +196,7 @@ async function _fixSingleFile(absolutePath, startTime, inquirer, level = 3) {
         console.log(chalk.yellow(`[!] ${reviewNodes.length + riskyNodes.length} item REVIEW/RISKY tidak dihapus. Tinjau secara manual.\n`));
     }
 }
-async function _fixDirectory(absolutePath, startTime, inquirer, level = 3) {
+async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoConfirm = false) {
     console.log(chalk.cyan(`\n[>] Fix mode: direktori — ${absolutePath}`));
     const spinner = ora('Membangun graph & mendeteksi dead code di semua file...').start();
     const ruleEngine = new RuleEngine();
@@ -204,6 +205,15 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3) {
     let graph;
     try { graph = await buildGraphWithInteractiveFallback(absolutePath, ruleEngine, spinner); }
     catch (err) { if (spinner) spinner.fail(err.message); process.exit(1); }
+    const normalizeFileKey = file => {
+        const resolved = path.isAbsolute(file)
+            ? path.resolve(file)
+            : path.resolve(absolutePath, file);
+        return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+    };
+    const unsafeFileKeys = new Set(
+        [...(graph.unsafeFiles || [])].map(normalizeFileKey),
+    );
 
     // Dependensi tidak terpakai dianalisis secara konservatif. Jika graph tidak
     // lengkap, kandidat dipindahkan ke UNKNOWN dan tidak boleh di-uninstall.
@@ -227,7 +237,7 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3) {
     // Dead files — normalisasi path glob ke format OS lokal
     const allFiles = (await glob(['**/*.{js,jsx,mjs,cjs,ts,tsx,mts}'], {
         cwd: absolutePath,
-        ignore: ['node_modules/**', 'dist/**', 'test/**', 'tests/**', 'coverage/**', '*.config.*', '.*.js', '.*.mjs', '.*.ts'],
+        ignore: ['**/node_modules/**', '**/dist/**', '**/test/**', '**/tests/**', '**/coverage/**', '*.config.*', '.*.js', '.*.mjs', '.*.ts'],
         absolute: true
     })).map(f => path.resolve(f));
 
@@ -247,11 +257,12 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3) {
         const ext = path.extname(file).toLowerCase();
         if (!PARSEABLE_EXTENSIONS.has(ext) || file.includes('node_modules')) continue;
 
-        // Skip file yang terdeteksi mengandung kode dinamis (unsafeFiles) agar tidak terjadi false positive perbaikan
-        if (graph.unsafeFiles && graph.unsafeFiles.has(file)) {
-            if (process.env.DEBUG) console.warn(`[Skip Unsafe] Melewatkan eliminasi otomatis untuk file dinamis: ${file}`);
-            continue;
-        }
+        // File dinamis (unsafeFiles): Safety Fallback melindungi EKSPOR di graph (sudah ditangani saat traversal).
+        // Tapi dead code STRUKTURAL (unreachable code, unused import, unused variable) tetap aman dieliminasi.
+        // Hanya tipe yang berpotensi dipanggil secara dinamis yang diblokir.
+        const isUnsafeFile = unsafeFileKeys.has(normalizeFileKey(file));
+        // Tipe yang AMAN dieliminasi bahkan dari file dinamis (tidak tergantung pada export resolution)
+        const STRUCTURAL_SAFE_TYPES = new Set(['Import', 'Variable', 'WriteOnly', 'DeadBranch', 'DeadCode', 'UnusedType', 'UnusedClass', 'Parameter', 'EmptyBlock']);
 
         try {
             // Cek cache terlebih dahulu
@@ -279,8 +290,13 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3) {
                 allDead.forEach(n => { if (n.type === 'EmptyBlock') n.status = 'safe'; });
             }
 
-            // Pisahkan: HANYA item SAFE yang diproses otomatis oleh Eliminator
-            const nodesToProcess = allDead.filter(n => n.status === 'safe');
+            // Pisahkan: HANYA item SAFE yang diproses otomatis oleh Eliminator.
+            // Untuk file dinamis (unsafeFiles): filter tambahan — hanya proses tipe struktural.
+            const nodesToProcess = allDead.filter(n => {
+                if (n.status !== 'safe') return false;
+                if (isUnsafeFile && !STRUCTURAL_SAFE_TYPES.has(n.type)) return false;
+                return true;
+            });
             const unsafeDead = allDead.filter(n => !nodesToProcess.includes(n));
 
             // Catat item yang tidak di-fix
@@ -403,7 +419,7 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3) {
     // ---- Prompt Minimal ----
     // 1. Checkbox deps (opsional)
     let selectedDepsToRemove = [];
-    if (unusedDeps.length > 0) {
+    if (unusedDeps.length > 0 && !autoConfirm) {
         const { depsToRemove } = await inquirer.prompt([{
             type: 'checkbox', name: 'depsToRemove',
             message: 'Pilih dependensi yang sudah Anda review untuk dihapus:',
@@ -428,7 +444,7 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3) {
         return;
     }
 
-    const { confirm } = await inquirer.prompt([{
+    const { confirm } = autoConfirm ? { confirm: true } : await inquirer.prompt([{
         type: 'confirm', name: 'confirm',
         message: `Terapkan (Level ${level}): ${parts.join(' + ')}? (backup otomatis)`,
         default: true

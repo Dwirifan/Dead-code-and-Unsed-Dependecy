@@ -32,6 +32,7 @@ describe('Circular Dependency Analysis', () => {
 
         const cyclesMixed = findCircularDependencies(edgesMixed);
         assert.equal(cyclesMixed.length, 1);
-        assert.equal(cyclesMixed[0].isTypeOnly, false, 'Should mark cycle as runtime if any edge is not type-only');
+        assert.equal(cyclesMixed[0].isTypeOnly, false, 'Mixed cycle is not entirely type-only');
+        assert.equal(cyclesMixed[0].isRuntimeCycle, false, 'A type-only edge breaks the cycle at runtime');
     });
 });

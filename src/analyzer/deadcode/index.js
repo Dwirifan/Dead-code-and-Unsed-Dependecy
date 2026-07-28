@@ -170,45 +170,61 @@ export function findDeadCode(ast, fileName = null, globalRegistry = null, ruleEn
         return true;
     });
 
-    // Deduplikasi & Pruning Berbasis Lokasi AST (Location-Based Report Deduplication / Pruning)
-    const byLine = new Map();
+    // Deduplikasi lintas-analyzer menggunakan kategori dan identitas AST yang stabil.
+    // Nomor baris saja tidak cukup: satu root cause dapat mempunyai condition dan body
+    // pada baris berbeda, sedangkan dua simbol berbeda dapat berbagi satu baris.
+    const canonicalTypes = new Map([
+        ['Function', 'unused-function'],
+        ['UnusedFunction', 'unused-function'],
+        ['Variable', 'unused-variable'],
+        ['Import', 'unused-import'],
+        ['DeadCode', 'unreachable-code'],
+    ]);
+    const severityRank = { safe: 3, review: 2, risky: 1 };
+    const findingsByKey = new Map();
+
     for (const item of hierarchicallyPrunedReport) {
-        if (!item || !item.line) continue;
-        if (!byLine.has(item.line)) byLine.set(item.line, []);
-        byLine.get(item.line).push(item);
-    }
+        if (!item) continue;
 
-    const prunedReport = [];
-    for (const [lineNo, itemsOnLine] of byLine.entries()) {
-        const hasContradiction = itemsOnLine.some(it => (it.name || '').includes('Contradictory'));
-        const hasBranch = itemsOnLine.some(it => (it.type === 'DeadBranch' && !(it.name || '').includes('Contradictory')) || (it.name || '').includes('Branch') || (it.name || '').includes('Loop'));
-
-        if (hasContradiction && hasBranch) {
-            // Logika Pruning: Jika pada koordinat baris AST yang sama terdapat Contradictory Expression dan Unreachable Branch,
-            // lebur menjadi satu pesan gabungan.
-            const sample = itemsOnLine[0];
-            prunedReport.push({
-                ...sample,
-                name: 'Dead Branch due to Contradictory Condition (always false)',
-                type: 'DeadBranch',
-                line: lineNo,
-                confidence: 'high',
-                status: 'safe',
-                reason: 'Percabangan tidak akan pernah dieksekusi karena kondisi evaluasi selalu bernilai salah (kontradiktif).'
-            });
-        } else {
-            // Deduplikasi reguler pada baris yang sama berdasarkan tipe dan nama elemen
-            const seenTypes = new Set();
-            for (const item of itemsOnLine) {
-                const cleanName = (item.name || '').replace(/^Orphan Function '([^']+)'$/, '$1');
-                const dedupeKey = `${item.type}::${cleanName}`;
-                if (!seenTypes.has(dedupeKey)) {
-                    seenTypes.add(dedupeKey);
-                    prunedReport.push(item);
-                }
+        if (item.rootCauseId?.startsWith('contradictory-condition:')) {
+            const rootNode = item.rootNode || item.node;
+            const key = item.rootCauseId;
+            const existing = findingsByKey.get(key);
+            const relatedLocation = {
+                kind: (item.name || '').includes('Expression') ? 'condition' : 'unreachable-body',
+                line: item.line,
+            };
+            if (existing) {
+                existing.relatedLocations.push(relatedLocation);
+            } else {
+                findingsByKey.set(key, {
+                    ...item,
+                    name: 'Dead Branch due to Contradictory Condition (always false)',
+                    type: 'DeadBranch',
+                    line: rootNode?.loc?.start.line || item.line,
+                    node: rootNode,
+                    confidence: 'high',
+                    status: 'safe',
+                    reason: 'Percabangan tidak akan pernah dieksekusi karena kondisi evaluasi selalu bernilai salah (kontradiktif).',
+                    relatedLocations: [relatedLocation],
+                });
             }
+            continue;
+        }
+
+        const cleanName = (item.name || '').replace(/^Orphan Function '([^']+)'$/, '$1');
+        const canonicalType = canonicalTypes.get(item.type) || item.type;
+        const start = item.node?.range?.[0] ?? item.node?.start ?? item.node?.loc?.start?.line ?? item.line ?? 0;
+        const end = item.node?.range?.[1] ?? item.node?.end ?? item.node?.loc?.end?.line ?? item.line ?? 0;
+        const key = item.rootCauseId || `${canonicalType}:${cleanName}:${start}:${end}`;
+        const existing = findingsByKey.get(key);
+
+        if (!existing || (severityRank[item.status] || 0) > (severityRank[existing.status] || 0)) {
+            findingsByKey.set(key, item);
         }
     }
+
+    const prunedReport = [...findingsByKey.values()];
 
     // Urutkan kembali berdasarkan nomor baris agar pelaporan teratur
     prunedReport.sort((a, b) => (a.line || 0) - (b.line || 0));

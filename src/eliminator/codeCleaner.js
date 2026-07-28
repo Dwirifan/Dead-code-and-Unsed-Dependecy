@@ -31,8 +31,14 @@ function applySingleNodeRemoval(ms, codeString, dead, ruleEngine, eliminationLev
         return;
     }
 
-    // Level 2 & 3: Empty Body untuk API Publik (Parameter & ClassMethod)
-    if (dead.type === 'ClassMethod' || dead.type === 'Parameter' || dead.type === 'FunctionDeclaration') {
+    // ClassMethod yang sudah diklasifikasikan SAFE (misalnya private tanpa caller)
+    // boleh dihapus utuh. Method REVIEW/RISKY tidak pernah diteruskan oleh fixCommand.
+    const removableSafeClassMethod = dead.type === 'ClassMethod' && dead.status === 'safe';
+
+    // Level 2 & 3: Empty Body untuk API Publik (Parameter & method non-SAFE)
+    if ((!removableSafeClassMethod && dead.type === 'ClassMethod') ||
+        dead.type === 'Parameter' ||
+        dead.type === 'FunctionDeclaration') {
         if (eliminationLevel >= 2) {
             if (dead.node.value && dead.node.value.body && dead.node.value.body.range) {
                 const bodyStart = dead.node.value.body.range[0];
@@ -140,7 +146,21 @@ export function removeDeadCode(codeString, deadNodes, ruleEngine = null, elimina
     }
 
     const STRUCTURAL_UNFIXABLE = new Set(['DuplicateCondition']);
-    const sortedNodes = [...deadNodes]
+    const expandedNodes = deadNodes.flatMap(dead => {
+        if (dead.type !== 'WriteOnly' || !Array.isArray(dead.relatedNodes)) {
+            return [dead];
+        }
+        return [
+            dead,
+            ...dead.relatedNodes.map(node => ({
+                ...dead,
+                name: `${dead.name} assignment`,
+                node,
+                relatedNodes: [],
+            })),
+        ];
+    });
+    const sortedNodes = expandedNodes
         .filter(d => d.node && d.node.range && !STRUCTURAL_UNFIXABLE.has(d.type))
         .sort((a, b) => b.node.range[0] - a.node.range[0]);
 
@@ -153,7 +173,7 @@ export function removeDeadCode(codeString, deadNodes, ruleEngine = null, elimina
     for (const dead of sortedNodes) {
         applySingleNodeRemoval(fastMs, codeString, dead, ruleEngine, eliminationLevel);
     }
-    const fastResult = fastMs.toString();
+    const fastResult = cleanupEmptyImports(fastMs.toString());
 
     // Validasi parse ulang AST pasca-transformasi
     if (isValidSyntax(fastResult)) {
@@ -173,7 +193,7 @@ export function removeDeadCode(codeString, deadNodes, ruleEngine = null, elimina
         }
         applySingleNodeRemoval(testMs, codeString, dead, ruleEngine, eliminationLevel);
 
-        if (isValidSyntax(testMs.toString())) {
+        if (isValidSyntax(cleanupEmptyImports(testMs.toString()))) {
             acceptedNodes.push(dead);
         } else if (process.env.DEBUG) {
             console.warn(`[CodeCleaner] Menolak penghapusan node ${dead.type} '${dead.name}' karena merusak sintaks struktural.`);
@@ -184,7 +204,14 @@ export function removeDeadCode(codeString, deadNodes, ruleEngine = null, elimina
     for (const accepted of acceptedNodes) {
         applySingleNodeRemoval(finalMs, codeString, accepted, ruleEngine, eliminationLevel);
     }
-    return finalMs.toString();
+    return cleanupEmptyImports(finalMs.toString());
+}
+
+function cleanupEmptyImports(code) {
+    return code.replace(
+        /^[\t ]*import[\t ]*\{[\t ]*\}[\t ]*from[\t ]*(['"])[^'"]+\1;?[\t ]*(?:\r?\n|$)/gm,
+        '',
+    );
 }
 
 /**

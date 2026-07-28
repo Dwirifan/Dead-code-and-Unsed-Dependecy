@@ -243,6 +243,16 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
     }
     
     for (const entry of entrySet) {
+        let isIgnored = false;
+        if (ruleEngine && ruleEngine.rules.ignoreFiles && ruleEngine.rules.ignoreFiles.length > 0) {
+            const relativePath = path.relative(projectRoot, entry).replace(/\\/g, '/');
+            isIgnored = ruleEngine.rules.ignoreFiles.some(pattern => relativePath.includes(pattern) || relativePath.startsWith(pattern));
+        }
+
+        if (isIgnored) {
+            continue;
+        }
+
         if (await fs.pathExists(entry)) {
             validatedEntries.push(entry);
         } else {

@@ -285,7 +285,7 @@ function extractScriptCommands(pkg) {
                         scriptName,
                         explicitRunner: true,
                     });
-                } else if (head === 'yarn' || head === 'pnpm') {
+                } else if ((head === 'yarn' || head === 'pnpm') && !Object.hasOwn(pkg.scripts, subcommand)) {
                     if (subcommand && !['run', 'install', 'add', 'remove'].includes(subcommand) && !subcommand.startsWith('-')) {
                         commands.push({
                             command: normalizeRunnerTarget(subcommand),
@@ -334,7 +334,7 @@ async function buildBinaryAliasMap(dependencies, projectRoot) {
                         }
                     }
                 }
-            } catch (err) {
+            } catch (_err) {
                 // Abaikan error pembacaan agar tidak menghentikan alur analisis
             }
         }

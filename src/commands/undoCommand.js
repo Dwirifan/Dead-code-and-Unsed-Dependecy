@@ -2,7 +2,7 @@ import path from 'path';
 import fs from 'fs-extra';
 import chalk from 'chalk';
 import ora from 'ora';
-import { listCheckpoints, restoreCheckpoint } from '../eliminator/restoreManager.js';
+import { listCheckpoints, restoreCheckpoint, deleteCheckpoint } from '../eliminator/restoreManager.js';
 
 /**
  * Mendaftarkan perintah `undo` dan `restore` ke instance Commander yang diberikan.
@@ -87,6 +87,14 @@ export function registerUndoCommand(program) {
             if (failed.length > 0) {
                 console.log(chalk.yellow(`[!] Gagal memulihkan ${failed.length} file:`));
                 failed.forEach(f => console.log(`   - ${f}`));
+            } else {
+                // Menghapus backup setelah berhasil dipulihkan
+                try {
+                    await deleteCheckpoint(selectedCheckpoint.path);
+                    console.log(chalk.gray(`    [i] Folder checkpoint "${selectedCheckpoint.name}" telah dihapus otomatis.`));
+                } catch (e) {
+                    console.log(chalk.yellow(`    [!] Gagal menghapus folder checkpoint: ${e.message}`));
+                }
             }
             console.log(chalk.gray(`    Proyek Anda kini telah aman kembali seperti sebelum eliminasi dilakukan.\n`));
         });

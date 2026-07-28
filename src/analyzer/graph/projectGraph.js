@@ -98,7 +98,16 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
                         unsafeFiles.add(currentFile);
                     }
                     if (node.type === 'MemberExpression' && node.computed === true) {
-                        if (node.property.type !== 'Literal') unsafeFiles.add(currentFile);
+                        const isDynamicNamespaceAccess =
+                            node.property.type !== 'Literal' &&
+                            node.object.type === 'Identifier' &&
+                            namespaceMap.has(node.object.name);
+                        const isDynamicThisAccess =
+                            node.property.type !== 'Literal' &&
+                            node.object.type === 'ThisExpression';
+                        if (isDynamicNamespaceAccess || isDynamicThisAccess) {
+                            unsafeFiles.add(currentFile);
+                        }
                     }
 
                     // --- 2. Call Graph ---
@@ -323,9 +332,17 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
                         });
 
                         if (!visitedFiles.has(absolute)) {
-                            visitedFiles.add(absolute);
-                            liveFiles.add(absolute);
-                            validQueue.push(absolute);
+                            let isIgnored = false;
+                            if (ruleEngine && ruleEngine.rules.ignoreFiles && ruleEngine.rules.ignoreFiles.length > 0) {
+                                const relativePath = path.relative(projectRoot, absolute).replace(/\\/g, '/');
+                                isIgnored = ruleEngine.rules.ignoreFiles.some(pattern => relativePath.includes(pattern) || relativePath.startsWith(pattern));
+                            }
+
+                            if (!isIgnored) {
+                                visitedFiles.add(absolute);
+                                liveFiles.add(absolute);
+                                validQueue.push(absolute);
+                            }
                         }
                     }
                 } else {
@@ -439,16 +456,20 @@ export function findCircularDependencies(edges) {
 
                     if (!isDuplicate) {
                         let isTypeOnlyCycle = true;
+                        let hasTypeOnlyEdge = false;
                         for (let i = 0; i < cyclePath.length - 1; i++) {
                             const u = cyclePath[i];
                             const v = cyclePath[i + 1];
                             const edgeObj = edges.find(e => e.from === u && e.to === v);
                             if (!edgeObj || !edgeObj.isTypeOnly) {
                                 isTypeOnlyCycle = false;
-                                break;
+                            } else {
+                                hasTypeOnlyEdge = true;
                             }
                         }
                         cyclePath.isTypeOnly = isTypeOnlyCycle;
+                        cyclePath.hasTypeOnlyEdge = hasTypeOnlyEdge;
+                        cyclePath.isRuntimeCycle = !hasTypeOnlyEdge;
                         cycles.push(cyclePath);
                     }
                 }

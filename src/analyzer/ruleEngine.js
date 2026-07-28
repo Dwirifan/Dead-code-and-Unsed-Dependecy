@@ -17,6 +17,7 @@ export class RuleEngine {
             preserveExports: true,         // Lindungi fungsi/variabel yg di-export
             preserveUnsafeFiles: true,     // Lindungi file dinamis (Conservative Safety Fallback)
             preserveFiles: [],             // Lindungi file dari penghapusan
+            ignoreFiles: [],               // Abaikan file/folder dari pemindaian (contoh: 'dist')
             ignoreDependencies: [],        // Dependensi yang tidak dianggap unused
             entryPoints: [],               // Entry points khusus tambahan
             eliminator: {
@@ -161,8 +162,8 @@ export class RuleEngine {
 
         // 1. Cek preserveFiles manual dari config
         if (rules.preserveFiles && rules.preserveFiles.length > 0) {
-            const matchManual = rules.preserveFiles.some(pattern => {
-                return relativePath.includes(pattern);
+            const matchManual = micromatch.isMatch(relativePath, rules.preserveFiles, {
+                dot: true,
             });
             if (matchManual) return true;
         }

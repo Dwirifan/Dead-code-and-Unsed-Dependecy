@@ -288,13 +288,16 @@ export function findDuplicateConditions(ast) {
                 // 2. Condition Contradiction in the IF test itself
                 // ═══════════════════════════════════════════════════
                 if (hasContradiction(node.test)) {
+                    const rootCauseId = `contradictory-condition:${node.start ?? node.range?.[0] ?? node.loc?.start.line}`;
                     // Laporan 1: Menunjuk tepat ke ekspresi kondisi yang kontradiktif
                     const exprLine = node.test.loc ? node.test.loc.start.line : (node.loc ? node.loc.start.line : 0);
                     deadNodes.push({
                         name: 'Contradictory Expression (always false)',
                         type: 'DeadBranch',
                         line: exprLine,
-                        node: node.test
+                        node: node.test,
+                        rootCauseId,
+                        rootNode: node
                     });
 
                     // Laporan 2: Menunjuk tepat ke blok kode percabangan yang tidak terjangkau akibat kondisi di atas
@@ -303,7 +306,9 @@ export function findDuplicateConditions(ast) {
                         name: 'Dead Branch Block (unreachable)',
                         type: 'DeadBranch',
                         line: branchLine,
-                        node: node.consequent
+                        node: node.consequent,
+                        rootCauseId,
+                        rootNode: node
                     });
                 }
             } 

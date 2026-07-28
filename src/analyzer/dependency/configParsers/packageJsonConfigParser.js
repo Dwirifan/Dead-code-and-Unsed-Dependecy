@@ -45,7 +45,24 @@ export async function parsePackageJsonConfigDetailed(projectRoot) {
 
         // 3. HUSKY
         if (pkg.husky !== undefined) {
-            packages.add('husky');
+            const declared = {
+                ...(pkg.dependencies || {}),
+                ...(pkg.devDependencies || {}),
+                ...(pkg.optionalDependencies || {}),
+            };
+            if (Object.hasOwn(declared, 'husky')) {
+                packages.add('husky');
+            } else {
+                diagnostics.push({
+                    source: `${pkgPath}#husky`,
+                    code: 'UNDECLARED_CONFIG_TOOL',
+                    severity: 'warning',
+                    message: "Konfigurasi 'husky' ditemukan tanpa dependency terkait. Periksa apakah paket belum dideklarasikan atau konfigurasi ini sudah usang.",
+                    package: 'husky',
+                    line: null,
+                    affectsDependencyClassification: false,
+                });
+            }
         }
 
         // 4. LINT-STAGED

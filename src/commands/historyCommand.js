@@ -96,6 +96,13 @@ export function registerHistoryCommand(program) {
                 if (failed.length > 0) {
                     console.log(chalk.yellow(`[!] Gagal memulihkan ${failed.length} file:`));
                     failed.forEach(f => console.log(`   - ${f}`));
+                } else {
+                    try {
+                        await deleteCheckpoint(selectedCheckpoint.path);
+                        console.log(chalk.gray(`    [i] Folder checkpoint "${selectedCheckpoint.name}" telah dihapus otomatis.`));
+                    } catch (e) {
+                        console.log(chalk.yellow(`    [!] Gagal menghapus folder checkpoint: ${e.message}`));
+                    }
                 }
                 console.log();
             }

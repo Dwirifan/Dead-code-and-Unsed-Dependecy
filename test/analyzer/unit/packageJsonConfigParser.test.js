@@ -22,6 +22,9 @@ describe('packageJsonConfigParser', () => {
         const pkgJson = {
             name: "test-project",
             version: "1.0.0",
+            devDependencies: {
+                husky: "^9.0.0"
+            },
             prettier: "@sxzz/prettier-config",
             "simple-git-hooks": {
                 "pre-commit": "npx lint-staged"

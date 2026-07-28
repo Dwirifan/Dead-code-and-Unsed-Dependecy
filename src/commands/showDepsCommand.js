@@ -63,7 +63,7 @@ export function registerShowDepsCommand(program) {
                         (section === 'runtime' ? uncertainDeps.has(dep) : uncertainDevDeps.has(dep));
                     
                     let badge;
-                    let desc = '';
+                    let desc;
                     if (isUnknown) {
                         badge = chalk.bgYellow.black(' UNKNOWN ');
                         desc = 'Analisis tidak dapat memastikan penggunaan.';

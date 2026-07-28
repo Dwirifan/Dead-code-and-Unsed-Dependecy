@@ -484,6 +484,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     type: effectiveType,
                     line: info.line,
                     node: targetNode,
+                    relatedNodes: effectiveType === 'WriteOnly' ? [...(info.writeNodes || [])] : [],
                     confidence,
                     status,
                     reason

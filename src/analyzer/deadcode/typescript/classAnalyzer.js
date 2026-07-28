@@ -194,7 +194,7 @@ export function findUnusedClassMethods(ast, globalRegistry = null) {
     });
 
     // Tandai kelas yang bukan leaf class (ada kelas lain yang mewarisinya)
-    for (const [clsName, clsInfo] of classMap.entries()) {
+    for (const clsInfo of classMap.values()) {
         if (clsInfo.superClassName && classMap.has(clsInfo.superClassName)) {
             classMap.get(clsInfo.superClassName).isLeafClass = false;
         }

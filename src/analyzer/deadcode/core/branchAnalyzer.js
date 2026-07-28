@@ -292,18 +292,34 @@ export function findUnreachableBranches(ast, ruleEngine = null, fileName = null)
 
             if (statementsToScan) {
                 let terminatorFound = false;
+                let terminatorNode = null;
+                const unreachableStatements = [];
                 for (const stmt of statementsToScan) {
                     if (terminatorFound) {
-                        unreachableNodes.push({
-                            name: 'Unreachable Statement',
-                            type: 'DeadCode',
-                            line: stmt.loc ? stmt.loc.start.line : 0,
-                            node: stmt
-                        });
+                        unreachableStatements.push(stmt);
                     }
                     if (terminators.has(stmt.type)) {
                         terminatorFound = true;
+                        terminatorNode = stmt;
                     }
+                }
+                if (unreachableStatements.length > 0) {
+                    const first = unreachableStatements[0];
+                    const last = unreachableStatements[unreachableStatements.length - 1];
+                    unreachableNodes.push({
+                        name: 'Unreachable Code After Terminator',
+                        type: 'DeadCode',
+                        line: first.loc ? first.loc.start.line : 0,
+                        endLine: last.loc ? last.loc.end.line : 0,
+                        node: {
+                            type: 'DeadCodeRegion',
+                            loc: { start: first.loc?.start, end: last.loc?.end },
+                            range: [first.range?.[0] ?? first.start, last.range?.[1] ?? last.end]
+                        },
+                        statements: unreachableStatements,
+                        terminator: terminatorNode,
+                        rootCauseId: `after-terminator:${terminatorNode?.start ?? terminatorNode?.range?.[0] ?? terminatorNode?.loc?.start.line}`
+                    });
                 }
             }
 
@@ -317,7 +333,7 @@ export function findUnreachableBranches(ast, ruleEngine = null, fileName = null)
                         name: 'Dead Loop (condition always false)',
                         type: 'DeadBranch',
                         line: getBranchStartLine(node.body, node),
-                        node: node.body
+                        node: node
                     });
                 }
             }
@@ -328,8 +344,8 @@ export function findUnreachableBranches(ast, ruleEngine = null, fileName = null)
                     unreachableNodes.push({
                         name: 'Dead Loop (condition always false)',
                         type: 'DeadBranch',
-                        line: getBranchStartLine(node.body, node),
-                        node: node.body
+                        line: node.loc ? node.loc.start.line : getBranchStartLine(node.body, node),
+                        node
                     });
                 }
             }
@@ -345,8 +361,8 @@ export function findUnreachableBranches(ast, ruleEngine = null, fileName = null)
                     unreachableNodes.push({
                         name: 'Dead Loop (collection is empty)',
                         type: 'DeadBranch',
-                        line: getBranchStartLine(node.body, node),
-                        node: node.body
+                        line: node.loc ? node.loc.start.line : getBranchStartLine(node.body, node),
+                        node
                     });
                 }
             }

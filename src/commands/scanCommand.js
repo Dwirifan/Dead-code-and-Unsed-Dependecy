@@ -185,11 +185,10 @@ export function registerScanCommand(program) {
             let totalIssues = 0;
             if (deadFiles.length > 0) {
                 console.log(`\n================================================`);
-                console.log(chalk.bold('⚠️ POSSIBLY DEAD FILES (File Tidak Terhubung)'));
-                console.log(chalk.gray('File ini tidak pernah di-import oleh entry point. Mungkin ini Dead File, atau mungkin ini Dynamic Route / Public Endpoint.'));
+                console.log(chalk.bold('⚠️ UNCONNECTED FILE CANDIDATES (Perlu Review)'));
+                console.log(chalk.gray('File tidak terjangkau dari entry point, tetapi dapat berupa example, test fixture, dynamic route, atau public endpoint.'));
                 console.log(`================================================`);
                 deadFiles.forEach(f => console.log(`   - ${path.relative(absolutePath, f)}`));
-                totalIssues += deadFiles.length;
             }
 
             // FITUR 5: Broken Links (Unresolved Imports)
@@ -230,16 +229,30 @@ export function registerScanCommand(program) {
             // FITUR 9: Circular Dependencies (Siklus Maut)
             if (graph.globalRegistry.circularDependencies && graph.globalRegistry.circularDependencies.length > 0) {
                 const cycles = graph.globalRegistry.circularDependencies;
-                console.log(`\n================================================`);
-                console.log(chalk.bold.magenta(`⚠️ CIRCULAR DEPENDENCIES (${cycles.length} Siklus Ditemukan)`));
-                console.log(chalk.gray('File saling mengimpor satu sama lain secara melingkar (A -> B -> A). Bisa memicu error "Cannot access before initialization".'));
-                console.log(`================================================`);
-                cycles.forEach((cycle, index) => {
+                const runtimeCycles = cycles.filter(cycle => cycle.isRuntimeCycle !== false);
+                const typeBrokenCycles = cycles.filter(cycle => cycle.isRuntimeCycle === false);
+                if (runtimeCycles.length > 0) {
+                    console.log(`\n================================================`);
+                    console.log(chalk.bold.magenta(`⚠️ CIRCULAR RUNTIME DEPENDENCIES (${runtimeCycles.length} Siklus Ditemukan)`));
+                    console.log(chalk.gray('Seluruh edge pada siklus bertahan saat runtime dan dapat memicu "Cannot access before initialization".'));
+                    console.log(`================================================`);
+                }
+                runtimeCycles.forEach((cycle, index) => {
                     // Memotong path agar lebih mudah dibaca
                     const shortCycle = cycle.map(p => path.relative(absolutePath, p));
                     console.log(chalk.magenta(`   ${index + 1}. ${shortCycle.join(' -> ')}`));
                 });
-                totalIssues += cycles.length;
+                if (typeBrokenCycles.length > 0 && options.advanced) {
+                    console.log(`\n================================================`);
+                    console.log(chalk.bold.cyan(`ℹ️ TYPE-ONLY CYCLES — RUNTIME SAFE (${typeBrokenCycles.length})`));
+                    console.log(chalk.gray('Sedikitnya satu edge adalah import type dan dihapus saat kompilasi, sehingga siklus runtime terputus.'));
+                    console.log(`================================================`);
+                    typeBrokenCycles.forEach((cycle, index) => {
+                        const shortCycle = cycle.map(p => path.relative(absolutePath, p));
+                        console.log(chalk.cyan(`   ${index + 1}. ${shortCycle.join(' -> ')}`));
+                    });
+                }
+                totalIssues += runtimeCycles.length;
             }
 
             // Dead code di seluruh file — dikategorisasi berdasarkan tipe
@@ -247,6 +260,15 @@ export function registerScanCommand(program) {
             const cache = new ParseCache();
 
             const allDeadNodes = []; // { file, node }
+            const normalizeFileKey = file => {
+                const resolved = path.isAbsolute(file)
+                    ? path.resolve(file)
+                    : path.resolve(absolutePath, file);
+                return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+            };
+            const unsafeFileKeys = new Set(
+                [...(graph.unsafeFiles || [])].map(normalizeFileKey),
+            );
 
             // Gabungkan file aktif dan file mati untuk dianalisis dead code-nya
             const filesToAnalyze = new Set([...graph.liveFiles, ...deadFiles]);
@@ -270,7 +292,24 @@ export function registerScanCommand(program) {
                     }
 
                     const deadNodes = findDeadCode(ast, file, graph.globalRegistry, ruleEngine);
-                    deadNodes.forEach(n => allDeadNodes.push({ file, ...n }));
+                    // File dinamis (unsafeFiles): fixCommand hanya memblokir tipe non-struktural.
+                    // Tipe struktural (Import, Variable, dll) tetap bisa dieliminasi oleh fix.
+                    const isUnsafeFile = unsafeFileKeys.has(normalizeFileKey(file));
+                    const STRUCTURAL_SAFE_TYPES = new Set(['Import', 'Variable', 'WriteOnly', 'DeadBranch', 'DeadCode', 'UnusedType', 'UnusedClass', 'Parameter', 'EmptyBlock']);
+                    deadNodes.forEach(n => {
+                        if (isUnsafeFile && n.status === 'safe' && !STRUCTURAL_SAFE_TYPES.has(n.type)) {
+                            // Tipe ini tidak akan diproses fix (ClassMethod, Function, dll) — downgrade ke REVIEW
+                            allDeadNodes.push({
+                                file,
+                                ...n,
+                                originalStatus: n.status,
+                                status: 'review',
+                                reason: 'Tidak ditemukan pemanggilan statis, tetapi penghapusan otomatis diblokir karena file mengandung pola dinamis.',
+                            });
+                        } else {
+                            allDeadNodes.push({ file, ...n });
+                        }
+                    });
                 } catch (err) {
                     console.warn(chalk.yellow(`   [!] Gagal parse: ${path.relative(absolutePath, file)}: ${err.message}`));
                 }
@@ -414,7 +453,7 @@ export function registerScanCommand(program) {
                 console.log('│ ' + chalk.bold('📊 SCAN SUMMARY STATISTICS') + '                   │');
                 console.log('├──────────────────────────────────────────────┤');
                 console.log(`│ Total Files Analyzed : ${String(filesToAnalyze.size).padEnd(21)} │`);
-                console.log(`│ Dead Files Found     : ${String(deadFiles.length).padEnd(21)} │`);
+                console.log(`│ Unconnected Candidates: ${String(deadFiles.length).padEnd(19)} │`);
                 console.log(`│ Total Issues         : ${String(displayedIssues).padEnd(21)} │`);
                 console.log('├──────────────────────────────────────────────┤');
                 console.log(`│ 🟢 Safe to Remove    : ${String(groupedItems.safe.length).padEnd(21)} │`);
