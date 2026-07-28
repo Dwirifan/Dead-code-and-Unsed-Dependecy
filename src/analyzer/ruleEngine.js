@@ -168,7 +168,13 @@ export class RuleEngine {
             if (matchManual) return true;
         }
 
-        // 2. Framework-aware auto-protection
+        // 2. Cek ignoreFiles (folder yang sepenuhnya diabaikan dari AST)
+        if (rules.ignoreFiles && rules.ignoreFiles.length > 0) {
+            const isIgnoredDir = rules.ignoreFiles.some(pattern => relativePath.includes(pattern) || relativePath.startsWith(pattern));
+            if (isIgnoredDir) return true;
+        }
+
+        // 3. Framework-aware auto-protection
         const mode = rules.mode || 'vanilla';
         const protectedPaths = this._frameworkPreservedPaths[mode] || [];
         return protectedPaths.some(p => relativePath.startsWith(p) || relativePath.includes('/' + p));
