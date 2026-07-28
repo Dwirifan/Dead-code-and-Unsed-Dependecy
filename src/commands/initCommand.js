@@ -54,9 +54,15 @@ export async function initCommand(options) {
         },
         {
             type: 'input',
-            name: 'ignoreFiles',
-            message: 'Pola file/folder yang tidak boleh dihapus (pisahkan dengan koma):',
+            name: 'preserveFiles',
+            message: 'Pola file/folder yang tidak boleh dihapus/aman dari modifikasi (contoh: *.test.js, __tests__):',
             default: '*.test.js, __tests__'
+        },
+        {
+            type: 'input',
+            name: 'ignoreFiles',
+            message: 'Folder/path yang sepenuhnya diabaikan dari pemindaian AST (contoh: dist, build, coverage):',
+            default: 'dist, build, coverage'
         },
         {
             type: 'confirm',
@@ -81,6 +87,7 @@ export async function initCommand(options) {
         }
     ]);
 
+    const preserveFilesArray = answers.preserveFiles.split(',').map(s => s.trim()).filter(Boolean);
     const ignoreFilesArray = answers.ignoreFiles.split(',').map(s => s.trim()).filter(Boolean);
     let entryPointsArray = answers.entryPoints ? answers.entryPoints.split(',').map(s => s.trim()).filter(Boolean) : [];
 
@@ -108,7 +115,8 @@ export async function initCommand(options) {
         entryPoints: entryPointsArray,
         ignorePrefixedVariables: answers.ignoreVariables,
         preserveExports: answers.preserveExports,
-        preserveFiles: ignoreFilesArray,
+        preserveFiles: preserveFilesArray,
+        ignoreFiles: ignoreFilesArray,
         ignoreDependencies: [],
         globals: [],
         overrides: [
