@@ -34,6 +34,17 @@ describe('[TC-A01 – TC-A04] Deklarasi Dasar & Penugasan Buntu', () => {
         assert.strictEqual(found.type, 'WriteOnly', 'Tipe harus WriteOnly karena hanya ditulis, tidak pernah dibaca');
     });
 
+    it('unused variable dengan initializer side-effect diklasifikasikan Review', async () => {
+        const hasil = await analisis(`const registration = registerPlugin();`);
+        const found = hasil.find(item => item.name === 'registration');
+
+        assert.ok(found, 'Binding hasil pemanggilan fungsi yang tidak dibaca harus tetap terdeteksi');
+        assert.strictEqual(found.type, 'Variable');
+        assert.strictEqual(found.status, 'review');
+        assert.strictEqual(found.confidence, 'medium');
+        assert.match(found.reason, /efek samping/i);
+    });
+
     it('TC-A04: Kode setelah return tidak dapat dijangkau (Unreachable Code)', async () => {
         const hasil = await analisis(`function f() {\n  return 1;\n  console.log("unreachable");\n}`);
         assert.ok(adaTipe(hasil, 'DeadCode'), 'Kode setelah return harus dilaporkan sebagai DeadCode');

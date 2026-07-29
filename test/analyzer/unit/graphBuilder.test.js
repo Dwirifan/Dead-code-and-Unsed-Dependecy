@@ -6,6 +6,7 @@ import os from 'os';
 
 import { buildProjectGraph } from '../../../src/analyzer/graph/projectGraph.js';
 import { findUnusedDependencies } from '../../../src/analyzer/dependency/dependencyAnalyzer.js';
+import { RuleEngine } from '../../../src/analyzer/ruleEngine.js';
 
 /**
  * Membuat direktori proyek dummy sementara di folder temp OS.
@@ -63,6 +64,160 @@ describe('[TC-G01] BFS Traversal & Entry Point Finder', () => {
 
             const entries = [...liveFiles].map(f => path.basename(f));
             assert.ok(entries.includes('index.js'), 'index.js (entry point) harus ada di liveFiles');
+        } finally {
+            await fs.remove(proyekDummy);
+        }
+    });
+
+    it('custom entry glob tidak merayapi node_modules atau symlink di bawah examples', async () => {
+        const proyekDummy = await buatProyekDummy();
+        try {
+            await fs.outputFile(
+                path.join(proyekDummy, 'examples', 'demo.ts'),
+                `import 'tinyexec';\n`,
+            );
+            await fs.outputFile(
+                path.join(proyekDummy, 'examples', 'node_modules', 'fake-package', 'index.ts'),
+                `throw new Error('must not be scanned');\n`,
+            );
+
+            const ruleEngine = new RuleEngine();
+            ruleEngine.rules.entryPoints = ['index.js', 'examples/**/*.{js,ts}'];
+            const { liveFiles, usedPackages } = await buildProjectGraph(proyekDummy, ruleEngine);
+            const relativeFiles = [...liveFiles].map(file =>
+                path.relative(proyekDummy, file).replace(/\\/g, '/')
+            );
+
+            assert.ok(relativeFiles.includes('examples/demo.ts'));
+            assert.ok(!relativeFiles.some(file => file.includes('node_modules')));
+            assert.ok(usedPackages.has('tinyexec'));
+        } finally {
+            await fs.remove(proyekDummy);
+        }
+    });
+
+    it('mengabaikan protocol import non-npm dan menghormati glob ignoreFiles', async () => {
+        const proyekDummy = await buatProyekDummy();
+        try {
+            await fs.outputFile(
+                path.join(proyekDummy, 'examples', 'deno.ts'),
+                `import cac from 'jsr:@cac/cac';\nconsole.log(cac);\n`,
+            );
+            await fs.outputFile(
+                path.join(proyekDummy, 'dist', 'index.js'),
+                `console.log('generated');\n`,
+            );
+
+            const ruleEngine = new RuleEngine();
+            ruleEngine.rules.entryPoints = [
+                'index.js',
+                'examples/**/*.ts',
+                'dist/index.js',
+            ];
+            ruleEngine.rules.ignoreFiles = ['dist/**'];
+            const graph = await buildProjectGraph(proyekDummy, ruleEngine);
+            const relativeFiles = [...graph.liveFiles].map(file =>
+                path.relative(proyekDummy, file).replace(/\\/g, '/')
+            );
+
+            assert.ok(relativeFiles.includes('examples/deno.ts'));
+            assert.ok(!relativeFiles.includes('dist/index.js'));
+            assert.ok(!graph.usedPackages.has('jsr:@cac'));
+        } finally {
+            await fs.remove(proyekDummy);
+        }
+    });
+
+    it('mendeteksi test Mocha sebagai root dan mencatat dependency yang hanya dipakai test', async () => {
+        const proyekDummy = await buatProyekDummy();
+        try {
+            const pkgPath = path.join(proyekDummy, 'package.json');
+            const pkg = await fs.readJson(pkgPath);
+            pkg.scripts = { test: 'mocha --timeout 10000' };
+            pkg.devDependencies = {
+                chai: '*',
+                'chai-http': '*',
+                mocha: '*',
+            };
+            await fs.writeJson(pkgPath, pkg);
+            await fs.outputFile(
+                path.join(proyekDummy, 'test', 'products.js'),
+                [
+                    `const chai = require('chai');`,
+                    `const chaiHttp = require('chai-http');`,
+                    `chai.use(chaiHttp);`,
+                ].join('\n'),
+            );
+
+            const graph = await buildProjectGraph(proyekDummy);
+            const relativeFiles = [...graph.liveFiles].map(file =>
+                path.relative(proyekDummy, file).replace(/\\/g, '/')
+            );
+
+            assert.ok(relativeFiles.includes('test/products.js'));
+            assert.ok(graph.usedPackages.has('chai'));
+            assert.ok(graph.usedPackages.has('chai-http'));
+        } finally {
+            await fs.remove(proyekDummy);
+        }
+    });
+
+    it('tetap menghormati ignoreFiles ketika test terdeteksi otomatis', async () => {
+        const proyekDummy = await buatProyekDummy();
+        try {
+            const pkgPath = path.join(proyekDummy, 'package.json');
+            const pkg = await fs.readJson(pkgPath);
+            pkg.scripts = { test: 'mocha' };
+            pkg.devDependencies = { mocha: '*', 'chai-http': '*' };
+            await fs.writeJson(pkgPath, pkg);
+            await fs.outputFile(
+                path.join(proyekDummy, 'test', 'ignored.js'),
+                `require('chai-http');\n`,
+            );
+
+            const ruleEngine = new RuleEngine();
+            ruleEngine.rules.ignoreFiles = ['test/**'];
+            const graph = await buildProjectGraph(proyekDummy, ruleEngine);
+            const relativeFiles = [...graph.liveFiles].map(file =>
+                path.relative(proyekDummy, file).replace(/\\/g, '/')
+            );
+
+            assert.ok(!relativeFiles.includes('test/ignored.js'));
+            assert.ok(!graph.usedPackages.has('chai-http'));
+        } finally {
+            await fs.remove(proyekDummy);
+        }
+    });
+
+    it('menemukan runtime nonstandar dari script ketika main rusak dan test root ditemukan', async () => {
+        const proyekDummy = await buatProyekDummy();
+        try {
+            const pkgPath = path.join(proyekDummy, 'package.json');
+            const pkg = await fs.readJson(pkgPath);
+            pkg.main = 'missing-index.js';
+            pkg.scripts = {
+                start: 'node services/http-entry.js',
+                test: 'mocha',
+            };
+            pkg.devDependencies = { mocha: '*' };
+            await fs.writeJson(pkgPath, pkg);
+            await fs.outputFile(
+                path.join(proyekDummy, 'services', 'http-entry.js'),
+                `module.exports = {};\n`,
+            );
+            await fs.outputFile(
+                path.join(proyekDummy, 'test', 'products.js'),
+                `require('../services/http-entry');\n`,
+            );
+
+            const graph = await buildProjectGraph(proyekDummy);
+            const relativeFiles = [...graph.liveFiles].map(file =>
+                path.relative(proyekDummy, file).replace(/\\/g, '/')
+            );
+
+            assert.ok(relativeFiles.includes('services/http-entry.js'));
+            assert.ok(relativeFiles.includes('test/products.js'));
+            assert.ok(!relativeFiles.includes('missing-index.js'));
         } finally {
             await fs.remove(proyekDummy);
         }

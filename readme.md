@@ -97,7 +97,7 @@ The easiest way to set up DeadKiller in your project is by using the interactive
 deadkiller init
 ```
 This command allows you to choose between two configuration formats:
-- **JavaScript Dinamis (`deadkiller.config.js`)** - Mendukung konfigurasi dinamis (opsi disarankan).
+- **JavaScript Dinamis (`deadkiller.config.mjs`)** - Mendukung konfigurasi dinamis tanpa bergantung pada tipe modul proyek (opsi disarankan).
 - **JSON Statis (`.deadkillerrc.json`)**
 
 ### Configuration Options
@@ -105,19 +105,19 @@ This command allows you to choose between two configuration formats:
 Berikut adalah contoh konfigurasi penuh yang dihasilkan:
 
 ```javascript
-// deadkiller.config.js
+// deadkiller.config.mjs
 export default {
     mode: "react",
-    entryPoints: ["src/index.js"], // Opsional: Kosongkan array untuk Auto-Detection
+    entryPoints: [], // Disarankan: runtime, test runner, dan config dideteksi otomatis
     ignorePrefixedVariables: "^_",
     preserveExports: true,
-    preserveFiles: ["**/*.test.js", "__tests__"],
+    preserveFiles: ["test/**", "tests/**", "__tests__/**", "**/*.test.*", "**/*.spec.*"],
+    ignoreFiles: ["dist/**", "build/**", "coverage/**"],
     ignoreDependencies: [],
     globals: [],
     overrides: [
         {
             files: ["**/*.test.js", "tests/**/*.js"],
-            ignorePrefixedVariables: ".*",
             preserveExports: true
         }
     ]
@@ -125,11 +125,25 @@ export default {
 ```
 
 - **mode**: Framework mode (`vanilla`, `react`, `next`, `vue`).
-- **entryPoints**: Array dari path entry point. **Secara default, DeadKiller dapat mendeteksi entry point secara otomatis** berdasarkan `package.json` (`main`, `module`, `workspaces`), struktur framework (Next.js `pages/`, Nuxt `app.vue`, Svelte `App.svelte`), serta konfigurasi bundler (`vite.config.js`, `webpack.config.js`). Anda hanya perlu mengisinya secara manual jika auto-detection gagal atau untuk setup yang spesifik.
+- **entryPoints**: Root untuk membangun graph. **Secara default, DeadKiller mendeteksi entry point secara otomatis** dari `package.json` (`main`, `module`, `exports`, `bin`, `workspaces`), struktur framework, file konfigurasi, dan pola test ketika test runner seperti Mocha, Vitest, atau Jest terdeteksi. Isi manual hanya untuk root khusus yang tidak mengikuti konvensi.
 - **ignorePrefixedVariables**: Regex untuk mengabaikan variabel tak terpakai spesifik (contoh: `^_` mengabaikan `_unusedVar`).
 - **preserveExports**: Atur ke `true` jika proyek adalah Library/NPM Package publik agar semua exported functions aman dari penghapusan. Atur ke `false` untuk aplikasi web biasa.
-- **preserveFiles**: Array berupa glob pattern untuk file/folder yang sama sekali tidak boleh dihapus.
-- **overrides**: Aturan khusus yang hanya diterapkan pada pattern file tertentu (contoh: mengabaikan pengecekan variabel di dalam file tests).
+- **preserveFiles**: File tetap dibaca untuk graph dan bukti dependency, tetapi dilindungi dari penghapusan. Gunakan ini untuk test dan example.
+- **ignoreFiles**: File tidak dibaca sama sekali, termasuk import dependency di dalamnya. Gunakan hanya untuk output generator seperti `dist`, `build`, dan `coverage`; jangan menaruh folder test di sini.
+- **overrides**: Aturan khusus untuk pola file tertentu. Setup default hanya melindungi export test; unused variable di dalam test tetap dianalisis. Tambahkan `ignorePrefixedVariables` sendiri hanya jika proyek memang membutuhkannya.
+
+### Entry Point, Preserve, dan Ignore
+
+```text
+entryPoints    -> membuat file menjadi root graph dan membaca dependency
+preserveFiles  -> tetap dianalisis, tetapi tidak boleh dieliminasi
+ignoreFiles    -> dikeluarkan sepenuhnya dari analisis
+```
+
+Contoh: test Mocha tidak diimpor oleh aplikasi, tetapi merupakan root eksekusi
+tersendiri. Ketika `mocha` terdeteksi dari dependency atau script `test`,
+DeadKiller otomatis memasukkan `test/**/*` ke graph. Dengan demikian package
+seperti `chai-http` yang hanya digunakan oleh test tidak salah dilaporkan mati.
 
 ## Confidence and Safety Classification
 

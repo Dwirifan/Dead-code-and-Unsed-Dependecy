@@ -1,6 +1,125 @@
 import fs from 'fs-extra';
 import path from 'path';
 import glob from 'fast-glob';
+import micromatch from 'micromatch';
+
+const ENTRY_GLOB_IGNORE = [
+    '**/node_modules/**',
+    '**/dist/**',
+    '**/build/**',
+    '**/coverage/**',
+    '**/.deadkiller_backup/**',
+    '**/.git/**',
+];
+
+const TEST_FILE_GLOBS = [
+    'test/**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}',
+    'tests/**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}',
+    '__tests__/**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}',
+    '**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}',
+];
+
+const TEST_RUNNERS = new Set([
+    'ava',
+    'bun',
+    'cypress',
+    'jest',
+    'jasmine',
+    'mocha',
+    'node:test',
+    'playwright',
+    '@playwright/test',
+    'tap',
+    'tape',
+    'vitest',
+]);
+
+function expandEntryGlob(pattern, projectRoot, extraOptions = {}) {
+    return glob.sync(pattern, {
+        cwd: projectRoot,
+        absolute: true,
+        onlyFiles: true,
+        followSymbolicLinks: false,
+        ignore: ENTRY_GLOB_IGNORE,
+        ...extraOptions,
+    });
+}
+
+function hasTestRunner(pkg) {
+    const declaredPackages = new Set([
+        ...Object.keys(pkg.dependencies || {}),
+        ...Object.keys(pkg.devDependencies || {}),
+        ...Object.keys(pkg.peerDependencies || {}),
+        ...Object.keys(pkg.optionalDependencies || {}),
+    ]);
+
+    if ([...TEST_RUNNERS].some(runner => declaredPackages.has(runner))) {
+        return true;
+    }
+
+    const scripts = Object.entries(pkg.scripts || {})
+        .filter(([name]) => /(?:^|:)(?:test|spec)(?::|$)/i.test(name))
+        .map(([, command]) => String(command))
+        .join(' ');
+
+    return /(?:^|[\s;&|])(?:npx\s+|pnpm\s+(?:exec\s+)?|yarn\s+|bunx\s+)?(?:ava|cypress|jest|jasmine|mocha|node\s+--test|playwright|tap|tape|vitest)(?=$|[\s;&|])/i.test(scripts);
+}
+
+function addMatchedEntries(entrySet, patterns, projectRoot) {
+    for (const pattern of patterns) {
+        for (const match of expandEntryGlob(pattern, projectRoot)) {
+            entrySet.add(path.normalize(match));
+        }
+    }
+}
+
+function addRuntimeEntriesFromScripts(entrySet, pkg, projectRoot) {
+    const runtimeScriptNames = /^(?:start|dev|serve|preview)(?::|$)/i;
+    const scriptCommands = Object.entries(pkg.scripts || {})
+        .filter(([name]) => runtimeScriptNames.test(name))
+        .map(([, command]) => String(command));
+    const launchPattern =
+        /(?:^|[\s;&|])(?:node|nodemon|tsx|ts-node|ts-node-esm|bun(?:\s+run)?|deno\s+run)\s+(?:--[\w-]+(?:=\S+)?\s+)*["']?([^"'`\s;&|]+\.[cm]?[jt]sx?)["']?/gi;
+
+    for (const command of scriptCommands) {
+        for (const match of command.matchAll(launchPattern)) {
+            const candidate = path.resolve(projectRoot, match[1]);
+            if (fs.existsSync(candidate)) {
+                entrySet.add(candidate);
+            }
+        }
+    }
+}
+
+/**
+ * Mengklasifikasikan entry point untuk penjelasan UX. Nilai ini hanya metadata
+ * presentasi dan tidak memengaruhi reachability graph.
+ */
+export function classifyEntryPoint(entryPath, projectRoot) {
+    const relativePath = path.relative(projectRoot, entryPath).replace(/\\/g, '/');
+
+    if (
+        /(?:^|\/)(?:test|tests|__tests__)\//i.test(relativePath) ||
+        /\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(relativePath)
+    ) {
+        return 'test';
+    }
+    if (/(?:^|\/)[^/]+\.config\.[cm]?[jt]s$/i.test(relativePath)) {
+        return 'config';
+    }
+    if (/(?:^|\/)examples?\//i.test(relativePath)) {
+        return 'example';
+    }
+    return 'runtime';
+}
+
+function hasValidRuntimeEntry(entrySet, projectRoot) {
+    return [...entrySet].some(entry =>
+        fs.existsSync(entry) &&
+        !entry.endsWith('.json') &&
+        classifyEntryPoint(entry, projectRoot) === 'runtime'
+    );
+}
 
 /**
  * Menganalisis dan menemukan titik masuk (entry points) dari sebuah proyek
@@ -52,7 +171,7 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
     // 1. Tambahkan Custom Entry Points dari RuleEngine
     if (ruleEngine && ruleEngine.rules && ruleEngine.rules.entryPoints) {
         for (const ep of ruleEngine.rules.entryPoints) {
-            const matches = glob.sync(ep, { cwd: projectRoot, absolute: true });
+            const matches = expandEntryGlob(ep, projectRoot);
             if (matches.length > 0) {
                 matches.forEach(m => entrySet.add(path.normalize(m)));
             } else {
@@ -84,9 +203,22 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
         collectExports(pkg.exports);
     }
 
+    // Script lifecycle adalah manifest executable yang sah. Ini menangani
+    // aplikasi dengan `main` usang/tidak ada dan nama entry nonkonvensional,
+    // misalnya `node services/http-entry.js` atau `tsx src/worker.ts`.
+    addRuntimeEntriesFromScripts(entrySet, pkg, projectRoot);
+
     // 3. Framework Auto-Detection Heuristics
     const allDeps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
     const frameworkGlobs = [];
+
+    // Test adalah root eksekusi tersendiri. Ia tidak selalu di-import oleh
+    // aplikasi, tetapi import package di dalamnya tetap menjadi bukti dependency.
+    // Discovery dibatasi pada proyek yang benar-benar mendeklarasikan/menjalankan
+    // test runner agar folder bernama "test" biasa tidak otomatis dihidupkan.
+    if (hasTestRunner(pkg)) {
+        addMatchedEntries(entrySet, TEST_FILE_GLOBS, projectRoot);
+    }
 
     if (allDeps['next']) {
         frameworkGlobs.push('pages/**/*.{js,jsx,ts,tsx}', 'app/**/*.{js,jsx,ts,tsx}', 'src/pages/**/*.{js,jsx,ts,tsx}', 'src/app/**/*.{js,jsx,ts,tsx}');
@@ -176,10 +308,7 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
     }
 
     // Fallback: kandidat umum jika source entry points tidak ada atau tidak valid (misal dist belum dibuild)
-    let hasValidSource = false;
-    for (const entry of entrySet) {
-        if (fs.existsSync(entry) && !entry.endsWith('.json')) { hasValidSource = true; break; }
-    }
+    let hasValidSource = hasValidRuntimeEntry(entrySet, projectRoot);
     
     if (!hasValidSource) {
         const candidates = [
@@ -196,7 +325,7 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
     }
 
     // HTML Fallback
-    for (const entry of entrySet) { if (fs.existsSync(entry) && !entry.endsWith('.json')) { hasValidSource = true; break; } }
+    hasValidSource = hasValidRuntimeEntry(entrySet, projectRoot);
     
     if (!hasValidSource) {
         const htmlCandidates = ['index.html', 'public/index.html', 'src/index.html'];
@@ -225,7 +354,7 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
     }
 
     // Ultimate Fallback
-    for (const entry of entrySet) { if (fs.existsSync(entry) && !entry.endsWith('.json')) { hasValidSource = true; break; } }
+    hasValidSource = hasValidRuntimeEntry(entrySet, projectRoot);
     if (!hasValidSource) {
         const deepSearch = glob.sync('src/**/index.{js,ts,jsx,tsx}', { cwd: projectRoot, absolute: true });
         if (deepSearch.length > 0) {
@@ -246,7 +375,7 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
         let isIgnored = false;
         if (ruleEngine && ruleEngine.rules.ignoreFiles && ruleEngine.rules.ignoreFiles.length > 0) {
             const relativePath = path.relative(projectRoot, entry).replace(/\\/g, '/');
-            isIgnored = ruleEngine.rules.ignoreFiles.some(pattern => relativePath.includes(pattern) || relativePath.startsWith(pattern));
+            isIgnored = micromatch.isMatch(relativePath, ruleEngine.rules.ignoreFiles, { dot: true });
         }
 
         if (isIgnored) {
@@ -268,6 +397,19 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
     if (validatedEntries.length === 0) {
         throw new Error('Could not auto-detect entry point. Please specify "main" in package.json or define "entryPoints" in .deadkillerrc.json.');
     }
+
+    const entryKindOrder = new Map([
+        ['runtime', 0],
+        ['test', 1],
+        ['config', 2],
+        ['example', 3],
+    ]);
+    validatedEntries.sort((left, right) => {
+        const kindDifference =
+            entryKindOrder.get(classifyEntryPoint(left, projectRoot)) -
+            entryKindOrder.get(classifyEntryPoint(right, projectRoot));
+        return kindDifference || left.localeCompare(right);
+    });
 
     return validatedEntries;
 }

@@ -3,6 +3,32 @@ import path from 'path';
 import { pathToFileURL } from 'url';
 import micromatch from 'micromatch';
 
+async function importConfigModule(configPath, projectRoot) {
+    const packageJsonPath = path.join(projectRoot, 'package.json');
+    const pkg = await fs.pathExists(packageJsonPath)
+        ? await fs.readJson(packageJsonPath)
+        : {};
+
+    // Konfigurasi lama yang dibuat sebagai `deadkiller.config.js` memakai
+    // `export default`. Pada proyek CommonJS, import langsung memicu warning
+    // MODULE_TYPELESS_PACKAGE_JSON dari Node. Config hasil generator hanya
+    // berisi object literal, sehingga aman dimuat sebagai data URL.
+    if (path.basename(configPath) === 'deadkiller.config.js' && pkg.type !== 'module') {
+        const source = await fs.readFile(configPath, 'utf8');
+        const isPlainGeneratedEsmConfig =
+            /\bexport\s+default\b/.test(source) &&
+            !/^\s*import\s/m.test(source) &&
+            !/\bexport\s+(?!default\b)/.test(source);
+
+        if (isPlainGeneratedEsmConfig) {
+            const encoded = Buffer.from(source, 'utf8').toString('base64');
+            return import(`data:text/javascript;base64,${encoded}`);
+        }
+    }
+
+    return import(pathToFileURL(configPath).href);
+}
+
 /**
  * Mesin Aturan (Rule Engine) untuk memvalidasi apakah dead code
  * harus diselamatkan berdasarkan konfigurasi proyek.
@@ -52,11 +78,11 @@ export class RuleEngine {
         try {
             let userConfig = null;
 
-            if (await fs.pathExists(jsConfigPath)) {
-                const configModule = await import(pathToFileURL(jsConfigPath).href);
+            if (await fs.pathExists(mjsConfigPath)) {
+                const configModule = await importConfigModule(mjsConfigPath, projectRoot);
                 userConfig = configModule.default || configModule;
-            } else if (await fs.pathExists(mjsConfigPath)) {
-                const configModule = await import(pathToFileURL(mjsConfigPath).href);
+            } else if (await fs.pathExists(jsConfigPath)) {
+                const configModule = await importConfigModule(jsConfigPath, projectRoot);
                 userConfig = configModule.default || configModule;
             } else if (await fs.pathExists(jsonConfigPath)) {
                 userConfig = await fs.readJson(jsonConfigPath);
@@ -196,6 +222,7 @@ export class RuleEngine {
      */
     async saveConfig(projectRoot) {
         const jsConfigPath = path.join(projectRoot, 'deadkiller.config.js');
+        const mjsConfigPath = path.join(projectRoot, 'deadkiller.config.mjs');
         const jsonConfigPath = path.join(projectRoot, '.deadkillerrc.json');
         
         try {
@@ -208,7 +235,10 @@ export class RuleEngine {
  */
 export default ${JSON.stringify(this.rules, null, 4)};
 `;
-                await fs.writeFile(jsConfigPath, jsContent, 'utf-8');
+                const targetPath = await fs.pathExists(jsConfigPath)
+                    ? jsConfigPath
+                    : mjsConfigPath;
+                await fs.writeFile(targetPath, jsContent, 'utf-8');
             }
         } catch (err) {
             console.error(`[RuleEngine] Gagal menyimpan konfigurasi: ${err.message}`);

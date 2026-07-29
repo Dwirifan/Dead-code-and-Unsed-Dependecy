@@ -8,9 +8,11 @@ import { visitorKeys as tsVisitorKeys } from '@typescript-eslint/visitor-keys';
 import { resolveBarrelExports } from '../deadcode/core/barrelResolver.js';
 import { resolvePath } from './pathResolver.js';
 import { findEntryPoints } from './entryPointFinder.js';
+import micromatch from 'micromatch';
 
 // Gabungkan Visitor Keys ESTree standar dengan ekstrasi TypeScript/JSX
 const visitorKeys = { ...estraverse.VisitorKeys, ...tsVisitorKeys };
+const NON_PACKAGE_SCHEMES = /^(?:https?|jsr|deno|bun|data):/i;
 
 /**
  * Membangun sebuah graf struktural yang komprehensif merayapi titik masuk (entry point) menggunakan BFS.
@@ -268,6 +270,12 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
                     }
 
                     if (importPath) {
+                        if (NON_PACKAGE_SCHEMES.test(importPath)) {
+                            importPath = null;
+                        }
+                    }
+
+                    if (importPath) {
                         const isLocalOrAliasPrefix = importPath.startsWith('.') || 
                                                      importPath.startsWith('/') || 
                                                      path.isAbsolute(importPath) || 
@@ -335,7 +343,7 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
                             let isIgnored = false;
                             if (ruleEngine && ruleEngine.rules.ignoreFiles && ruleEngine.rules.ignoreFiles.length > 0) {
                                 const relativePath = path.relative(projectRoot, absolute).replace(/\\/g, '/');
-                                isIgnored = ruleEngine.rules.ignoreFiles.some(pattern => relativePath.includes(pattern) || relativePath.startsWith(pattern));
+                                isIgnored = micromatch.isMatch(relativePath, ruleEngine.rules.ignoreFiles, { dot: true });
                             }
 
                             if (!isIgnored) {

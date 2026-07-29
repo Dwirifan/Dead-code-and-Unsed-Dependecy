@@ -20,6 +20,7 @@ export function registerScanCommand(program) {
         .command('scan')
         .argument('<path>', 'Path ke file tunggal atau direktori proyek')
         .option('--json', 'Output hasil analisis dalam format JSON (untuk integrasi CI/CD)')
+        .option('--summary-file <path>', 'Simpan ringkasan internal scan untuk integrasi wizard')
         .option('-a, --advanced', 'Tampilkan hasil linter AST lanjutan (Undeclared Variables, Unused Methods, dll)')
         .description('Pindai dead code dan dependensi tidak terpakai tanpa mengubah file')
         .action(async (targetPath, options) => {
@@ -440,6 +441,26 @@ export function registerScanCommand(program) {
             if (!printedAny && groupedItems.safe.length === 0) console.log('\n   [ok] Tidak ada dead code [SAFE] yang tertinggal!');
 
             const duration = (performance.now() - startTime).toFixed(2);
+            const dependencyFindings = dependencyReport
+                ? (dependencyReport.unused?.length || 0) +
+                  (dependencyReport.deadDevDeps?.length || 0) +
+                  (dependencyReport.missing?.length || 0) +
+                  (dependencyReport.missingBinaries?.length || 0)
+                : 0;
+            const removableDependencyFindings = dependencyReport
+                ? (dependencyReport.unused?.length || 0) +
+                  (dependencyReport.deadDevDeps?.length || 0)
+                : 0;
+            const scanSummary = {
+                codeFindings: totalIssues,
+                dependencyFindings,
+                removableDependencyFindings,
+                safe: groupedItems.safe.length,
+                review: groupedItems.review.length,
+                risky: groupedItems.risky.length,
+                other: groupedItems.other.length,
+                safeFixCount: groupedItems.safe.length + removableDependencyFindings,
+            };
 
             // Tampilkan Summary Statistics Box
             if (!jsonMode) {
@@ -448,13 +469,13 @@ export function registerScanCommand(program) {
                 const displayedIssues = isAdvancedMode
                     ? totalIssues
                     : groupedItems.safe.length;
-
                 console.log('\n┌──────────────────────────────────────────────┐');
                 console.log('│ ' + chalk.bold('📊 SCAN SUMMARY STATISTICS') + '                   │');
                 console.log('├──────────────────────────────────────────────┤');
                 console.log(`│ Total Files Analyzed : ${String(filesToAnalyze.size).padEnd(21)} │`);
                 console.log(`│ Unconnected Candidates: ${String(deadFiles.length).padEnd(19)} │`);
-                console.log(`│ Total Issues         : ${String(displayedIssues).padEnd(21)} │`);
+                console.log(`│ Code Findings        : ${String(displayedIssues).padEnd(21)} │`);
+                console.log(`│ Dependency Findings  : ${String(dependencyFindings).padEnd(21)} │`);
                 console.log('├──────────────────────────────────────────────┤');
                 console.log(`│ 🟢 Safe to Remove    : ${String(groupedItems.safe.length).padEnd(21)} │`);
                 if (isAdvancedMode) {
@@ -474,6 +495,8 @@ export function registerScanCommand(program) {
                     summary: {
                         liveFiles: graph.liveFiles.size,
                         totalIssues,
+                        codeFindings: scanSummary.codeFindings,
+                        dependencyFindings: scanSummary.dependencyFindings,
                         analysisTime: `${(performance.now() - startTime).toFixed(2)} ms`
                     },
                     unsafeFiles: graph.unsafeFiles ? [...graph.unsafeFiles].map(f => path.relative(absolutePath, f)) : [],
@@ -518,6 +541,10 @@ export function registerScanCommand(program) {
                 // Output JSON (tanpa menghapus terminal — biarkan user lihat warning sebelumnya)
                 console.log('\n--- JSON OUTPUT ---');
                 console.log(JSON.stringify(jsonResult, null, 2));
+            }
+
+            if (options.summaryFile) {
+                await fs.outputJson(path.resolve(options.summaryFile), scanSummary, { spaces: 2 });
             }
         });
 }

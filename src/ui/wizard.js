@@ -3,6 +3,8 @@ import fs from 'fs-extra';
 import fg from 'fast-glob';
 import path from 'path';
 import { execSync } from 'child_process';
+import os from 'os';
+import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import { showBanner, uiColors } from './theme.js';
 import { collectDepCandidates } from '../commands/showDepsCommand.js';
@@ -11,6 +13,35 @@ import { removeUnusedDependencies } from '../eliminator/dependencyCleaner.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const cliPath = path.resolve(__dirname, '../../bin/dce-cli.js');
+
+export function buildPostScanMenu(scanSummary, isAdvanced) {
+    const totalFindings = scanSummary
+        ? (scanSummary.safeFixCount ?? scanSummary.safe ?? 0) +
+          (scanSummary.review ?? 0) +
+          (scanSummary.risky ?? 0) +
+          (scanSummary.other ?? 0) +
+          (scanSummary.dependencyFindings ?? 0)
+        : null;
+    if (totalFindings === 0) {
+        return { clean: true, choices: [] };
+    }
+
+    const choices = [];
+    if ((scanSummary?.safeFixCount ?? 1) > 0 || isAdvanced) {
+        choices.push({
+            name: `${choices.length + 1}. Ya, Eksekusi Fix Sekarang (Bersihkan dead code & dependensi)`,
+            value: 'fix',
+        });
+    }
+    if (!isAdvanced && (scanSummary?.review ?? 1) + (scanSummary?.risky ?? 1) + (scanSummary?.other ?? 1) > 0) {
+        choices.push({
+            name: `${choices.length + 1}. Pindai Ulang dengan Mode Advanced (Lihat item REVIEW & RISKY)`,
+            value: 'advanced',
+        });
+    }
+    choices.push({ name: `${choices.length + 1}. Tidak, Keluar`, value: 'exit' });
+    return { clean: false, choices };
+}
 
 export async function launchWizard() {
     showBanner();
@@ -98,32 +129,41 @@ export async function launchWizard() {
     let isAdvanced = false;
 
     while (keepScanning) {
+        const summaryPath = path.join(os.tmpdir(), `deadkiller-scan-${randomUUID()}.json`);
+        let scanSummary = null;
         try {
             // stdio: 'inherit' memastikan warna dan interaksi CLI tetap berjalan
             const advancedFlag = (action === 'scan' && isAdvanced) ? " --advanced" : "";
-            execSync(`node "${cliPath}" ${action} "${targetDirectory}"${advancedFlag}`, { stdio: 'inherit' });
+            const summaryFlag = action === 'scan' ? ` --summary-file "${summaryPath}"` : '';
+            execSync(`node "${cliPath}" ${action} "${targetDirectory}"${advancedFlag}${summaryFlag}`, { stdio: 'inherit' });
+            if (action === 'scan' && await fs.pathExists(summaryPath)) {
+                scanSummary = await fs.readJson(summaryPath);
+            }
         } catch (error) {
             // Kesalahan sudah ditangani dan di-print oleh proses anak (dce-cli.js)
             if (process.env.DEBUG) console.warn(error);
+        } finally {
+            if (await fs.pathExists(summaryPath)) {
+                await fs.remove(summaryPath);
+            }
         }
 
         // 4. Setelah scan selesai, tawarkan langsung fix atau scan ulang
         if (action === 'scan') {
             try {
-                const choices = [
-                    { name: '1. Ya, Eksekusi Fix Sekarang (Bersihkan dead code & dependensi)', value: 'fix' }
-                ];
-                if (!isAdvanced) {
-                    choices.push({ name: '2. Pindai Ulang dengan Mode Advanced (Lihat item REVIEW & RISKY)', value: 'advanced' });
+                const postScanMenu = buildPostScanMenu(scanSummary, isAdvanced);
+                if (postScanMenu.clean) {
+                    console.log(uiColors.success('  ✔ Proyek bersih. Tidak ada tindakan fix yang diperlukan.\n'));
+                    keepScanning = false;
+                    continue;
                 }
-                choices.push({ name: isAdvanced ? '2. Tidak, Keluar' : '3. Tidak, Keluar', value: 'exit' });
 
                 const { nextAction } = await inquirer.prompt([
                     {
                         type: 'list',
                         name: 'nextAction',
                         message: 'Apa langkah selanjutnya?',
-                        choices: choices
+                        choices: postScanMenu.choices
                     }
                 ]);
 

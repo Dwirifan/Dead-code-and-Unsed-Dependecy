@@ -456,6 +456,16 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                 );
 
                 let isImpureWrite = false;
+                let isImpureInitializer = false;
+                if (
+                    effectiveType === 'Variable' &&
+                    info.node &&
+                    info.node.type === 'VariableDeclarator' &&
+                    info.node.init &&
+                    !isPureExpression(info.node.init)
+                ) {
+                    isImpureInitializer = true;
+                }
                 if (effectiveType === 'WriteOnly') {
                     // Evaluasi inisialisasi: let x = db.save()
                     if (info.node && info.node.type === 'VariableDeclarator' && info.node.init && !isPureExpression(info.node.init)) {
@@ -477,7 +487,11 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     }
                 }
 
-                const { confidence, status, reason } = classifyConfidence(effectiveType, { isImport, isImpureWrite });
+                const { confidence, status, reason } = classifyConfidence(effectiveType, {
+                    isImport,
+                    isImpureInitializer,
+                    isImpureWrite,
+                });
 
                 deadCode.push({
                     name,

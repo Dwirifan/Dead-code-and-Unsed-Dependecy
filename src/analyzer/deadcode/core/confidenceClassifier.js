@@ -20,6 +20,13 @@ export function classifyConfidence(type, info = {}) {
             if (info.isImport) {
                 return { confidence: 'high', status: 'safe', reason: 'Modul diimpor tetapi tidak pernah direferensikan atau digunakan dalam kode.' };
             }
+            if (info.isImpureInitializer) {
+                return {
+                    confidence: 'medium',
+                    status: 'review',
+                    reason: 'Binding variabel tidak pernah dibaca, tetapi inisialisasinya memanggil fungsi atau memiliki efek samping. Pertahankan ekspresi inisialisasi saat menghapus binding.'
+                };
+            }
             // Variable lokal biasa = high confidence
             return { confidence: 'high', status: 'safe', reason: 'Variabel lokal dideklarasikan tetapi nilainya tidak pernah dibaca atau digunakan.' };
 
