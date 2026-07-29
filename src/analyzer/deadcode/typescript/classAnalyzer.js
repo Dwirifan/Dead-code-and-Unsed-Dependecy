@@ -1,4 +1,18 @@
 import estraverse from 'estraverse';
+import { visitorKeys as tsVisitorKeys } from '@typescript-eslint/visitor-keys';
+
+const visitorKeys = { ...estraverse.VisitorKeys, ...tsVisitorKeys };
+
+function getStaticMemberName(member) {
+    if (!member || member.type !== 'MemberExpression' || !member.property) return null;
+    if (!member.computed && (member.property.type === 'Identifier' || member.property.type === 'PrivateIdentifier')) {
+        return member.property.type === 'PrivateIdentifier' ? `#${member.property.name}` : member.property.name;
+    }
+    if (member.computed && member.property.type === 'Literal' && typeof member.property.value === 'string') {
+        return member.property.value;
+    }
+    return null;
+}
 
 /**
  * Class Analyzer: Simple Type Inference Engine (Level 3 - Semantic Analysis)
@@ -31,32 +45,36 @@ export function findUnusedClassMethods(ast, globalRegistry = null) {
     // Phase 1: Kumpulkan semua deklarasi kelas dan method-nya
     const classMap = new Map(); // className → { methods: Map, node, superClassName, isLeafClass }
     const instanceMap = new Map(); // variableName → className
-    let currentClassName = null;
+    const classStack = [];
 
     estraverse.traverse(ast, {
         fallback: 'iteration',
+        keys: visitorKeys,
         enter(node, parent) {
             // --- Deteksi Deklarasi Kelas ---
             if (node.type === 'ClassDeclaration' && node.id) {
-                currentClassName = node.id.name;
+                const currentClassName = node.id.name;
                 const superClassName = node.superClass && node.superClass.type === 'Identifier' ? node.superClass.name : null;
                 if (!classMap.has(currentClassName)) {
-                    classMap.set(currentClassName, { methods: new Map(), node, superClassName, isLeafClass: true });
+                    classMap.set(currentClassName, { methods: new Map(), node, superClassName, isLeafClass: true, dynamicAccesses: [] });
                 } else {
                     classMap.get(currentClassName).superClassName = superClassName;
                 }
+                classStack.push(currentClassName);
             }
             if (node.type === 'ClassExpression' && parent && parent.type === 'VariableDeclarator' && parent.id) {
-                currentClassName = parent.id.name;
+                const currentClassName = parent.id.name;
                 const superClassName = node.superClass && node.superClass.type === 'Identifier' ? node.superClass.name : null;
                 if (!classMap.has(currentClassName)) {
-                    classMap.set(currentClassName, { methods: new Map(), node, superClassName, isLeafClass: true });
+                    classMap.set(currentClassName, { methods: new Map(), node, superClassName, isLeafClass: true, dynamicAccesses: [] });
                 } else {
                     classMap.get(currentClassName).superClassName = superClassName;
                 }
+                classStack.push(currentClassName);
             }
 
             // --- Deteksi Method di dalam Class Body ---
+            const currentClassName = classStack[classStack.length - 1] || null;
             if (node.type === 'MethodDefinition' && currentClassName && classMap.has(currentClassName)) {
                 const rawName = node.key ? (node.key.type === 'Identifier' ? node.key.name : (node.key.type === 'PrivateIdentifier' ? `#${node.key.name}` : null)) : null;
                 if (rawName && rawName !== 'constructor') {
@@ -103,13 +121,13 @@ export function findUnusedClassMethods(ast, globalRegistry = null) {
         },
         leave(node) {
             if (node.type === 'ClassDeclaration' || node.type === 'ClassExpression') {
-                currentClassName = null;
+                classStack.pop();
             }
         }
     });
 
     // Phase 2: Lacak instansiasi & pemanggilan method (termasuk inheritance)
-    let insideClassName = null;
+    const insideClassStack = [];
 
     function markMethodUsedInHierarchy(className, methodName) {
         let curr = className;
@@ -130,13 +148,16 @@ export function findUnusedClassMethods(ast, globalRegistry = null) {
 
     estraverse.traverse(ast, {
         fallback: 'iteration',
+        keys: visitorKeys,
         enter(node, parent) {
             // Track saat kita masuk ke body class (untuk mendeteksi this.method())
             if ((node.type === 'ClassDeclaration' || node.type === 'ClassExpression')) {
                 if (node.id) {
-                    insideClassName = node.id.name;
+                    insideClassStack.push(node.id.name);
                 } else if (parent && parent.type === 'VariableDeclarator' && parent.id) {
-                    insideClassName = parent.id.name;
+                    insideClassStack.push(parent.id.name);
+                } else {
+                    insideClassStack.push(null);
                 }
             }
 
@@ -152,12 +173,13 @@ export function findUnusedClassMethods(ast, globalRegistry = null) {
             }
 
             // --- Deteksi Pemanggilan Method: x.methodName() atau x.methodName ---
-            if (node.type === 'MemberExpression' && !node.computed &&
+            const staticMemberName = getStaticMemberName(node);
+            if (node.type === 'MemberExpression' && staticMemberName &&
                 node.object && node.object.type === 'Identifier' &&
-                node.property && (node.property.type === 'Identifier' || node.property.type === 'PrivateIdentifier')) {
+                node.property) {
 
                 const objName = node.object.name;
-                const methodName = node.property.type === 'PrivateIdentifier' ? `#${node.property.name}` : node.property.name;
+                const methodName = staticMemberName;
 
                 // Pemanggilan via instance: svc.fetchData()
                 if (instanceMap.has(objName)) {
@@ -172,23 +194,30 @@ export function findUnusedClassMethods(ast, globalRegistry = null) {
             }
 
             // --- Deteksi this.methodName() atau super.methodName() di dalam class body ---
-            if (node.type === 'MemberExpression' && !node.computed &&
+            const insideClassName = insideClassStack[insideClassStack.length - 1] || null;
+            if (node.type === 'MemberExpression' && staticMemberName &&
                 node.object && (node.object.type === 'ThisExpression' || node.object.type === 'Super') &&
-                node.property && (node.property.type === 'Identifier' || node.property.type === 'PrivateIdentifier')) {
+                node.property) {
 
-                const methodName = node.property.type === 'PrivateIdentifier' ? `#${node.property.name}` : node.property.name;
+                const methodName = staticMemberName;
                 if (insideClassName && classMap.has(insideClassName)) {
                     markMethodUsedInHierarchy(insideClassName, methodName);
                 }
             }
+
+            // Nama computed yang tidak dapat ditentukan hanya memengaruhi kelas receiver.
+            if (node.type === 'MemberExpression' && node.computed && !staticMemberName &&
+                node.object && (node.object.type === 'ThisExpression' || node.object.type === 'Super') &&
+                insideClassName && classMap.has(insideClassName)) {
+                classMap.get(insideClassName).dynamicAccesses.push({
+                    line: node.loc ? node.loc.start.line : 0,
+                    reason: 'computed member access'
+                });
+            }
         },
-        leave(node, parent) {
+        leave(node) {
             if ((node.type === 'ClassDeclaration' || node.type === 'ClassExpression')) {
-                if (node.id && node.id.name === insideClassName) {
-                    insideClassName = null;
-                } else if (parent && parent.type === 'VariableDeclarator' && parent.id && parent.id.name === insideClassName) {
-                    insideClassName = null;
-                }
+                insideClassStack.pop();
             }
         }
     });
@@ -205,7 +234,9 @@ export function findUnusedClassMethods(ast, globalRegistry = null) {
     for (const [className, classInfo] of classMap.entries()) {
         for (const [methodName, methodInfo] of classInfo.methods.entries()) {
             // Mitigasi aman: jika method pernah dipanggil DI FILE MANAPUN, anggap dia hidup (used)
-            const isUsedGlobally = globalRegistry && globalRegistry.calledMethods && (
+            // Nama method global tidak boleh membuktikan pemakaian method private:
+            // pemanggilan foo.sameName() pada kelas lain sebelumnya menyebabkan false negative.
+            const isUsedGlobally = !methodInfo.isPrivate && globalRegistry && globalRegistry.calledMethods && (
                 globalRegistry.calledMethods.has(methodName) ||
                 (methodName.startsWith('#') && globalRegistry.calledMethods.has(methodName.slice(1)))
             );
@@ -221,7 +252,14 @@ export function findUnusedClassMethods(ast, globalRegistry = null) {
                         isPrivate: methodInfo.isPrivate,
                         isProtected: methodInfo.isProtected,
                         isLeafClass: classInfo.isLeafClass,
-                        hasDecorator: methodInfo.hasDecorator
+                        hasDecorator: methodInfo.hasDecorator,
+                        dynamicRisk: classInfo.dynamicAccesses.length > 0,
+                        dynamicRiskScope: classInfo.dynamicAccesses.length > 0 ? `class ${className}` : null,
+                        evidence: [
+                            `${methodInfo.accessibility} method declaration found`,
+                            'zero statically resolved references',
+                            ...(classInfo.dynamicAccesses.length > 0 ? ['unresolved computed access exists in class'] : [])
+                        ]
                     }
                 });
             }

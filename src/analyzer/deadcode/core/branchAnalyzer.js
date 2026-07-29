@@ -278,13 +278,6 @@ export function findUnreachableBranches(ast, ruleEngine = null, fileName = null)
             // ═══════════════════════════════════════════════════
             // 2. UNREACHABLE AFTER TERMINATOR (return/throw/break/continue)
             // ═══════════════════════════════════════════════════
-            const terminators = new Set([
-                'ReturnStatement',
-                'ThrowStatement',
-                'BreakStatement',
-                'ContinueStatement'
-            ]);
-
             const statementsToScan =
                 node.type === 'BlockStatement' ? node.body :
                 node.type === 'SwitchCase'     ? node.consequent :
@@ -298,7 +291,7 @@ export function findUnreachableBranches(ast, ruleEngine = null, fileName = null)
                     if (terminatorFound) {
                         unreachableStatements.push(stmt);
                     }
-                    if (terminators.has(stmt.type)) {
+                    if (!terminatorFound && alwaysTerminates(stmt)) {
                         terminatorFound = true;
                         terminatorNode = stmt;
                     }
@@ -479,4 +472,48 @@ export function findUnreachableBranches(ast, ruleEngine = null, fileName = null)
     });
 
     return unreachableNodes;
+}
+
+/**
+ * Menentukan apakah sebuah statement memutus semua jalur yang keluar darinya.
+ * Ini menangani terminator langsung sekaligus terminator majemuk seperti
+ * if/else yang kedua cabangnya return/throw.
+ */
+function alwaysTerminates(statement) {
+    if (!statement) return false;
+
+    switch (statement.type) {
+        case 'ReturnStatement':
+        case 'ThrowStatement':
+        case 'BreakStatement':
+        case 'ContinueStatement':
+            return true;
+
+        case 'BlockStatement':
+            return blockAlwaysTerminates(statement.body);
+
+        case 'IfStatement':
+            return Boolean(statement.alternate) &&
+                alwaysTerminates(statement.consequent) &&
+                alwaysTerminates(statement.alternate);
+
+        case 'TryStatement':
+            // finally yang terminator selalu mengalahkan hasil try/catch.
+            if (statement.finalizer && alwaysTerminates(statement.finalizer)) return true;
+            // Tanpa catch, exception dari try masih dapat keluar lewat jalur throw.
+            if (!statement.handler) return false;
+            return alwaysTerminates(statement.block) &&
+                alwaysTerminates(statement.handler.body);
+
+        default:
+            return false;
+    }
+}
+
+function blockAlwaysTerminates(statements) {
+    if (!Array.isArray(statements)) return false;
+    for (const statement of statements) {
+        if (alwaysTerminates(statement)) return true;
+    }
+    return false;
 }

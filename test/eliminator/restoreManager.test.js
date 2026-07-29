@@ -70,4 +70,28 @@ describe('Eliminator: Restore Manager', () => {
         
         expect(await fs.pathExists(cp)).toBe(false);
     });
+
+    it('memakai metadata tanpa menyalinnya ke root dan menghapus lockfile yang sebelumnya tidak ada', async () => {
+        const cp = path.join(backupDir, 'backup_2000');
+        await fs.outputFile(path.join(cp, 'src', 'app.js'), 'restored app');
+        await fs.writeJson(path.join(cp, '.deadkiller-checkpoint.json'), {
+            version: 1,
+            createdAt: new Date().toISOString(),
+            entries: [
+                { path: 'src/app.js', existed: true, dependencyState: false },
+                { path: 'package-lock.json', existed: false, dependencyState: true },
+            ],
+        });
+        await fs.outputFile(path.join(tempProjectRoot, 'src', 'app.js'), 'modified app');
+        await fs.outputFile(path.join(tempProjectRoot, 'package-lock.json'), 'generated lock');
+
+        const listed = await listCheckpoints(tempProjectRoot);
+        const result = await restoreCheckpoint(cp, tempProjectRoot);
+
+        expect(listed[0].files).toEqual(['src/app.js']);
+        expect(result).toEqual({ restored: 1, failed: [] });
+        expect(await fs.readFile(path.join(tempProjectRoot, 'src', 'app.js'), 'utf8')).toBe('restored app');
+        expect(await fs.pathExists(path.join(tempProjectRoot, 'package-lock.json'))).toBe(false);
+        expect(await fs.pathExists(path.join(tempProjectRoot, '.deadkiller-checkpoint.json'))).toBe(false);
+    });
 });

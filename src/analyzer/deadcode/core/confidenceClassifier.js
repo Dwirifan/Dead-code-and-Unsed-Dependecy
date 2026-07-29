@@ -81,6 +81,13 @@ export function classifyConfidence(type, info = {}) {
             if (info && info.hasDecorator) {
                 return { confidence: 'low', status: 'risky', reason: 'Metode kelas menggunakan dekorator refleksi/framework (berisiko tinggi jika dihapus).' };
             }
+            if (info && info.dynamicRisk) {
+                return {
+                    confidence: 'medium',
+                    status: 'review',
+                    reason: `Metode tidak memiliki referensi statis, tetapi ${info.dynamicRiskScope || 'kelas terkait'} memiliki akses member dinamis; temuan dilaporkan tanpa penghapusan otomatis.`
+                };
+            }
             if (info && (info.isPrivate || info.accessibility === 'private')) {
                 return { confidence: 'high', status: 'safe', reason: 'Metode privat (#/private) tidak pernah dipanggil di dalam kelasnya sendiri (100% aman dihapus).' };
             }

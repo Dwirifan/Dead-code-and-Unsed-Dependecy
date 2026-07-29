@@ -173,7 +173,7 @@ export function removeDeadCode(codeString, deadNodes, ruleEngine = null, elimina
     for (const dead of sortedNodes) {
         applySingleNodeRemoval(fastMs, codeString, dead, ruleEngine, eliminationLevel);
     }
-    const fastResult = cleanupEmptyImports(fastMs.toString());
+    const fastResult = cleanupArtifacts(fastMs.toString());
 
     // Validasi parse ulang AST pasca-transformasi
     if (isValidSyntax(fastResult)) {
@@ -193,7 +193,7 @@ export function removeDeadCode(codeString, deadNodes, ruleEngine = null, elimina
         }
         applySingleNodeRemoval(testMs, codeString, dead, ruleEngine, eliminationLevel);
 
-        if (isValidSyntax(cleanupEmptyImports(testMs.toString()))) {
+        if (isValidSyntax(cleanupArtifacts(testMs.toString()))) {
             acceptedNodes.push(dead);
         } else if (process.env.DEBUG) {
             console.warn(`[CodeCleaner] Menolak penghapusan node ${dead.type} '${dead.name}' karena merusak sintaks struktural.`);
@@ -204,14 +204,19 @@ export function removeDeadCode(codeString, deadNodes, ruleEngine = null, elimina
     for (const accepted of acceptedNodes) {
         applySingleNodeRemoval(finalMs, codeString, accepted, ruleEngine, eliminationLevel);
     }
-    return cleanupEmptyImports(finalMs.toString());
+    return cleanupArtifacts(finalMs.toString());
 }
 
-function cleanupEmptyImports(code) {
-    return code.replace(
+function cleanupArtifacts(code) {
+    const withoutEmptyImports = code.replace(
         /^[\t ]*import[\t ]*\{[\t ]*\}[\t ]*from[\t ]*(['"])[^'"]+\1;?[\t ]*(?:\r?\n|$)/gm,
         '',
     );
+    // Penghapusan beberapa node pada satu baris dapat menyisakan EmptyStatement
+    // tersendiri (`  ;`). Aman dibuang hanya jika semicolon adalah satu-satunya
+    // token pada baris; semicolon di `for (;;)`, body loop, dan statement lain
+    // tidak tersentuh.
+    return withoutEmptyImports.replace(/^[\t ]*;[\t ]*(?:\r?\n|$)/gm, '');
 }
 
 /**

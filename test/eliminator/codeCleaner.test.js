@@ -127,5 +127,33 @@ describe('Eliminator: Code Cleaner', () => {
         const result = removeDeadCode(code, deadNodes, null, 3);
         expect(result).toBe(code);
     });
-});
 
+    it('[TC-E9] Tidak menyisakan empty statement setelah beberapa node satu baris dihapus', () => {
+        const code = [
+            'function analyze(options) {',
+            '  let count = 0; count = options.length;',
+            '  const result = [];',
+            '  return result;',
+            '}',
+        ].join('\n');
+        const declaration = 'let count = 0';
+        const assignment = 'count = options.length';
+        const declarationStart = code.indexOf(declaration);
+        const assignmentStart = code.indexOf(assignment);
+        const deadNodes = [
+            {
+                type: 'WriteOnly',
+                node: { range: [declarationStart, declarationStart + declaration.length] },
+                relatedNodes: [{
+                    range: [assignmentStart, assignmentStart + assignment.length],
+                }],
+            },
+        ];
+
+        const result = removeDeadCode(code, deadNodes, null, 2);
+
+        expect(result).not.toMatch(/^\s*;\s*$/m);
+        expect(result).toContain('const result = [];');
+        expect(result).toContain('return result;');
+    });
+});

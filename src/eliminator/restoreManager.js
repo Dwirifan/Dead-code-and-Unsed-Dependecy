@@ -1,7 +1,9 @@
 import fs from 'fs-extra';
 import path from 'path';
+import { rollbackBackup } from './backupManager.js';
 
 const BACKUP_DIR_NAME = '.deadkiller_backup';
+const BACKUP_METADATA_FILE = '.deadkiller-checkpoint.json';
 
 /**
  * Mengembalikan daftar semua sesi checkpoint backup yang tersimpan di dalam folder brankas.
@@ -30,7 +32,8 @@ export async function listCheckpoints(projectRoot) {
         const date = isNaN(timestamp) ? stat.mtime : new Date(timestamp);
 
         // Kumpulkan daftar file yang ada di checkpoint ini
-        const files = await collectFiles(checkpointPath, checkpointPath);
+        const files = (await collectFiles(checkpointPath, checkpointPath))
+            .filter(file => file !== BACKUP_METADATA_FILE);
 
         checkpoints.push({
             name: entry,
@@ -51,11 +54,27 @@ export async function listCheckpoints(projectRoot) {
  * @returns {Promise<{restored: number, failed: string[]}>}
  */
 export async function restoreCheckpoint(checkpointPath, projectRoot) {
+    const metadataPath = path.join(checkpointPath, BACKUP_METADATA_FILE);
+    if (await fs.pathExists(metadataPath)) {
+        try {
+            const metadata = await fs.readJson(metadataPath);
+            await rollbackBackup(projectRoot, checkpointPath);
+            return {
+                restored: metadata.entries.filter(entry => entry.existed).length,
+                failed: []
+            };
+        } catch (err) {
+            return { restored: 0, failed: [err.message] };
+        }
+    }
+
+    // Kompatibilitas untuk checkpoint lama tanpa metadata.
     const files = await collectFiles(checkpointPath, checkpointPath);
     let restored = 0;
     const failed = [];
 
     for (const relFile of files) {
+        if (relFile === BACKUP_METADATA_FILE) continue;
         const srcFile = path.join(checkpointPath, relFile);
         const destFile = path.join(projectRoot, relFile);
 

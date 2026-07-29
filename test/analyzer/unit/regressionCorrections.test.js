@@ -68,6 +68,45 @@ describe('Regression corrections for report accuracy', () => {
         expect(unreachable[0].statements).toHaveLength(2);
     });
 
+    it('detects code after an if/else whose every branch terminates', async () => {
+        const results = await analyze(`
+            function choose(value) {
+                if (value) {
+                    return 'yes';
+                } else {
+                    throw new Error('no');
+                }
+                console.log('unreachable');
+            }
+            choose(true);
+        `);
+        const unreachable = results.find(result =>
+            result.type === 'DeadCode' &&
+            result.name === 'Unreachable Code After Terminator'
+        );
+
+        expect(unreachable).toBeDefined();
+        expect(unreachable.statements).toHaveLength(1);
+        expect(unreachable.terminator.type).toBe('IfStatement');
+    });
+
+    it('does not mark code after an if without a terminating alternate as unreachable', async () => {
+        const results = await analyze(`
+            function choose(value) {
+                if (value) {
+                    return 'yes';
+                }
+                console.log('reachable');
+            }
+            choose(false);
+        `);
+
+        expect(results.some(result =>
+            result.type === 'DeadCode' &&
+            result.name === 'Unreachable Code After Terminator'
+        )).toBe(false);
+    });
+
     it('does not treat pnpm shorthand for a declared script as a binary', async () => {
         await fs.writeJson(path.join(projectRoot, 'package.json'), {
             scripts: {
