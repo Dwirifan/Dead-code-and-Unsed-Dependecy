@@ -17,14 +17,34 @@
     "test": "vitest run",
     "coverage": "vitest run --coverage",
     "lint": "eslint .",
-    "lint:fix": "eslint . --fix"
+    "lint:fix": "eslint . --fix",
+    "check": "npm run lint && npm test && npm pack --dry-run"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "dead-code",
+    "static-analysis",
+    "typescript",
+    "javascript",
+    "cli"
+  ],
+  "author": "Dwi Rif'an Kurniawan",
   "license": "MIT",
-  "description": "",
+  "description": "Safe dead-code and unused-dependency analysis for JavaScript and TypeScript projects.",
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Dwirifan/Dead-code-and-Unsed-Dependecy.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Dwirifan/Dead-code-and-Unsed-Dependecy/issues"
+  },
+  "homepage": "https://github.com/Dwirifan/Dead-code-and-Unsed-Dependecy#readme",
   "dependencies": {
-    "@typescript-eslint/typescript-estree": "^8.58.2",
+    "@typescript-eslint/scope-manager": "8.65.0",
+    "@typescript-eslint/typescript-estree": "8.65.0",
+    "@typescript-eslint/visitor-keys": "8.65.0",
     "chalk": "^5.6.2",
     "commander": "^14.0.2",
     "diff": "^8.0.3",

@@ -43,3 +43,7 @@ jobs:
       - name: Enforce coverage thresholds
         if: matrix.os == 'ubuntu-latest' && matrix.node-version == '22.x'
         run: npm run coverage
+
+      - name: Verify npm package contents
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == '22.x'
+        run: npm pack --dry-run

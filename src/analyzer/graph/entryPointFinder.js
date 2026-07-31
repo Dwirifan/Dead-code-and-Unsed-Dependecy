@@ -91,6 +91,78 @@ function addRuntimeEntriesFromScripts(entrySet, pkg, projectRoot) {
     }
 }
 
+function collectPackageManifestEntries(entrySet, pkg, packageRoot) {
+    if (pkg.main) entrySet.add(path.resolve(packageRoot, pkg.main));
+    if (pkg.module) entrySet.add(path.resolve(packageRoot, pkg.module));
+
+    if (pkg.bin) {
+        const bins = typeof pkg.bin === 'string' ? [pkg.bin] : Object.values(pkg.bin);
+        bins.forEach(binPath => entrySet.add(path.resolve(packageRoot, binPath)));
+    }
+
+    const collectExports = value => {
+        if (typeof value === 'string') {
+            entrySet.add(path.resolve(packageRoot, value));
+        } else if (value && typeof value === 'object') {
+            Object.values(value).forEach(collectExports);
+        }
+    };
+    if (pkg.exports) collectExports(pkg.exports);
+    addRuntimeEntriesFromScripts(entrySet, pkg, packageRoot);
+}
+
+function frameworkEntryGlobs(pkg) {
+    const dependencies = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+    if (dependencies.next) return ['pages/**/*.{js,jsx,ts,tsx}', 'app/**/*.{js,jsx,ts,tsx}', 'src/pages/**/*.{js,jsx,ts,tsx}', 'src/app/**/*.{js,jsx,ts,tsx}'];
+    if (dependencies.nuxt || dependencies.nuxt3) return ['pages/**/*.vue', 'app.vue', 'layouts/**/*.vue'];
+    if (dependencies['@remix-run/react'] || dependencies['@remix-run/node']) return ['app/root.{js,jsx,ts,tsx}', 'app/routes/**/*.{js,jsx,ts,tsx}'];
+    if (dependencies['@angular/core']) return ['src/main.ts', 'src/app/**/*.ts'];
+    if (dependencies.svelte || dependencies['@sveltejs/kit']) return ['src/main.{js,ts}', 'src/routes/**/*.svelte', 'src/App.svelte'];
+    if (dependencies.vite) return ['src/main.{js,jsx,mjs,ts,tsx,mts}', 'src/index.{js,jsx,mjs,ts,tsx,mts}'];
+    if (dependencies['react-scripts']) return ['src/index.{js,jsx,ts,tsx}'];
+    if (dependencies.expo || dependencies['react-native']) return ['App.{js,jsx,ts,tsx}', 'index.js', 'src/App.{js,jsx,ts,tsx}'];
+    if (dependencies.gatsby) return ['src/pages/**/*.{js,jsx,ts,tsx}', 'gatsby-node.js', 'gatsby-browser.js'];
+    if (dependencies.electron) return ['src/main.{js,ts,mts,cts}', 'src/renderer.{js,ts,mts,cts}', 'main.{js,cjs,mjs}'];
+    return [];
+}
+
+function addConventionalSourceEntry(entrySet, packageRoot) {
+    const candidates = ['index', 'main', 'src/index', 'src/main', 'app', 'server']
+        .flatMap(base => ['js', 'jsx', 'mjs', 'cjs', 'ts', 'tsx', 'mts', 'cts'].map(extension => `${base}.${extension}`));
+    const candidate = candidates
+        .map(relativePath => path.resolve(packageRoot, relativePath))
+        .find(filePath => fs.existsSync(filePath));
+    if (candidate) entrySet.add(candidate);
+}
+
+async function findWorkspacePatterns(projectRoot, pkg) {
+    const patterns = new Set(
+        Array.isArray(pkg.workspaces)
+            ? pkg.workspaces
+            : (pkg.workspaces?.packages || []),
+    );
+
+    const pnpmWorkspacePath = path.join(projectRoot, 'pnpm-workspace.yaml');
+    if (await fs.pathExists(pnpmWorkspacePath)) {
+        const source = await fs.readFile(pnpmWorkspacePath, 'utf8');
+        const packagesBlock = source.match(/(?:^|\n)packages\s*:\s*\n((?:[ \t]+-[^\n]+\n?)*)/i)?.[1] || '';
+        for (const match of packagesBlock.matchAll(/^\s*-\s*['"]?([^'"#\r\n]+?)['"]?\s*$/gm)) {
+            patterns.add(match[1].trim());
+        }
+    }
+
+    const lernaPath = path.join(projectRoot, 'lerna.json');
+    if (await fs.pathExists(lernaPath)) {
+        try {
+            const lerna = await fs.readJson(lernaPath);
+            (lerna.packages || []).forEach(pattern => patterns.add(pattern));
+        } catch (_error) {
+            // Lerna config yang tidak valid tidak boleh menggagalkan root discovery.
+        }
+    }
+    return [...patterns];
+}
+
 /**
  * Mengklasifikasikan entry point untuk penjelasan UX. Nilai ini hanya metadata
  * presentasi dan tidak memengaruhi reachability graph.
@@ -140,29 +212,30 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
     const entrySet = new Set();
 
     // FITUR 1: Workspace / Monorepo Parser
-    if (pkg.workspaces) {
-        const workspacePatterns = Array.isArray(pkg.workspaces) ? pkg.workspaces : (pkg.workspaces.packages || []);
-        for (const pattern of workspacePatterns) {
-            const workspaceDirs = glob.sync(pattern, { cwd: projectRoot, onlyDirectories: true, absolute: true });
-            for (const wsDir of workspaceDirs) {
-                try {
-                    const wsPkgPath = path.join(wsDir, 'package.json');
-                    if (await fs.pathExists(wsPkgPath)) {
-                        const wsPkg = await fs.readJson(wsPkgPath);
-                        if (wsPkg.main) entrySet.add(path.resolve(wsDir, wsPkg.main));
-                        if (wsPkg.module) entrySet.add(path.resolve(wsDir, wsPkg.module));
-                        if (wsPkg.bin) {
-                            if (typeof wsPkg.bin === 'string') {
-                                entrySet.add(path.resolve(wsDir, wsPkg.bin));
-                            } else {
-                                Object.values(wsPkg.bin).forEach(b => entrySet.add(path.resolve(wsDir, b)));
-                            }
-                        }
-                    }
-                } catch (e) {
-                    if (process.env.DEBUG) {
-                        console.warn(`[Warning] Gagal membaca package.json di workspace ${wsDir}:`, e.message);
-                    }
+    const workspaceRoots = [];
+    const workspacePatterns = await findWorkspacePatterns(projectRoot, pkg);
+    if (workspacePatterns.length > 0) {
+        const workspaceDirs = glob.sync(workspacePatterns, {
+            cwd: projectRoot,
+            onlyDirectories: true,
+            absolute: true,
+            followSymbolicLinks: false,
+            ignore: ENTRY_GLOB_IGNORE,
+        });
+        for (const wsDir of workspaceDirs) {
+            try {
+                const wsPkgPath = path.join(wsDir, 'package.json');
+                if (await fs.pathExists(wsPkgPath)) {
+                    const wsPkg = await fs.readJson(wsPkgPath);
+                    workspaceRoots.push(wsDir);
+                    collectPackageManifestEntries(entrySet, wsPkg, wsDir);
+                    if (hasTestRunner(wsPkg)) addMatchedEntries(entrySet, TEST_FILE_GLOBS, wsDir);
+                    addMatchedEntries(entrySet, frameworkEntryGlobs(wsPkg), wsDir);
+                    addConventionalSourceEntry(entrySet, wsDir);
+                }
+            } catch (e) {
+                if (process.env.DEBUG) {
+                    console.warn(`[Warning] Gagal membaca package.json di workspace ${wsDir}:`, e.message);
                 }
             }
         }
@@ -180,37 +253,12 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
         }
     }
 
-    // 2. Baca dari package.json (jika ada)
-    if (pkg.main) entrySet.add(path.resolve(projectRoot, pkg.main));
-    if (pkg.module) entrySet.add(path.resolve(projectRoot, pkg.module));
-
-    if (pkg.bin) {
-        if (typeof pkg.bin === 'string') {
-            entrySet.add(path.resolve(projectRoot, pkg.bin));
-        } else {
-            Object.values(pkg.bin).forEach(b => entrySet.add(path.resolve(projectRoot, b)));
-        }
-    }
-
-    if (pkg.exports) {
-        const collectExports = (val) => {
-            if (typeof val === 'string') {
-                entrySet.add(path.resolve(projectRoot, val));
-            } else if (typeof val === 'object' && val !== null) {
-                Object.values(val).forEach(collectExports);
-            }
-        };
-        collectExports(pkg.exports);
-    }
-
-    // Script lifecycle adalah manifest executable yang sah. Ini menangani
-    // aplikasi dengan `main` usang/tidak ada dan nama entry nonkonvensional,
-    // misalnya `node services/http-entry.js` atau `tsx src/worker.ts`.
-    addRuntimeEntriesFromScripts(entrySet, pkg, projectRoot);
+    // 2. Manifest root: main/module/exports/bin dan runtime scripts.
+    collectPackageManifestEntries(entrySet, pkg, projectRoot);
 
     // 3. Framework Auto-Detection Heuristics
     const allDeps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
-    const frameworkGlobs = [];
+    const frameworkGlobs = frameworkEntryGlobs(pkg);
 
     // Test adalah root eksekusi tersendiri. Ia tidak selalu di-import oleh
     // aplikasi, tetapi import package di dalamnya tetap menjadi bukti dependency.
@@ -218,28 +266,6 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
     // test runner agar folder bernama "test" biasa tidak otomatis dihidupkan.
     if (hasTestRunner(pkg)) {
         addMatchedEntries(entrySet, TEST_FILE_GLOBS, projectRoot);
-    }
-
-    if (allDeps['next']) {
-        frameworkGlobs.push('pages/**/*.{js,jsx,ts,tsx}', 'app/**/*.{js,jsx,ts,tsx}', 'src/pages/**/*.{js,jsx,ts,tsx}', 'src/app/**/*.{js,jsx,ts,tsx}');
-    } else if (allDeps['nuxt'] || allDeps['nuxt3']) {
-        frameworkGlobs.push('pages/**/*.vue', 'app.vue', 'layouts/**/*.vue');
-    } else if (allDeps['@remix-run/react'] || allDeps['@remix-run/node']) {
-        frameworkGlobs.push('app/root.{js,jsx,ts,tsx}', 'app/routes/**/*.{js,jsx,ts,tsx}');
-    } else if (allDeps['@angular/core']) {
-        frameworkGlobs.push('src/main.ts', 'src/app/**/*.ts');
-    } else if (allDeps['svelte'] || allDeps['@sveltejs/kit']) {
-        frameworkGlobs.push('src/main.{js,ts}', 'src/routes/**/*.svelte', 'src/App.svelte');
-    } else if (allDeps['vite']) {
-        frameworkGlobs.push('src/main.{js,jsx,ts,tsx}', 'src/index.{js,jsx,ts,tsx}');
-    } else if (allDeps['react-scripts']) {
-        frameworkGlobs.push('src/index.{js,jsx,ts,tsx}');
-    } else if (allDeps['expo'] || allDeps['react-native']) {
-        frameworkGlobs.push('App.{js,jsx,ts,tsx}', 'index.js', 'src/App.{js,jsx,ts,tsx}');
-    } else if (allDeps['gatsby']) {
-        frameworkGlobs.push('src/pages/**/*.{js,jsx,ts,tsx}', 'gatsby-node.js', 'gatsby-browser.js');
-    } else if (allDeps['electron']) {
-        frameworkGlobs.push('src/main.{js,ts}', 'src/renderer.{js,ts}', 'main.js');
     }
 
     // Webpack deteksi (Legacy)
@@ -298,6 +324,15 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
         if (await fs.pathExists(confPath)) {
             configEntrySet.add(confPath);
         }
+        for (const workspaceRoot of workspaceRoots) {
+            const workspaceConfigPath = path.resolve(workspaceRoot, conf);
+            if (await fs.pathExists(workspaceConfigPath)) configEntrySet.add(workspaceConfigPath);
+        }
+    }
+    for (const configRoot of [projectRoot, ...workspaceRoots]) {
+        for (const configPath of expandEntryGlob('*.config.{js,mjs,cjs,ts,mts,cts}', configRoot)) {
+            configEntrySet.add(configPath);
+        }
     }
 
     if (frameworkGlobs.length > 0) {
@@ -311,17 +346,7 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
     let hasValidSource = hasValidRuntimeEntry(entrySet, projectRoot);
     
     if (!hasValidSource) {
-        const candidates = [
-            'index.js', 'index.ts',
-            'main.js', 'main.ts',
-            'src/index.js', 'src/index.ts',
-            'app.js', 'app.ts',
-            'server.js', 'server.ts'
-        ];
-        for (const c of candidates) {
-            const full = path.resolve(projectRoot, c);
-            if (await fs.pathExists(full)) { entrySet.add(full); break; }
-        }
+        addConventionalSourceEntry(entrySet, projectRoot);
     }
 
     // HTML Fallback
@@ -356,7 +381,7 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
     // Ultimate Fallback
     hasValidSource = hasValidRuntimeEntry(entrySet, projectRoot);
     if (!hasValidSource) {
-        const deepSearch = glob.sync('src/**/index.{js,ts,jsx,tsx}', { cwd: projectRoot, absolute: true });
+        const deepSearch = glob.sync('src/**/index.{js,jsx,mjs,cjs,ts,tsx,mts,cts}', { cwd: projectRoot, absolute: true });
         if (deepSearch.length > 0) {
             deepSearch.forEach(f => entrySet.add(path.resolve(f)));
         }

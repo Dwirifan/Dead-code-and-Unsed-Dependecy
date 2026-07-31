@@ -1,6 +1,46 @@
 import inquirer from 'inquirer';
 import chalk from 'chalk';
+import fs from 'fs-extra';
+import path from 'node:path';
 import { buildProjectGraph } from '../analyzer/graph/projectGraph.js';
+
+/**
+ * Mencari root konfigurasi terdekat agar perintah file tunggal memakai aturan
+ * yang sama dengan scan proyek penuh.
+ */
+export async function findProjectRoot(startDirectory) {
+    let current = path.resolve(startDirectory);
+    const rootMarkers = [
+        'deadkiller.config.js',
+        'deadkiller.config.mjs',
+        '.deadkillerrc.json',
+        'package.json',
+    ];
+
+    while (true) {
+        for (const marker of rootMarkers) {
+            if (await fs.pathExists(path.join(current, marker))) return current;
+        }
+        const parent = path.dirname(current);
+        if (parent === current) return path.resolve(startDirectory);
+        current = parent;
+    }
+}
+
+/**
+ * Menampilkan warning normalisasi config tanpa mencemari output JSON.
+ */
+export function printConfigDiagnostics(ruleEngine, { silent = false } = {}) {
+    if (silent) return;
+    const warnings = (ruleEngine.configDiagnostics || [])
+        .filter(item => item.level === 'warning');
+    if (warnings.length === 0) return;
+
+    console.log(chalk.yellow('\n[!] Peringatan konfigurasi DeadKiller:'));
+    for (const item of warnings) {
+        console.log(chalk.gray(`   - ${item.path}: ${item.message} (${item.code})`));
+    }
+}
 
 /**
  * Membangun Project Graph dengan fallback prompt interaktif

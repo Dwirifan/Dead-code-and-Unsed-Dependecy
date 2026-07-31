@@ -57,7 +57,7 @@ describe('Dependency Cleaner - removeUnusedDependencies', () => {
 
         expect(fs.pathExists).toHaveBeenCalledWith(packageJsonPath);
         expectSpawn('npm', ['uninstall', 'lodash', 'moment']);
-        expect(result).toBe(2);
+        expect(result).toEqual({ removed: ['lodash', 'moment'] });
     });
 
     it('TC-E7: Harus menggunakan "yarn remove" jika menemukan yarn.lock', async () => {
@@ -75,7 +75,7 @@ describe('Dependency Cleaner - removeUnusedDependencies', () => {
         const result = await removeUnusedDependencies(projectRoot, unusedDeps);
 
         expectSpawn('yarn', ['remove', 'axios']);
-        expect(result).toBe(1);
+        expect(result).toEqual({ removed: ['axios'] });
     });
 
     it('TC-E8: Harus menggunakan "pnpm remove" jika menemukan pnpm-lock.yaml', async () => {
@@ -93,7 +93,7 @@ describe('Dependency Cleaner - removeUnusedDependencies', () => {
         const result = await removeUnusedDependencies(projectRoot, unusedDeps);
 
         expectSpawn('pnpm', ['remove', 'react']);
-        expect(result).toBe(1);
+        expect(result).toEqual({ removed: ['react'] });
     });
 
     it.each(['bun.lock', 'bun.lockb'])(
@@ -109,7 +109,7 @@ describe('Dependency Cleaner - removeUnusedDependencies', () => {
             const result = await removeUnusedDependencies(projectRoot, unusedDeps);
 
             expectSpawn('bun', ['remove', 'express']);
-            expect(result).toBe(1);
+            expect(result).toEqual({ removed: ['express'] });
         }
     );
 
@@ -130,7 +130,7 @@ describe('Dependency Cleaner - removeUnusedDependencies', () => {
             const result = await removeUnusedDependencies(projectRoot, ['axios']);
 
             expectSpawn(manager, [command, 'axios']);
-            expect(result).toBe(1);
+            expect(result).toEqual({ removed: ['axios'] });
         }
     );
 
@@ -157,7 +157,7 @@ describe('Dependency Cleaner - removeUnusedDependencies', () => {
         const result = await removeUnusedDependencies(projectRoot, unusedDeps);
 
         expectSpawn('npm', ['uninstall', 'lodash', '@scope/pkg']);
-        expect(result).toBe(2);
+        expect(result).toEqual({ removed: ['lodash', '@scope/pkg'] });
     });
 
     it.each([

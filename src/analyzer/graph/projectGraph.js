@@ -9,6 +9,7 @@ import { resolveBarrelExports } from '../deadcode/core/barrelResolver.js';
 import { resolvePath } from './pathResolver.js';
 import { findEntryPoints } from './entryPointFinder.js';
 import micromatch from 'micromatch';
+import { SCRIPT_EXTENSION_SET } from '../../parser/supportedExtensions.js';
 
 // Gabungkan Visitor Keys ESTree standar dengan ekstrasi TypeScript/JSX
 const visitorKeys = { ...estraverse.VisitorKeys, ...tsVisitorKeys };
@@ -63,9 +64,8 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
             // Skip file yang bukan JavaScript/TypeScript — CSS, JSON, gambar, font, dll
             // yang di-import oleh framework (Next.js: import styles from './x.module.css')
             // tetap dianggap "live file" tapi tidak di-parse sebagai kode JS.
-            const PARSEABLE_EXTENSIONS = new Set(['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts']);
             const ext = path.extname(currentFile).toLowerCase();
-            if (!PARSEABLE_EXTENSIONS.has(ext)) continue;
+            if (!SCRIPT_EXTENSION_SET.has(ext)) continue;
 
             const code = await fs.readFile(currentFile, 'utf-8');
 

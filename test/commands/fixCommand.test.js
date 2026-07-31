@@ -45,6 +45,40 @@ describe('Fix Command Safety & Dry-Run Tests', () => {
         expect(await fs.pathExists(backupDir)).toBe(false);
     });
 
+    it('Should abort before mutation when project config is invalid', async () => {
+        const filePath = path.join(tmpDir, 'unsafe-to-guess.js');
+        const initialCode = 'const unused = 123;\n';
+        await fs.writeFile(filePath, initialCode);
+        await fs.writeFile(path.join(tmpDir, '.deadkillerrc.json'), '{ invalid json');
+
+        const program = new Command();
+        registerFixCommand(program);
+
+        await expect(program.parseAsync([
+            'node', 'test', 'fix', filePath, '--yes', '--level', '3',
+        ])).rejects.toMatchObject({
+            code: 'DEADKILLER_CONFIG_LOAD_FAILED',
+        });
+        expect(await fs.readFile(filePath, 'utf8')).toBe(initialCode);
+        expect(await fs.pathExists(path.join(tmpDir, '.deadkiller_backup'))).toBe(false);
+    });
+
+    it('Should honor preserveFiles for single-file fixes', async () => {
+        const filePath = path.join(tmpDir, 'protected.js');
+        const initialCode = 'const unused = 123;\n';
+        await fs.writeFile(filePath, initialCode);
+        await fs.writeJson(path.join(tmpDir, '.deadkillerrc.json'), {
+            preserveFiles: ['protected.js'],
+        });
+
+        const program = new Command();
+        registerFixCommand(program);
+        await program.parseAsync(['node', 'test', 'fix', filePath, '--yes']);
+
+        expect(await fs.readFile(filePath, 'utf8')).toBe(initialCode);
+        expect(await fs.pathExists(path.join(tmpDir, '.deadkiller_backup'))).toBe(false);
+    });
+
     it('Should ONLY remove SAFE items and NOT remove REVIEW items even in Level 3', async () => {
         const filePath = path.join(tmpDir, 'reviewTest.js');
         // 'unusedSafe' adalah safe dead code.

@@ -4,7 +4,8 @@
  * RestElement (...rest), dan AssignmentPattern (a = 1).
  * 
  * @param {object} pattern - Node AST pola (contoh: node.id dari sebuah VariableDeclarator)
- * @returns {Array<{name: string, node: object}>} Daftar pengidentifikasi yang berhasil digali berserta Node AST aslinya
+ * @returns {Array<{name: string, node: object, bindingNode: object}>} `node` adalah target
+ * penghapusan aman, sedangkan `bindingNode` selalu Identifier canonical untuk scope resolution.
  */
 export function extractIdentifiers(pattern) {
     const identifiers = [];
@@ -14,7 +15,7 @@ export function extractIdentifiers(pattern) {
     switch (pattern.type) {
         case 'Identifier':
             // Variabel murni
-            identifiers.push({ name: pattern.name, node: pattern });
+            identifiers.push({ name: pattern.name, node: pattern, bindingNode: pattern });
             break;
 
         case 'ObjectPattern':

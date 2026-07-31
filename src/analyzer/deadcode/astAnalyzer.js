@@ -1,5 +1,6 @@
 import estraverse from 'estraverse';
 import { visitorKeys as tsVisitorKeys } from '@typescript-eslint/visitor-keys';
+import { analyze } from '@typescript-eslint/scope-manager';
 import { Scope } from './core/scope.js';
 import { isReference } from './core/isReference.js';
 import { extractIdentifiers } from './core/destructuringExtractor.js';
@@ -103,6 +104,27 @@ function is100PercentDeadIgnoredVariable(info) {
     return false;
 }
 
+function namespaceMatches(declarationNamespace, reference) {
+    const isType = reference.isTypeReference === true;
+    const isValue = reference.isValueReference !== false;
+
+    if (declarationNamespace === 'both') return isType || isValue;
+    if (declarationNamespace === 'type') return isType;
+    return isValue;
+}
+
+function isReferenceInsideDeclaration(referenceNode, declarationNode) {
+    if (!referenceNode || !declarationNode || !referenceNode.range || !declarationNode.range) return false;
+    return referenceNode.range[0] >= declarationNode.range[0] && referenceNode.range[1] <= declarationNode.range[1];
+}
+
+function getWriteOperationNode(identifier, nodeParents) {
+    const parent = nodeParents.get(identifier);
+    if (!parent) return identifier;
+    if (parent.type === 'AssignmentExpression' || parent.type === 'UpdateExpression') return parent;
+    return identifier;
+}
+
 export function analyzeAstCode(ast, fileName = null, globalRegistry = null, ruleEngine = null) {
     const allScopes = [];
     const globalScope = new Scope();
@@ -113,12 +135,45 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
     let scopeTypeStack = ['global']; 
     const parentStack = []; 
     const ownerStack = []; 
+    const declarationByBindingNode = new WeakMap();
+    const nodeParents = new WeakMap();
+
+    let tsScopeManager = null;
+    let scopeManagerError = null;
+    let managerUndeclaredReferences = [];
+    try {
+        tsScopeManager = analyze(ast, {
+            sourceType: ast.sourceType || 'module',
+            jsxPragma: ruleEngine?.rules?.reactRuntime === 'automatic' ? null : 'React',
+            lib: ['esnext']
+        });
+    } catch (error) {
+        scopeManagerError = error;
+        if (globalRegistry) {
+            if (!globalRegistry.analysisDiagnostics) globalRegistry.analysisDiagnostics = [];
+            globalRegistry.analysisDiagnostics.push({
+                file: fileName,
+                backend: 'legacy-fallback',
+                message: `Scope manager gagal: ${error.message}`
+            });
+        }
+        if (process.env.DEBUG) {
+            console.warn(`[DeadKiller] Scope manager gagal untuk ${fileName || '<memory>'}; memakai legacy fallback: ${error.message}`);
+        }
+    }
+
+    const registerDeclaration = (scope, name, type, line, node, parentNode = null, metadata = {}) => {
+        const info = scope.addDeclaration(name, type, line, node, parentNode, metadata);
+        if (info?.bindingNode) declarationByBindingNode.set(info.bindingNode, info);
+        return info;
+    };
 
     // Phase 1: Murni memetakan Variable Scope & Referensi Variabel
     estraverse.traverse(ast, {
         fallback: 'iteration',
         keys: visitorKeys,
         enter: function (node, parent) {
+            if (parent) nodeParents.set(node, parent);
             parentStack.push(node);
 
             // Deteksi Pola Dinamis (Conservative Bailout: require(var), eval, with, computed member)
@@ -173,22 +228,32 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     ? findFunctionScope(scopeStack, scopeTypeStack)
                     : currentScope;
                 
-                identifiers.forEach(({ name, node: idNode }) => {
-                    const targetDeletionNode = (node.id.type === 'Identifier') ? node : idNode;
-                    targetScope.addDeclaration(name, 'Variable', node.loc.start.line, targetDeletionNode, parent);
+                identifiers.forEach(({ name, node: removalNode, bindingNode }) => {
+                    const idNode = bindingNode || removalNode;
+                    const targetDeletionNode = (node.id.type === 'Identifier') ? node : removalNode;
+                    registerDeclaration(targetScope, name, 'Variable', node.loc.start.line, targetDeletionNode, parent, {
+                        bindingNode: idNode,
+                        namespace: 'value'
+                    });
                 });
             }
 
             if (node.type === 'FunctionDeclaration' && node.id) {
                 if (currentScope.parent) {
-                    currentScope.parent.addDeclaration(node.id.name, 'Function', node.loc.start.line, node);
+                    registerDeclaration(currentScope.parent, node.id.name, 'Function', node.loc.start.line, node, null, {
+                        bindingNode: node.id,
+                        namespace: 'value'
+                    });
                 }
             }
 
             // Pendataan Deklarasi Class
             if (node.type === 'ClassDeclaration' && node.id) {
                 if (currentScope.parent) {
-                    currentScope.parent.addDeclaration(node.id.name, 'UnusedClass', node.loc.start.line, node);
+                    registerDeclaration(currentScope.parent, node.id.name, 'UnusedClass', node.loc.start.line, node, null, {
+                        bindingNode: node.id,
+                        namespace: 'both'
+                    });
                 }
             }
 
@@ -196,8 +261,11 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
             if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)) {
                 node.params.forEach(param => {
                     const identifiers = extractIdentifiers(param);
-                    identifiers.forEach(({ name, node: idNode }) => {
-                        currentScope.addDeclaration(name, 'Parameter', param.loc.start.line, idNode);
+                    identifiers.forEach(({ name, node: removalNode, bindingNode }) => {
+                        registerDeclaration(currentScope, name, 'Parameter', param.loc.start.line, removalNode, null, {
+                            bindingNode: bindingNode || removalNode,
+                            namespace: 'value'
+                        });
                     });
                 });
             }
@@ -205,8 +273,11 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
             // Evaluasi CatchClause (parameter error seperti catch(err))
             if (node.type === 'CatchClause' && node.param) {
                 const identifiers = extractIdentifiers(node.param);
-                identifiers.forEach(({ name, node: idNode }) => {
-                    currentScope.addDeclaration(name, 'CatchParameter', node.loc.start.line, idNode);
+                identifiers.forEach(({ name, node: removalNode, bindingNode }) => {
+                    registerDeclaration(currentScope, name, 'CatchParameter', node.loc.start.line, removalNode, null, {
+                        bindingNode: bindingNode || removalNode,
+                        namespace: 'value'
+                    });
                 });
             }
 
@@ -221,7 +292,10 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     if (spec.local && spec.local.type === 'Identifier') {
                         const isSpecifierTypeImport = spec.importKind === 'type' || isTypeImport;
                         const declarationType = isSpecifierTypeImport ? 'UnusedType' : 'Variable';
-                        currentScope.addDeclaration(spec.local.name, declarationType, spec.loc.start.line, spec.local, { isImport: true });
+                        registerDeclaration(currentScope, spec.local.name, declarationType, spec.loc.start.line, spec.local, { isImport: true }, {
+                            bindingNode: spec.local,
+                            namespace: isSpecifierTypeImport ? 'type' : 'both'
+                        });
                     }
                 });
             }
@@ -229,47 +303,67 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
             if (node.type === 'TSImportEqualsDeclaration' && node.id) {
                 const isTypeImport = node.isTypeOnly || node.importKind === 'type';
                 const declarationType = isTypeImport ? 'UnusedType' : 'Variable';
-                currentScope.addDeclaration(node.id.name, declarationType, node.loc ? node.loc.start.line : 0, node.id, { isImport: true });
-            }
-
-            if (node.type === 'ExportAllDeclaration' && node.exported && node.exported.type === 'Identifier') {
-                currentScope.addDeclaration(node.exported.name, 'Variable', node.loc.start.line, node.exported, { isImport: true, isExport: true });
+                registerDeclaration(currentScope, node.id.name, declarationType, node.loc ? node.loc.start.line : 0, node.id, { isImport: true }, {
+                    bindingNode: node.id,
+                    namespace: isTypeImport ? 'type' : 'both'
+                });
             }
 
             // Pendataan TypeScript-only Deklarasi (Interface, Type Alias, Enum)
             if (node.type === 'TSInterfaceDeclaration' && node.id) {
-                currentScope.addDeclaration(node.id.name, 'UnusedType', node.loc.start.line, node);
+                registerDeclaration(currentScope, node.id.name, 'UnusedType', node.loc.start.line, node, null, {
+                    bindingNode: node.id,
+                    namespace: 'type'
+                });
             }
             if (node.type === 'TSTypeAliasDeclaration' && node.id) {
-                currentScope.addDeclaration(node.id.name, 'UnusedType', node.loc.start.line, node);
+                registerDeclaration(currentScope, node.id.name, 'UnusedType', node.loc.start.line, node, null, {
+                    bindingNode: node.id,
+                    namespace: 'type'
+                });
             }
             if (node.type === 'TSEnumDeclaration' && node.id) {
-                currentScope.addDeclaration(node.id.name, 'UnusedType', node.loc.start.line, node);
+                registerDeclaration(currentScope, node.id.name, 'UnusedType', node.loc.start.line, node, null, {
+                    bindingNode: node.id,
+                    namespace: 'both'
+                });
                 if (node.members) {
                     node.members.forEach(member => {
                         if (member.id && member.id.type === 'Identifier') {
                             const memberKey = `${node.id.name}.${member.id.name}`;
-                            currentScope.addDeclaration(memberKey, 'UnusedEnumMember', member.loc.start.line, member);
+                            registerDeclaration(currentScope, memberKey, 'UnusedEnumMember', member.loc.start.line, member, null, {
+                                bindingNode: member.id,
+                                namespace: 'both'
+                            });
                         }
                     });
                 }
             }
             if (node.type === 'TSModuleDeclaration' && node.id) {
-                currentScope.addDeclaration(node.id.name, 'Variable', node.loc ? node.loc.start.line : 0, node);
+                registerDeclaration(currentScope, node.id.name, 'Variable', node.loc ? node.loc.start.line : 0, node, null, {
+                    bindingNode: node.id,
+                    namespace: 'both'
+                });
             }
             if (node.type === 'TSDeclareFunction' && node.id) {
-                currentScope.addDeclaration(node.id.name, 'Function', node.loc ? node.loc.start.line : 0, node);
+                registerDeclaration(currentScope, node.id.name, 'Function', node.loc ? node.loc.start.line : 0, node, null, {
+                    bindingNode: node.id,
+                    namespace: 'value'
+                });
             }
             if (node.type === 'TSTypeParameter' && node.name && node.name.type === 'Identifier') {
-                currentScope.addDeclaration(node.name.name, 'UnusedType', node.loc.start.line, node);
+                registerDeclaration(currentScope, node.name.name, 'UnusedType', node.loc.start.line, node, null, {
+                    bindingNode: node.name,
+                    namespace: 'type'
+                });
             }
 
             // Melacak owner untuk Fixed-Point Iterative Elimination
             if (node.type === 'VariableDeclarator') {
                 const identifiers = extractIdentifiers(node.id);
-                const declarationKind = (parent && parent.type === 'VariableDeclaration') ? parent.kind : 'let';
-                const targetScope = (declarationKind === 'var') ? findFunctionScope(scopeStack, scopeTypeStack) : currentScope;
-                const declInfos = identifiers.map(({ name }) => targetScope.declarations.get(name)).filter(Boolean);
+                const declInfos = identifiers
+                    .map(({ node: removalNode, bindingNode }) => declarationByBindingNode.get(bindingNode || removalNode))
+                    .filter(Boolean);
                 ownerStack.push(declInfos.length > 0 ? declInfos : null);
             }
 
@@ -299,9 +393,9 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
 
                     if (isCompoundWrite) {
                         currentScope.addReadReference(node.name, node, currentOwners);
-                        currentScope.addWriteReference(node.name, parent, currentOwners);
+                        currentScope.addWriteReference(node.name, node, currentOwners);
                     } else if (isWriteContext) {
-                        currentScope.addWriteReference(node.name, parent, currentOwners);
+                        currentScope.addWriteReference(node.name, node, currentOwners);
                     } else {
                         currentScope.addReadReference(node.name, node, currentOwners);
                         
@@ -343,8 +437,80 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
     // Phase 2: Hubungkan Expor / Lintas Modul
     markUsedExports(ast, globalScope, fileName, globalRegistry, ruleEngine);
 
-    // Phase 3: Analisis Scope
-    allScopes.forEach(s => s.resolve());
+    // Phase 3: scope-manager menjadi sumber kebenaran untuk identitas binding.
+    // Traversal custom tetap menyediakan metadata penghapusan, owner, enum member,
+    // implicit React runtime, serta fixed-point cascading milik DeadKiller.
+    if (tsScopeManager) {
+        const referenceTargets = new WeakMap();
+        const unresolvedSeen = new WeakSet();
+
+        tsScopeManager.scopes.forEach(tsScope => {
+            tsScope.variables.forEach(tsVar => {
+                const declarations = tsVar.defs
+                    .map(definition => declarationByBindingNode.get(definition.name))
+                    .filter(Boolean);
+
+                declarations.forEach(info => {
+                    info.scopeManagerBacked = true;
+                });
+
+                tsVar.references.forEach(reference => {
+                    const compatibleDeclarations = declarations.filter(info => namespaceMatches(info.namespace, reference));
+                    const externalDeclarations = compatibleDeclarations.filter(info => (
+                        !isReferenceInsideDeclaration(reference.identifier, info.node)
+                    ));
+
+                    // Simpan juga reference self/unmapped agar tidak jatuh ke name-walking legacy.
+                    referenceTargets.set(reference.identifier, {
+                        reference,
+                        declarations: externalDeclarations
+                    });
+
+                    externalDeclarations.forEach(info => {
+                        if (reference.isRead()) {
+                            info.used = true;
+                            info.readCount++;
+                        }
+                        // Initializer declaration (`const x = ...`) bukan write-only assignment.
+                        if (reference.isWrite() && reference.init !== true) {
+                            info.writeCount++;
+                            info.writeNodes.push(getWriteOperationNode(reference.identifier, nodeParents));
+                        }
+                    });
+                });
+            });
+
+            tsScope.through.forEach(reference => {
+                if (reference.resolved || unresolvedSeen.has(reference.identifier)) return;
+                unresolvedSeen.add(reference.identifier);
+                managerUndeclaredReferences.push({
+                    name: reference.identifier.name,
+                    node: reference.identifier
+                });
+            });
+        });
+
+        // Hubungkan reference custom ke binding canonical untuk cascading analysis.
+        allScopes.forEach(scope => {
+            scope.readReferences.forEach(ref => {
+                const target = referenceTargets.get(ref.node);
+                if (target) {
+                    ref.targetDecl = target.declarations[0] || null;
+                } else if (ref.name.includes('.') || !['Identifier', 'JSXIdentifier'].includes(ref.node?.type)) {
+                    // Reference sintetis DeadKiller (mis. E.Member dan classic React runtime).
+                    scope.markRead(ref.name, ref.node, ref);
+                }
+            });
+
+            scope.writeReferences.forEach(ref => {
+                const target = referenceTargets.get(ref.node);
+                if (target) ref.targetDecl = target.declarations[0] || null;
+            });
+        });
+    } else {
+        // Fallback bersifat file-wide supaya hasil dua resolver tidak tercampur.
+        allScopes.forEach(s => s.resolve());
+    }
 
     // Phase 3.5: Fixed-Point Iterative Elimination (Cascading Dead Code Detection)
     // Melakukan konvergensi loop dalam memori untuk mendeteksi dead code berantai dalam 1 scan.
@@ -352,7 +518,8 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
     let newlyDead = [];
 
     allScopes.forEach(scope => {
-        scope.declarations.forEach((info, name) => {
+        scope.declarations.forEach(info => {
+            const name = info.name;
             if (info.readCount === 0 && info.type !== 'CatchParameter') {
                 const isIgnored = ruleEngine && ruleEngine.isIgnoredVariable(name, fileName);
                 if (!isIgnored || is100PercentDeadIgnoredVariable(info)) {
@@ -404,21 +571,23 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
     // Phase 4: Pengumpulan Dead Variables
     const deadCode = [];
     const processedParents = new Set();
-    const allDeadNames = new Set();
+    const deadBindingNodes = new Set();
 
     allScopes.forEach(scope => {
-        scope.declarations.forEach((info, name) => {
+        scope.declarations.forEach(info => {
+            const name = info.name;
             if (!info.used && info.type !== 'CatchParameter') {
                 const isIgnored = ruleEngine && ruleEngine.isIgnoredVariable(name, fileName);
                 if (!isIgnored || is100PercentDeadIgnoredVariable(info)) {
-                    allDeadNames.add(name);
+                    deadBindingNodes.add(info.bindingNode);
                 }
             }
         });
     });
 
     allScopes.forEach(scope => {
-       scope.declarations.forEach((info, name) => {
+       scope.declarations.forEach(info => {
+           const name = info.name;
            if (!info.used) {
                if (info.type === 'CatchParameter') return; // JANGAN laporkan parameter catch karena menghapusnya bisa merusak sintaks (catch ())
                const isIgnored = ruleEngine && ruleEngine.isIgnoredVariable(name, fileName);
@@ -433,10 +602,10 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
 
                    const allDeclaratorsDead = parentDecl.declarations.every(declarator => {
                        if (declarator.id && declarator.id.type === 'Identifier') {
-                           return allDeadNames.has(declarator.id.name);
+                            return deadBindingNodes.has(declarator.id);
                        }
                        const ids = extractIdentifiers(declarator.id);
-                       return ids.every(({ name: idName }) => allDeadNames.has(idName));
+                       return ids.every(({ node: removalNode, bindingNode }) => deadBindingNodes.has(bindingNode || removalNode));
                    });
 
                    if (allDeclaratorsDead) {
@@ -487,11 +656,17 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     }
                 }
 
-                const { confidence, status, reason } = classifyConfidence(effectiveType, {
+                let { confidence, status, reason } = classifyConfidence(effectiveType, {
                     isImport,
                     isImpureInitializer,
                     isImpureWrite,
                 });
+
+                if (scopeManagerError && status === 'safe') {
+                    confidence = 'medium';
+                    status = 'review';
+                    reason = `${reason} Scope manager tidak tersedia untuk file ini; hasil legacy fallback wajib ditinjau.`;
+                }
 
                 deadCode.push({
                     name,
@@ -501,7 +676,8 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     relatedNodes: effectiveType === 'WriteOnly' ? [...(info.writeNodes || [])] : [],
                     confidence,
                     status,
-                    reason
+                    reason,
+                    analysisBackend: tsScopeManager ? 'scope-manager' : 'legacy-fallback'
                 });
            }
        });
@@ -534,9 +710,19 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
         }
     }
 
-    // Phase 5: Pengecekan Undeclared Variables (no-undef)
-    // globalScope menampung variabel yang direferensikan tetapi tidak ditemukan deklarasinya
-    globalScope.undeclaredVariables.forEach(({ name, node }) => {
+    // Phase 5: Pengecekan Undeclared Variables (no-undef).
+    // Dalam mode utama, hanya unresolved reference dari scope-manager yang dipakai.
+    // Keyword/syntax marker ESM seperti `default` tidak pernah menjadi reference,
+    // sehingga tidak memerlukan blanket suppression berdasarkan nama.
+    const undeclaredReferences = tsScopeManager
+        ? managerUndeclaredReferences
+        : globalScope.undeclaredVariables;
+    const reportedUndeclaredNodes = new WeakSet();
+
+    undeclaredReferences.forEach(({ name, node }) => {
+        if (node && reportedUndeclaredNodes.has(node)) return;
+        if (node) reportedUndeclaredNodes.add(node);
+
         // Ambil globals kustom milik pengguna dari ruleEngine
         const userGlobals = ruleEngine ? (ruleEngine._resolveConfigForFile(fileName).globals || []) : [];
 
@@ -552,7 +738,8 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
             line: node ? node.loc.start.line : 0,
             node: node,
             confidence,
-            status
+            status,
+            analysisBackend: tsScopeManager ? 'scope-manager' : 'legacy-fallback'
         });
     });
 

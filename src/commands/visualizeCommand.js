@@ -8,7 +8,8 @@ import { parseCode } from '../parser/astParser.js';
 import { findDeadCode } from '../analyzer/deadcode/index.js';
 import { analyzeProjectDependencies } from '../analyzer/dependency/dependencyReportService.js';
 import { RuleEngine } from '../analyzer/ruleEngine.js';
-import { buildGraphWithInteractiveFallback } from './commandHelpers.js';
+import { SCRIPT_GLOB } from '../parser/supportedExtensions.js';
+import { buildGraphWithInteractiveFallback, printConfigDiagnostics } from './commandHelpers.js';
 
 /**
  * Mendaftarkan perintah `visualize` ke instance Commander yang diberikan.
@@ -32,6 +33,7 @@ export function registerVisualizeCommand(program) {
             try {
                 const ruleEngine = new RuleEngine();
                 await ruleEngine.loadConfig(absolutePath);
+                printConfigDiagnostics(ruleEngine);
                 const graph = await buildGraphWithInteractiveFallback(absolutePath, ruleEngine, spinner);
 
                 const pkgPath = path.join(absolutePath, 'package.json');
@@ -69,7 +71,7 @@ export function registerVisualizeCommand(program) {
                 }
 
                 // Dead files
-                const allFiles = (await glob(['**/*.{js,jsx,mjs,cjs,ts,tsx,mts}'], {
+                const allFiles = (await glob([SCRIPT_GLOB], {
                     cwd: absolutePath,
                     ignore: ['**/node_modules/**', '**/dist/**', '**/test/**', '**/tests/**', '**/coverage/**', '*.config.*', '.*.js', '.*.mjs', '.*.ts'],
                     absolute: true

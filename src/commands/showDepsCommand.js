@@ -5,6 +5,7 @@ import ora from 'ora';
 import { buildProjectGraph } from '../analyzer/graph/projectGraph.js';
 import { RuleEngine } from '../analyzer/ruleEngine.js';
 import { analyzeProjectDependencies } from '../analyzer/dependency/dependencyReportService.js';
+import { printConfigDiagnostics } from './commandHelpers.js';
 
 /**
  * Mendaftarkan perintah `show-deps` ke instance Commander yang diberikan.
@@ -33,6 +34,7 @@ export function registerShowDepsCommand(program) {
                 try {
                     const ruleEngine = new RuleEngine();
                     await ruleEngine.loadConfig(absolutePath);
+                    printConfigDiagnostics(ruleEngine);
                     const graph = await buildProjectGraph(absolutePath, ruleEngine);
                     dependencyReport = await analyzeProjectDependencies(absolutePath, graph, ruleEngine);
                     spinner.succeed('Analisis selesai.');

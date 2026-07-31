@@ -3,7 +3,7 @@ import fs from 'fs-extra';
 import chalk from 'chalk';
 import ora from 'ora';
 import { RuleEngine } from '../analyzer/ruleEngine.js';
-import { buildGraphWithInteractiveFallback } from './commandHelpers.js';
+import { buildGraphWithInteractiveFallback, printConfigDiagnostics } from './commandHelpers.js';
 
 /**
  * Mendaftarkan perintah `trace` ke instance Commander yang diberikan.
@@ -39,10 +39,10 @@ export function registerTraceCommand(program) {
             }
 
             console.log(chalk.cyan(`\n[>] Reverse Trace: siapa yang mengimport ${chalk.bold(path.relative(projectRoot, absoluteFile))}?`));
-            const spinner = ora('Membangun graf proyek...').start();
-
             const ruleEngine = new RuleEngine();
             await ruleEngine.loadConfig(projectRoot);
+            printConfigDiagnostics(ruleEngine);
+            const spinner = ora('Membangun graf proyek...').start();
 
             let graph;
             try {

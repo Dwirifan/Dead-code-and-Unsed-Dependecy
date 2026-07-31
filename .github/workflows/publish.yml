@@ -33,6 +33,9 @@ jobs:
       - name: Enforce coverage thresholds
         run: npm run coverage
 
+      - name: Verify npm package contents
+        run: npm pack --dry-run
+
       # 5. Proses compile/build (Aktifkan baris di bawah ini jika proyek Anda menggunakan TypeScript atau bundler)
       # - name: Build package
       #   run: npm run build

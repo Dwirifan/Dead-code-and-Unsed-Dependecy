@@ -17,6 +17,8 @@ It features a Confidence Scoring System and Safety Classification to ensure that
 
 ## Installation
 
+Requires Node.js 20 or newer.
+
 Clone this repository and install dependencies:
 
 ```bash
@@ -96,6 +98,24 @@ The easiest way to set up DeadKiller in your project is by using the interactive
 ```bash
 deadkiller init
 ```
+
+`init` mendeteksi bahasa (JavaScript/TypeScript/campuran), module system
+(ESM/CommonJS/campuran), framework, jenis proyek, package manager, workspace,
+serta entry runtime/test/config. Tekan Enter sekali untuk memakai rekomendasi.
+
+Untuk setup otomatis tanpa prompt (cocok untuk CI, template, dan monorepo):
+
+```bash
+deadkiller init --yes
+deadkiller init ./packages/api --yes --format json
+deadkiller init --yes --entry src/worker.ts scripts/migrate.mts
+deadkiller init --dry-run --yes
+```
+
+Gunakan `--force` untuk mengganti konfigurasi lama. DeadKiller membuat backup di
+`.deadkiller_backup/config-init/` dan memastikan hanya satu format konfigurasi
+yang aktif agar tidak terjadi konflik precedence.
+
 This command allows you to choose between two configuration formats:
 - **JavaScript Dinamis (`deadkiller.config.mjs`)** - Mendukung konfigurasi dinamis tanpa bergantung pada tipe modul proyek (opsi disarankan).
 - **JSON Statis (`.deadkillerrc.json`)**
@@ -112,7 +132,7 @@ export default {
     ignorePrefixedVariables: "^_",
     preserveExports: true,
     preserveFiles: ["test/**", "tests/**", "__tests__/**", "**/*.test.*", "**/*.spec.*"],
-    ignoreFiles: ["dist/**", "build/**", "coverage/**"],
+    ignoreFiles: ["**/dist/**", "**/build/**", "**/coverage/**"],
     ignoreDependencies: [],
     globals: [],
     overrides: [
@@ -131,6 +151,16 @@ export default {
 - **preserveFiles**: File tetap dibaca untuk graph dan bukti dependency, tetapi dilindungi dari penghapusan. Gunakan ini untuk test dan example.
 - **ignoreFiles**: File tidak dibaca sama sekali, termasuk import dependency di dalamnya. Gunakan hanya untuk output generator seperti `dist`, `build`, dan `coverage`; jangan menaruh folder test di sini.
 - **overrides**: Aturan khusus untuk pola file tertentu. Setup default hanya melindungi export test; unused variable di dalam test tetap dianalisis. Tambahkan `ignorePrefixedVariables` sendiri hanya jika proyek memang membutuhkannya.
+
+DeadKiller memvalidasi konfigurasi sebelum analisis. Tipe, regex, mode, glob,
+opsi tak dikenal, konflik beberapa file config, atau override yang invalid akan
+menghentikan `scan`/`fix` dengan error yang jelas;
+DeadKiller tidak diam-diam kembali ke default karena itu dapat menonaktifkan aturan
+perlindungan. Warning normalisasi tersedia pada output manusia dan pada field
+`config.diagnostics` di output `scan --json`.
+
+Ekstensi script yang dianalisis secara konsisten adalah `.js`, `.jsx`, `.mjs`,
+`.cjs`, `.ts`, `.tsx`, `.mts`, dan `.cts`.
 
 ### Entry Point, Preserve, dan Ignore
 

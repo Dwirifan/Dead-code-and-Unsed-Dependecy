@@ -13,6 +13,7 @@ export function isReference(node, parent, grandParent, ancestors = null) {
     // Kasus-kasus Deklarasi (BUKAN Referensi Pemanggilan)
     if (parent.type === 'VariableDeclarator' && parent.id === node) return false;
     if (parent.type === 'FunctionDeclaration' && parent.id === node) return false;
+    if (parent.type === 'FunctionExpression' && parent.id === node) return false;
     if (parent.type === 'MethodDefinition' && parent.key === node) return false;
 
     // Penanganan Properti Objek (Key bukan panggilan variabel)

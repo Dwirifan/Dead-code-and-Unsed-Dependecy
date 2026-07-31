@@ -5,7 +5,8 @@ import { performance } from 'perf_hooks';
 import { parseCode } from '../parser/astParser.js';
 import { findDeadCode } from '../analyzer/deadcode/index.js';
 import { RuleEngine } from '../analyzer/ruleEngine.js';
-import { buildGraphWithInteractiveFallback } from './commandHelpers.js';
+import { SCRIPT_EXTENSION_SET } from '../parser/supportedExtensions.js';
+import { buildGraphWithInteractiveFallback, printConfigDiagnostics } from './commandHelpers.js';
 
 /**
  * Mendaftarkan perintah `watch` ke instance Commander yang diberikan.
@@ -43,7 +44,6 @@ export function registerWatchCommand(program) {
             let debounceTimer = null;
             let isScanning = false;
 
-            const WATCH_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts']);
             const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.deadkiller_backup', 'coverage']);
 
             // Fungsi utama: jalankan scan
@@ -61,6 +61,7 @@ export function registerWatchCommand(program) {
                 try {
                     const ruleEngine = new RuleEngine();
                     await ruleEngine.loadConfig(absolutePath);
+                    printConfigDiagnostics(ruleEngine);
 
                     const graph = await buildGraphWithInteractiveFallback(absolutePath, ruleEngine, null);
 
@@ -69,7 +70,7 @@ export function registerWatchCommand(program) {
                     // Analisis dead code di live files
                     for (const file of graph.liveFiles) {
                         const ext = path.extname(file);
-                        if (!WATCH_EXTENSIONS.has(ext) || file.includes('node_modules')) continue;
+                        if (!SCRIPT_EXTENSION_SET.has(ext) || file.includes('node_modules')) continue;
 
                         try {
                             const code = await fs.readFile(file, 'utf-8');
@@ -127,7 +128,7 @@ export function registerWatchCommand(program) {
 
                         // Pastikan file yang berubah relevan
                         const ext = path.extname(filename);
-                        if (!WATCH_EXTENSIONS.has(ext)) return;
+                        if (!SCRIPT_EXTENSION_SET.has(ext)) return;
 
                         // Skip direktori yang diabaikan
                         const parts = filename.split(path.sep);

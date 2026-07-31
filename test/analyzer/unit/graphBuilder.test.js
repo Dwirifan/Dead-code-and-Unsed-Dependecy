@@ -5,6 +5,7 @@ import fs from 'fs-extra';
 import os from 'os';
 
 import { buildProjectGraph } from '../../../src/analyzer/graph/projectGraph.js';
+import { findEntryPoints } from '../../../src/analyzer/graph/entryPointFinder.js';
 import { findUnusedDependencies } from '../../../src/analyzer/dependency/dependencyAnalyzer.js';
 import { RuleEngine } from '../../../src/analyzer/ruleEngine.js';
 
@@ -53,6 +54,33 @@ async function buatProyekDummy() {
 }
 
 describe('[TC-G01] BFS Traversal & Entry Point Finder', () => {
+
+    it('menelusuri entry dan import CommonJS TypeScript berekstensi .cts', async () => {
+        const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'deadkiller-cts-'));
+        try {
+            await fs.writeJson(path.join(projectRoot, 'package.json'), {
+                name: 'cts-project',
+                main: 'src/index.cts',
+            });
+            await fs.outputFile(
+                path.join(projectRoot, 'src', 'index.cts'),
+                "import { value } from './value.cjs';\nconsole.log(value);\n",
+            );
+            await fs.outputFile(
+                path.join(projectRoot, 'src', 'value.cjs'),
+                'export const value = 42;\n',
+            );
+
+            const graph = await buildProjectGraph(projectRoot);
+            const relativeFiles = [...graph.liveFiles]
+                .map(file => path.relative(projectRoot, file).replace(/\\/g, '/'));
+
+            assert.ok(relativeFiles.includes('src/index.cts'));
+            assert.ok(relativeFiles.includes('src/value.cjs'));
+        } finally {
+            await fs.remove(projectRoot);
+        }
+    });
 
     it('TC-G01: Graph Builder menemukan semua file yang dapat dijangkau via BFS', async () => {
         const proyekDummy = await buatProyekDummy();
@@ -218,6 +246,39 @@ describe('[TC-G01] BFS Traversal & Entry Point Finder', () => {
             assert.ok(relativeFiles.includes('services/http-entry.js'));
             assert.ok(relativeFiles.includes('test/products.js'));
             assert.ok(!relativeFiles.includes('missing-index.js'));
+        } finally {
+            await fs.remove(proyekDummy);
+        }
+    });
+
+    it('mendeteksi manifest workspace pnpm termasuk entry .cts dan .mts', async () => {
+        const proyekDummy = await fs.mkdtemp(path.join(os.tmpdir(), 'deadkiller-pnpm-workspace-'));
+        try {
+            await fs.writeJson(path.join(proyekDummy, 'package.json'), {
+                name: 'workspace-root',
+                private: true,
+            });
+            await fs.writeFile(
+                path.join(proyekDummy, 'pnpm-workspace.yaml'),
+                `packages:\n  - 'packages/*'\n`,
+            );
+            await fs.outputJson(path.join(proyekDummy, 'packages/api/package.json'), {
+                name: '@workspace/api',
+                main: 'src/main.cts',
+            });
+            await fs.outputFile(path.join(proyekDummy, 'packages/api/src/main.cts'), `export = {};\n`);
+            await fs.outputJson(path.join(proyekDummy, 'packages/web/package.json'), {
+                name: '@workspace/web',
+                exports: './src/index.mts',
+            });
+            await fs.outputFile(path.join(proyekDummy, 'packages/web/src/index.mts'), `export {};\n`);
+
+            const entries = (await findEntryPoints(proyekDummy)).map(file => (
+                path.relative(proyekDummy, file).replace(/\\/g, '/')
+            ));
+
+            assert.ok(entries.includes('packages/api/src/main.cts'));
+            assert.ok(entries.includes('packages/web/src/index.mts'));
         } finally {
             await fs.remove(proyekDummy);
         }

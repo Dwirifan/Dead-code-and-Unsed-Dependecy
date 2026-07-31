@@ -6,10 +6,15 @@ import ora from 'ora';
 import { performance } from 'perf_hooks';
 import { parseCode } from '../parser/astParser.js';
 import { ParseCache } from '../parser/parseCache.js';
+import { SCRIPT_EXTENSION_SET, SCRIPT_GLOB } from '../parser/supportedExtensions.js';
 import { findDeadCode } from '../analyzer/deadcode/index.js';
 import { analyzeProjectDependencies } from '../analyzer/dependency/dependencyReportService.js';
 import { RuleEngine } from '../analyzer/ruleEngine.js';
-import { buildGraphWithInteractiveFallback } from './commandHelpers.js';
+import {
+    buildGraphWithInteractiveFallback,
+    findProjectRoot,
+    printConfigDiagnostics,
+} from './commandHelpers.js';
 
 /**
  * Mendaftarkan perintah `scan` ke instance Commander yang diberikan.
@@ -36,18 +41,53 @@ export function registerScanCommand(program) {
 
             // --- MODE SATU FILE ---
             if (stats.isFile()) {
-                console.log(`\n[>] Scanning file tunggal: ${path.basename(absolutePath)}`);
                 try {
+                    const projectRoot = await findProjectRoot(path.dirname(absolutePath));
+                    const ruleEngine = new RuleEngine();
+                    await ruleEngine.loadConfig(projectRoot);
+                    printConfigDiagnostics(ruleEngine, { silent: jsonMode });
+
+                    if (!jsonMode) {
+                        console.log(`\n[>] Scanning file tunggal: ${path.basename(absolutePath)}`);
+                    }
+                    if (ruleEngine.isIgnoredFile(absolutePath, projectRoot)) {
+                        if (jsonMode) {
+                            console.log(JSON.stringify({
+                                mode: 'single-file',
+                                file: absolutePath,
+                                ignored: true,
+                                deadCode: [],
+                                totalIssues: 0,
+                                config: {
+                                    loaded: ruleEngine.configLoaded,
+                                    path: ruleEngine.configPath,
+                                    diagnostics: ruleEngine.configDiagnostics,
+                                },
+                                analysisTime: `${(performance.now() - startTime).toFixed(2)} ms`,
+                            }, null, 2));
+                        } else {
+                            console.log(chalk.yellow(`[!] File diabaikan berdasarkan konfigurasi DeadKiller.`));
+                        }
+                        return;
+                    }
+
                     const code = await fs.readFile(absolutePath, 'utf-8');
                     const ast = await parseCode(code, absolutePath);
-                    const deadNodes = findDeadCode(ast);
+                    const registry = { usedExports: new Map(), unsafeFiles: new Set() };
+                    const deadNodes = findDeadCode(ast, absolutePath, registry, ruleEngine);
 
                     if (jsonMode) {
                         const jsonResult = {
                             mode: 'single-file',
                             file: absolutePath,
+                            ignored: false,
                             deadCode: deadNodes.map(n => ({ name: n.name, type: n.type, line: n.line, confidence: n.confidence || 'medium', status: n.status || 'review', reason: n.reason || '' })),
                             totalIssues: deadNodes.length,
+                            config: {
+                                loaded: ruleEngine.configLoaded,
+                                path: ruleEngine.configPath,
+                                diagnostics: ruleEngine.configDiagnostics,
+                            },
                             analysisTime: `${(performance.now() - startTime).toFixed(2)} ms`
                         };
                         console.log(JSON.stringify(jsonResult, null, 2));
@@ -84,9 +124,10 @@ export function registerScanCommand(program) {
 
             // --- MODE DIREKTORI ---
             console.log(`\n[>] Menganalisis proyek di: ${chalk.cyan(absolutePath)}`);
-            const spinner = ora('Membangun Graph Ketergantungan (Reachability Analysis)...').start();
             const ruleEngine = new RuleEngine();
             await ruleEngine.loadConfig(absolutePath);
+            printConfigDiagnostics(ruleEngine, { silent: jsonMode });
+            const spinner = ora('Membangun Graph Ketergantungan (Reachability Analysis)...').start();
 
             let graph;
             try {
@@ -173,7 +214,7 @@ export function registerScanCommand(program) {
             }
 
             // Dead files — normalisasi path glob ke format OS lokal
-            const allFiles = (await glob(['**/*.{js,jsx,mjs,cjs,ts,tsx,mts}'], {
+            const allFiles = (await glob([SCRIPT_GLOB], {
                 cwd: absolutePath,
                 ignore: ['**/node_modules/**', '**/dist/**', '**/test/**', '**/tests/**', '**/coverage/**', '*.config.*', '.*.js', '.*.mjs', '.*.ts'],
                 absolute: true
@@ -276,9 +317,8 @@ export function registerScanCommand(program) {
 
             for (const file of filesToAnalyze) {
                 // Skip file yang bukan JavaScript/TypeScript (tidak bisa di-parse)
-                const PARSEABLE_EXTENSIONS = new Set(['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts']);
                 const ext = path.extname(file).toLowerCase();
-                if (!PARSEABLE_EXTENSIONS.has(ext) || file.includes('node_modules')) continue;
+                if (!SCRIPT_EXTENSION_SET.has(ext) || file.includes('node_modules')) continue;
 
                 try {
                     // Cek cache terlebih dahulu
@@ -293,6 +333,12 @@ export function registerScanCommand(program) {
                     }
 
                     const deadNodes = findDeadCode(ast, file, graph.globalRegistry, ruleEngine);
+
+                    // Filter laporan: jika file masuk dalam preserveFiles / ignoreFiles, kita abaikan temuan internalnya
+                    if (ruleEngine.isIgnoredFile(file, absolutePath)) {
+                        continue;
+                    }
+
                     // File dinamis (unsafeFiles): fixCommand hanya memblokir tipe non-struktural.
                     // Tipe struktural (Import, Variable, dll) tetap bisa dieliminasi oleh fix.
                     const isUnsafeFile = unsafeFileKeys.has(normalizeFileKey(file));
@@ -492,6 +538,11 @@ export function registerScanCommand(program) {
                 const jsonResult = {
                     mode: 'directory',
                     projectRoot: absolutePath,
+                    config: {
+                        loaded: ruleEngine.configLoaded,
+                        path: ruleEngine.configPath,
+                        diagnostics: ruleEngine.configDiagnostics,
+                    },
                     summary: {
                         liveFiles: graph.liveFiles.size,
                         totalIssues,

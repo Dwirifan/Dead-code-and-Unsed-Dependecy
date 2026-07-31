@@ -332,10 +332,57 @@ describe('[TC-A41 – TC-A42] ExportAllDeclaration Re-exports', () => {
         assert.ok(Array.isArray(hasil));
     });
 
-    it('TC-A42: export * as ns from "./mod" → nama ns terdaftar dan tidak dead jika dipakai', async () => {
+    it('TC-A42: export * as ns tidak membuat local binding ns', async () => {
         const kode = `export * as ns from './mod.js';\nconsole.log(ns);`;
         const hasil = await analisis(kode);
-        const deadNs = hasil.filter(r => r.name === 'ns');
-        assert.strictEqual(deadNs.length, 0, 'Export namespace yang digunakan tidak boleh dianggap dead code');
+        const nsFindings = hasil.filter(r => r.name === 'ns');
+        assert.strictEqual(nsFindings.length, 1);
+        assert.strictEqual(nsFindings[0].type, 'UndeclaredVariable', 'Re-export alias tidak tersedia sebagai local binding');
+    });
+});
+
+describe('[TC-A43 - TC-A47] Canonical TypeScript Scope Manager', () => {
+    it('TC-A43: binding let pada switch tetap terpisah dari binding luar', async () => {
+        const kode = `let value = 1;\nswitch (kind) { case 1: let value = 2; break; }\nconsole.log(value);`;
+        const hasil = await analisis(kode);
+        const deadValues = hasil.filter(item => item.name === 'value');
+
+        assert.strictEqual(deadValues.length, 1, 'Hanya binding value di dalam switch yang unused');
+        assert.strictEqual(deadValues[0].line, 2);
+        assert.strictEqual(deadValues[0].analysisBackend, 'scope-manager');
+    });
+
+    it('TC-A44: binding let pada for tidak tertukar dengan binding luar', async () => {
+        const kode = `let index = 10;\nfor (let index = 0; shouldContinue;) { work(); }\nconsole.log(index);`;
+        const hasil = await analisis(kode);
+        const deadIndexes = hasil.filter(item => item.name === 'index');
+
+        assert.strictEqual(deadIndexes.length, 1);
+        assert.strictEqual(deadIndexes[0].line, 2);
+    });
+
+    it('TC-A45: namespace type dan value dengan nama sama dianalisis terpisah', async () => {
+        const kode = `interface User { id: number }\nconst User = 1;\nconsole.log(User);`;
+        const hasil = await analisis(kode);
+        const userFindings = hasil.filter(item => item.name === 'User');
+
+        assert.strictEqual(userFindings.length, 1);
+        assert.strictEqual(userFindings[0].type, 'UnusedType');
+        assert.strictEqual(userFindings[0].line, 1);
+    });
+
+    it('TC-A46: named function expression rekursif bukan undeclared variable', async () => {
+        const hasil = await analisis(`const fn = function inner() { return inner(); };\nconsole.log(fn);`);
+        const falseUndeclared = hasil.filter(item => item.type === 'UndeclaredVariable' && item.name === 'inner');
+
+        assert.strictEqual(falseUndeclared.length, 0);
+    });
+
+    it('TC-A47: default ESM ditangani sebagai syntax marker, bukan global suppression', async () => {
+        const kode = `const thing = 1;\nexport { thing as default };`;
+        const hasil = await analisis(kode);
+
+        assert.strictEqual(hasil.some(item => item.type === 'UndeclaredVariable' && item.name === 'default'), false);
+        assert.strictEqual(hasil.some(item => item.name === 'thing'), false);
     });
 });

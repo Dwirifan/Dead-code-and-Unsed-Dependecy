@@ -2,6 +2,7 @@
 
 import { program } from 'commander';
 import chalk from 'chalk';
+import { readFileSync } from 'node:fs';
 
 import { registerScanCommand } from '../src/commands/scanCommand.js';
 import { registerFixCommand } from '../src/commands/fixCommand.js';
@@ -13,6 +14,10 @@ import { registerWatchCommand } from '../src/commands/watchCommand.js';
 import { registerReportCommand } from '../src/commands/reportCommand.js';
 import { registerInitCommand } from '../src/commands/initCommand.js';
 import { registerUndoCommand } from '../src/commands/undoCommand.js';
+
+const { version: packageVersion } = JSON.parse(
+    readFileSync(new URL('../package.json', import.meta.url), 'utf8')
+);
 
 // ── Global Ctrl+C handler ──────────────────────────────────────────────────
 // Inquirer v9+ melempar ExitPromptError saat user menekan Ctrl+C.
@@ -33,7 +38,7 @@ process.on('unhandledRejection', handleExit);
 program
     .name('deadkiller')
     .description('Automated Dead Code and Unused Dependency Eliminator')
-    .version('1.0.0');
+    .version(packageVersion);
 
 // ── Daftarkan semua perintah ──────────────────────────────────────────────
 registerScanCommand(program);

@@ -76,6 +76,24 @@ describe('Rule Engine — Konfigurasi & Filter', () => {
         engine.rules.preserveUnsafeFiles = false;
         assert.strictEqual(engine.rules.preserveUnsafeFiles, false);
     });
+
+    it('mendukung glob ignoreFiles rekursif yang dihasilkan init', () => {
+        const engine = new RuleEngine();
+        engine.rules.ignoreFiles = ['**/dist/**', '**/.next/**', 'legacy-build'];
+
+        assert.strictEqual(engine.isIgnoredFile('/project/packages/api/dist/index.js', '/project'), true);
+        assert.strictEqual(engine.isIgnoredFile('/project/apps/web/.next/server.js', '/project'), true);
+        assert.strictEqual(engine.isIgnoredFile('/project/packages/api/legacy-build/index.js', '/project'), true);
+        assert.strictEqual(engine.isIgnoredFile('/project/src/index.js', '/project'), false);
+    });
+
+    it('mode vue melindungi convention-based framework paths', () => {
+        const engine = new RuleEngine();
+        engine.rules.mode = 'vue';
+
+        assert.strictEqual(engine.isIgnoredFile('/project/pages/index.vue', '/project'), true);
+        assert.strictEqual(engine.isIgnoredFile('/project/plugins/auth.ts', '/project'), true);
+    });
 });
 
 

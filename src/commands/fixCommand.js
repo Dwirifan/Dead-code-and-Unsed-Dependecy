@@ -6,6 +6,7 @@ import ora from 'ora';
 import { performance } from 'perf_hooks';
 import { parseCode } from '../parser/astParser.js';
 import { ParseCache } from '../parser/parseCache.js';
+import { SCRIPT_EXTENSION_SET, SCRIPT_GLOB } from '../parser/supportedExtensions.js';
 import { findDeadCode } from '../analyzer/deadcode/index.js';
 import { analyzeProjectDependencies } from '../analyzer/dependency/dependencyReportService.js';
 import { removeDeadCode } from '../eliminator/codeCleaner.js';
@@ -13,7 +14,11 @@ import { removeUnusedDependencies } from '../eliminator/dependencyCleaner.js';
 import { generateDiff } from '../eliminator/diffGenerator.js';
 import { createBackup, rollbackBackup } from '../eliminator/backupManager.js';
 import { RuleEngine } from '../analyzer/ruleEngine.js';
-import { buildGraphWithInteractiveFallback } from './commandHelpers.js';
+import {
+    buildGraphWithInteractiveFallback,
+    findProjectRoot,
+    printConfigDiagnostics,
+} from './commandHelpers.js';
 
 /**
  * Mendaftarkan perintah `fix` ke instance Commander yang diberikan.
@@ -58,22 +63,6 @@ export function registerFixCommand(program) {
 // Helpers (private)
 // ---------------------------------------------------------------------------
 
-async function _findProjectRoot(startDir) {
-    let curr = path.resolve(startDir);
-    while (true) {
-        if (await fs.pathExists(path.join(curr, 'deadkiller.config.js')) ||
-            await fs.pathExists(path.join(curr, 'deadkiller.config.mjs')) ||
-            await fs.pathExists(path.join(curr, '.deadkillerrc.json')) ||
-            await fs.pathExists(path.join(curr, 'package.json'))) {
-            return curr;
-        }
-        const parent = path.dirname(curr);
-        if (parent === curr) break;
-        curr = parent;
-    }
-    return path.resolve(startDir);
-}
-
 async function _fixSingleFile(absolutePath, startTime, inquirer, level = 3, autoConfirm = false) {
     console.log(chalk.cyan(`\n[>] Fix mode: file tunggal — ${path.basename(absolutePath)}\n`));
 
@@ -82,8 +71,9 @@ async function _fixSingleFile(absolutePath, startTime, inquirer, level = 3, auto
     catch (e) { console.error(`[ERROR] Tidak bisa membaca file: ${e.message}`); process.exit(1); }
 
     const ruleEngine = new RuleEngine();
-    const projectRoot = await _findProjectRoot(path.dirname(absolutePath));
+    const projectRoot = await findProjectRoot(path.dirname(absolutePath));
     await ruleEngine.loadConfig(projectRoot);
+    printConfigDiagnostics(ruleEngine);
 
     if (ruleEngine.isIgnoredFile(absolutePath, projectRoot)) {
         console.log(chalk.yellow(`[!] File '${path.basename(absolutePath)}' diabaikan berdasarkan konfigurasi.`));
@@ -198,9 +188,10 @@ async function _fixSingleFile(absolutePath, startTime, inquirer, level = 3, auto
 }
 async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoConfirm = false) {
     console.log(chalk.cyan(`\n[>] Fix mode: direktori — ${absolutePath}`));
-    const spinner = ora('Membangun graph & mendeteksi dead code di semua file...').start();
     const ruleEngine = new RuleEngine();
     await ruleEngine.loadConfig(absolutePath);
+    printConfigDiagnostics(ruleEngine);
+    const spinner = ora('Membangun graph & mendeteksi dead code di semua file...').start();
 
     let graph;
     try { graph = await buildGraphWithInteractiveFallback(absolutePath, ruleEngine, spinner); }
@@ -235,7 +226,7 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
     }
 
     // Dead files — normalisasi path glob ke format OS lokal
-    const allFiles = (await glob(['**/*.{js,jsx,mjs,cjs,ts,tsx,mts}'], {
+    const allFiles = (await glob([SCRIPT_GLOB], {
         cwd: absolutePath,
         ignore: ['**/node_modules/**', '**/dist/**', '**/test/**', '**/tests/**', '**/coverage/**', '*.config.*', '.*.js', '.*.mjs', '.*.ts'],
         absolute: true
@@ -253,9 +244,8 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
 
     for (const file of graph.liveFiles) {
         // Skip file yang bukan JavaScript/TypeScript (tidak bisa di-parse)
-        const PARSEABLE_EXTENSIONS = new Set(['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts']);
         const ext = path.extname(file).toLowerCase();
-        if (!PARSEABLE_EXTENSIONS.has(ext) || file.includes('node_modules')) continue;
+        if (!SCRIPT_EXTENSION_SET.has(ext) || file.includes('node_modules')) continue;
 
         // File dinamis (unsafeFiles): Safety Fallback melindungi EKSPOR di graph (sudah ditangani saat traversal).
         // Tapi dead code STRUKTURAL (unreachable code, unused import, unused variable) tetap aman dieliminasi.

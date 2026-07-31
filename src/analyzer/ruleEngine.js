@@ -2,6 +2,37 @@ import fs from 'fs-extra';
 import path from 'path';
 import { pathToFileURL } from 'url';
 import micromatch from 'micromatch';
+import { validateAndNormalizeConfig } from './configValidator.js';
+
+const DEFAULT_RULES = {
+    mode: 'vanilla',
+    ignorePrefixedVariables: '^_',
+    preserveExports: true,
+    preserveUnsafeFiles: true,
+    preserveFiles: [],
+    ignoreFiles: [],
+    ignoreDependencies: [],
+    entryPoints: [],
+    eliminator: {
+        autoRenameUnusedParameters: false,
+        autoRemoveEmptyBlocks: false,
+    },
+    globals: [],
+    overrides: [],
+};
+
+function freshDefaultRules() {
+    return {
+        ...DEFAULT_RULES,
+        eliminator: { ...DEFAULT_RULES.eliminator },
+        preserveFiles: [],
+        ignoreFiles: [],
+        ignoreDependencies: [],
+        entryPoints: [],
+        globals: [],
+        overrides: [],
+    };
+}
 
 async function importConfigModule(configPath, projectRoot) {
     const packageJsonPath = path.join(projectRoot, 'package.json');
@@ -26,7 +57,10 @@ async function importConfigModule(configPath, projectRoot) {
         }
     }
 
-    return import(pathToFileURL(configPath).href);
+    const configUrl = pathToFileURL(configPath);
+    const stat = await fs.stat(configPath);
+    configUrl.searchParams.set('mtime', String(stat.mtimeMs));
+    return import(configUrl.href);
 }
 
 /**
@@ -36,29 +70,18 @@ async function importConfigModule(configPath, projectRoot) {
  */
 export class RuleEngine {
     constructor() {
-        // Konfigurasi standar (Default Rules)
-        this.rules = {
-            mode: 'vanilla',               // Mode framework: 'vanilla' | 'react' | 'next'
-            ignorePrefixedVariables: "^_", // Abaikan variabel berawalan '_'
-            preserveExports: true,         // Lindungi fungsi/variabel yg di-export
-            preserveUnsafeFiles: true,     // Lindungi file dinamis (Conservative Safety Fallback)
-            preserveFiles: [],             // Lindungi file dari penghapusan
-            ignoreFiles: [],               // Abaikan file/folder dari pemindaian (contoh: 'dist')
-            ignoreDependencies: [],        // Dependensi yang tidak dianggap unused
-            entryPoints: [],               // Entry points khusus tambahan
-            eliminator: {
-                autoRenameUnusedParameters: false,
-                autoRemoveEmptyBlocks: false
-            },
-            globals: [],                   // Variabel global tambahan dari pengguna
-            overrides: []                  // Aturan spesifik per-file
-        };
+        this.rules = freshDefaultRules();
+        this.configDiagnostics = [];
+        this.configPath = null;
+        this.configLoaded = false;
+        this.configValid = true;
 
         // Direktori yang dilindungi oleh framework mode
         this._frameworkPreservedPaths = {
             vanilla: [],
             react: ['public/'],
-            next: ['pages/', 'app/', 'api/', 'public/', 'middleware.']
+            next: ['pages/', 'app/', 'api/', 'public/', 'middleware.'],
+            vue: ['pages/', 'layouts/', 'middleware/', 'plugins/', 'public/']
         };
 
         this.projectRoot = null;
@@ -70,6 +93,11 @@ export class RuleEngine {
      */
     async loadConfig(projectRoot) {
         this.projectRoot = projectRoot;
+        this.rules = freshDefaultRules();
+        this.configDiagnostics = [];
+        this.configPath = null;
+        this.configLoaded = false;
+        this.configValid = true;
 
         const jsConfigPath = path.join(projectRoot, 'deadkiller.config.js');
         const mjsConfigPath = path.join(projectRoot, 'deadkiller.config.mjs');
@@ -77,20 +105,46 @@ export class RuleEngine {
 
         try {
             let userConfig = null;
+            const existingConfigs = [];
+            for (const candidate of [mjsConfigPath, jsConfigPath, jsonConfigPath]) {
+                if (await fs.pathExists(candidate)) existingConfigs.push(candidate);
+            }
+            if (existingConfigs.length > 1) {
+                const conflictError = new Error(
+                    `Ditemukan beberapa file konfigurasi aktif: ${existingConfigs.map(file => path.basename(file)).join(', ')}. Sisakan satu file saja.`,
+                );
+                conflictError.code = 'CONFIG_CONFLICTING_FILES';
+                conflictError.diagnostics = [{
+                    level: 'error',
+                    code: conflictError.code,
+                    path: projectRoot,
+                    message: conflictError.message,
+                    files: existingConfigs,
+                }];
+                throw conflictError;
+            }
 
-            if (await fs.pathExists(mjsConfigPath)) {
+            if (existingConfigs[0] === mjsConfigPath) {
+                this.configPath = mjsConfigPath;
                 const configModule = await importConfigModule(mjsConfigPath, projectRoot);
                 userConfig = configModule.default || configModule;
-            } else if (await fs.pathExists(jsConfigPath)) {
+            } else if (existingConfigs[0] === jsConfigPath) {
+                this.configPath = jsConfigPath;
                 const configModule = await importConfigModule(jsConfigPath, projectRoot);
                 userConfig = configModule.default || configModule;
-            } else if (await fs.pathExists(jsonConfigPath)) {
+            } else if (existingConfigs[0] === jsonConfigPath) {
+                this.configPath = jsonConfigPath;
                 userConfig = await fs.readJson(jsonConfigPath);
             }
 
             if (userConfig) {
-                // Menimpa aturan default dengan aturan yang disediakan pengguna
-                this.rules = { ...this.rules, ...userConfig };
+                const validated = validateAndNormalizeConfig(userConfig, freshDefaultRules());
+                this.rules = validated.config;
+                this.configDiagnostics = validated.diagnostics.map(item => ({
+                    ...item,
+                    file: this.configPath,
+                }));
+                this.configLoaded = true;
             }
 
             // --- AUTO DETECT REACT RUNTIME ---
@@ -121,9 +175,30 @@ export class RuleEngine {
                 this.rules.reactRuntime = 'classic'; // Default fallback untuk React < 17
             }
 
+            return {
+                loaded: this.configLoaded,
+                path: this.configPath,
+                diagnostics: [...this.configDiagnostics],
+            };
         } catch (err) {
-            console.warn(`[RuleEngine] Gagal mem-parsing konfigurasi: ${err.message}. Menggunakan default.`);
-            if (!this.rules.reactRuntime) this.rules.reactRuntime = 'classic';
+            this.configValid = false;
+            const diagnostics = err.diagnostics || [{
+                level: 'error',
+                code: err.code || 'CONFIG_LOAD_FAILED',
+                path: this.configPath || projectRoot,
+                message: err.message,
+                file: this.configPath,
+            }];
+            this.configDiagnostics = diagnostics;
+
+            const loadError = new Error(
+                `Gagal memuat konfigurasi DeadKiller${this.configPath ? ` '${path.basename(this.configPath)}'` : ''}: ${err.message}`,
+                { cause: err },
+            );
+            loadError.name = 'ConfigLoadError';
+            loadError.code = 'DEADKILLER_CONFIG_LOAD_FAILED';
+            loadError.diagnostics = diagnostics;
+            throw loadError;
         }
     }
 
@@ -196,7 +271,21 @@ export class RuleEngine {
 
         // 2. Cek ignoreFiles (folder yang sepenuhnya diabaikan dari AST)
         if (rules.ignoreFiles && rules.ignoreFiles.length > 0) {
-            const isIgnoredDir = rules.ignoreFiles.some(pattern => relativePath.includes(pattern) || relativePath.startsWith(pattern));
+            const isIgnoredDir = rules.ignoreFiles.some(pattern => {
+                if (micromatch.isMatch(relativePath, pattern, { dot: true })) return true;
+
+                // Backward compatibility untuk config lama yang memakai nama
+                // direktori polos seperti "dist" alih-alih glob "**/dist/**".
+                const hasGlobSyntax = ['*', '!', '?', '[', ']', '{', '}', '(', ')']
+                    .some(character => pattern.includes(character));
+                if (!hasGlobSyntax) {
+                    const directory = pattern.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+                    return relativePath === directory ||
+                        relativePath.startsWith(`${directory}/`) ||
+                        relativePath.includes(`/${directory}/`);
+                }
+                return false;
+            });
             if (isIgnoredDir) return true;
         }
 
@@ -217,7 +306,7 @@ export class RuleEngine {
     }
 
     /**
-     * Menyimpan konfigurasi ke file statis (deadkiller.config.js).
+     * Menyimpan konfigurasi ke file JSON yang aktif atau deadkiller.config.mjs.
      * @param {string} projectRoot Lokasi root project
      */
     async saveConfig(projectRoot) {
@@ -226,6 +315,8 @@ export class RuleEngine {
         const jsonConfigPath = path.join(projectRoot, '.deadkillerrc.json');
         
         try {
+            const validated = validateAndNormalizeConfig(this.rules, freshDefaultRules());
+            this.rules = validated.config;
             if (await fs.pathExists(jsonConfigPath)) {
                 await fs.writeJson(jsonConfigPath, this.rules, { spaces: 4 });
             } else {
@@ -241,7 +332,9 @@ export default ${JSON.stringify(this.rules, null, 4)};
                 await fs.writeFile(targetPath, jsContent, 'utf-8');
             }
         } catch (err) {
-            console.error(`[RuleEngine] Gagal menyimpan konfigurasi: ${err.message}`);
+            const saveError = new Error(`Gagal menyimpan konfigurasi DeadKiller: ${err.message}`, { cause: err });
+            saveError.code = 'DEADKILLER_CONFIG_SAVE_FAILED';
+            throw saveError;
         }
     }
 }

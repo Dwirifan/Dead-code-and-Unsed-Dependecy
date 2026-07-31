@@ -10,18 +10,38 @@
 export class Scope {
     constructor(parent = null) {
         this.parent = parent;
-        this.declarations = new Map(); // nama -> { type, line, node, used: false, readCount: 0, writeCount: 0 }
+        // Key pertama tetap memakai nama agar API lama (`declarations.get(name)`) kompatibel.
+        // Deklarasi bernama sama (shadowing / namespace type-value TS) memakai Symbol key,
+        // sedangkan identitas binding sebenarnya disimpan pada `bindingNode`.
+        this.declarations = new Map();
         this.readReferences = [];  // Array of { name, node }
         this.writeReferences = []; // Array of { name, node }
         this.selfName = null; // Nama fungsi pemilik scope ini (untuk deteksi rekursi/self-reference)
         this.undeclaredVariables = []; // Array of { name, node } (hanya terisi pada global scope)
     }
 
-    addDeclaration(name, type, line, node, parentNode = null) {
-        // Hanya meregistrasi jika belum pernah dideklarasikan di scope ini (hindari duplikasi)
-        if (!this.declarations.has(name)) {
-            this.declarations.set(name, { type, line, node, parentNode, used: false, readCount: 0, writeCount: 0, writeNodes: [] });
-        }
+    addDeclaration(name, type, line, node, parentNode = null, metadata = {}) {
+        const bindingNode = metadata.bindingNode || node;
+        const existing = [...this.declarations.values()].find(decl => decl.bindingNode === bindingNode);
+        if (existing) return existing;
+
+        const declaration = {
+            name,
+            type,
+            line,
+            node,
+            parentNode,
+            bindingNode,
+            namespace: metadata.namespace || 'value',
+            used: false,
+            readCount: 0,
+            writeCount: 0,
+            writeNodes: []
+        };
+
+        const key = this.declarations.has(name) ? Symbol(name) : name;
+        this.declarations.set(key, declaration);
+        return declaration;
     }
 
 
@@ -54,8 +74,8 @@ export class Scope {
     }
 
     markRead(name, originalNode = null, refObj = null) {
-        if (this.declarations.has(name)) {
-            const decl = this.declarations.get(name);
+        const decl = [...this.declarations.values()].find(candidate => candidate.name === name);
+        if (decl) {
             decl.used = true;
             decl.readCount++;
             if (refObj) refObj.targetDecl = decl;
@@ -70,8 +90,8 @@ export class Scope {
     }
 
     markWrite(name, originalNode = null, refObj = null) {
-        if (this.declarations.has(name)) {
-            const decl = this.declarations.get(name);
+        const decl = [...this.declarations.values()].find(candidate => candidate.name === name);
+        if (decl) {
             decl.writeCount++;
             if (originalNode) {
                 decl.writeNodes = decl.writeNodes || [];
