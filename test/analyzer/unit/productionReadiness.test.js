@@ -131,4 +131,36 @@ describe('Production-Readiness Architectural Refinements', () => {
         assert.ok(htmlReport.includes('Limited Accuracy Disclosure'), 'HTML Report harus memuat penjelasan Limited Accuracy Disclosure');
         assert.ok(htmlReport.includes('src/dynamic/pluginLoader.js'), 'HTML Report harus mencantumkan nama file dinamis');
     });
+
+    it('5. Should keep graph unsafeFiles stable when intra-file analysis expands its registry', async () => {
+        const tmpDir = path.join(os.tmpdir(), `dce-unsafe-registry-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
+        await fs.ensureDir(tmpDir);
+
+        try {
+            const entryPath = path.join(tmpDir, 'index.js');
+            const code = [
+                `const key = 'value';`,
+                `const object = { value: 1 };`,
+                `console.log(object[key]);`,
+            ].join('\n');
+            await fs.writeJSON(path.join(tmpDir, 'package.json'), {
+                name: 'unsafe-registry-test',
+                version: '1.0.0',
+                main: 'index.js',
+            });
+            await fs.writeFile(entryPath, code);
+
+            const graph = await buildProjectGraph(tmpDir);
+            assert.equal(graph.unsafeFiles.size, 0, 'Graph tidak menganggap computed object biasa sebagai risiko reachability');
+
+            const ast = await parseCode(code, entryPath);
+            analyzeAstCode(ast, entryPath, graph.globalRegistry);
+
+            assert.ok(graph.globalRegistry.unsafeFiles.has(entryPath), 'Analyzer intra-file tetap mencatat risiko computed access');
+            assert.equal(graph.unsafeFiles.size, 0, 'Daftar unsafe milik graph harus tetap stabil');
+            assert.notStrictEqual(graph.unsafeFiles, graph.globalRegistry.unsafeFiles, 'Graph dan analyzer tidak boleh berbagi Set yang sama');
+        } finally {
+            await fs.remove(tmpDir);
+        }
+    });
 });

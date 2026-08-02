@@ -4,9 +4,18 @@ on:
   release:
     types: [published] # Workflow ini akan berjalan otomatis begitu Anda mengklik "Publish Release" di GitHub
 
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-publish-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       # 1. Mengambil kode terbaru dari repositori
       - name: Checkout repository
@@ -22,6 +31,11 @@ jobs:
       # 3. Menginstall dependencies secara bersih (clean install)
       - name: Install dependencies
         run: npm ci
+
+      - name: Verify release tag matches package version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: node -e "const p=require('./package.json'); if(process.env.RELEASE_TAG !== 'v' + p.version) throw new Error('Release tag/version mismatch')"
 
       # 4. Validasi kualitas wajib sebelum publikasi
       - name: Run lint
@@ -42,6 +56,6 @@ jobs:
 
       # 6. Mempublikasikan ke npm menggunakan token yang aman di GitHub Secrets
       - name: Publish to npm
-        run: npm publish --access public
+        run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKENS }}

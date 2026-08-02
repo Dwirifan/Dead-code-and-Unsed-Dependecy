@@ -36,4 +36,19 @@ describe('CLI Commands & Router', () => {
         expect(spinner.start).toHaveBeenCalled();
         expect(graph).toBeDefined();
     });
+
+    it('tidak membuka prompt ketika interactive fallback dimatikan', async () => {
+        inquirer.prompt.mockClear();
+        const error = new Error('Could not auto-detect entry point');
+        vi.spyOn(projectGraph, 'buildProjectGraph').mockRejectedValueOnce(error);
+
+        await expect(buildGraphWithInteractiveFallback(
+            '/src',
+            { rules: {}, saveConfig: vi.fn() },
+            null,
+            { interactive: false },
+        )).rejects.toBe(error);
+
+        expect(inquirer.prompt).not.toHaveBeenCalled();
+    });
 });

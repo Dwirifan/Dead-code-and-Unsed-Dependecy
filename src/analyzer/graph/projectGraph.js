@@ -422,10 +422,21 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
 
     // 5. Pencarian Siklus Maut (Circular Dependencies)
     globalRegistry.circularDependencies = findCircularDependencies(edges);
-    globalRegistry.unsafeFiles = unsafeFiles;
+    // Analyzer intra-file dapat menemukan pola dinamis tambahan yang tidak
+    // mengubah reachability graph. Gunakan Set terpisah agar mutasi registry
+    // tersebut tidak mengubah daftar unsafe yang sudah dipublikasikan graph.
+    const graphUnsafeFiles = new Set(unsafeFiles);
+    globalRegistry.unsafeFiles = new Set(graphUnsafeFiles);
     globalRegistry.dynamicDependencyFiles = dynamicDependencyFiles;
 
-    return { liveFiles, usedPackages, edges, unsafeFiles, dynamicDependencyFiles, globalRegistry };
+    return {
+        liveFiles,
+        usedPackages,
+        edges,
+        unsafeFiles: graphUnsafeFiles,
+        dynamicDependencyFiles,
+        globalRegistry,
+    };
 }
 
 /**

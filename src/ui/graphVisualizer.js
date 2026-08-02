@@ -1,8 +1,15 @@
 import path from 'path';
-import { fileURLToPath } from 'url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+function serializeForInlineScript(value) {
+    const replacements = {
+        '<': '\\u003c',
+        '>': '\\u003e',
+        '&': '\\u0026',
+        '\u2028': '\\u2028',
+        '\u2029': '\\u2029',
+    };
+    return JSON.stringify(value).replace(/[<>&\u2028\u2029]/g, character => replacements[character]);
+}
 
 /**
  * Menghasilkan Dashboard HTML interaktif dengan vis.js Network, kartu dependensi,
@@ -134,7 +141,7 @@ export function generateMermaidGraph(graph, rootDir, pkgData = { dependencies: {
 
     // === 3. Legend per direktori ===
     const legendItems = Object.entries(dirColorMap)
-        .map(([dir, color]) => `<div class="legend-item"><span class="legend-dot" style="background:${color}"></span><code>${dir === '.' ? 'root' : dir}</code></div>`)
+        .map(([dir, color]) => `<div class="legend-item"><span class="legend-dot" style="background:${color}"></span><code>${_escapeHtml(dir === '.' ? 'root' : dir)}</code></div>`)
         .join('');
 
     // === 4. Daftar Dependensi ===
@@ -145,7 +152,7 @@ export function generateMermaidGraph(graph, rootDir, pkgData = { dependencies: {
     };
 
     // === 5. Kamus Bilingual ===
-    const i18n = JSON.stringify({
+    const i18n = serializeForInlineScript({
         id: {
             title: 'Keterlacakan Struktur Kode',
             subtitle: 'Hasil analisis struktur kode oleh DeadKiller CLI',
@@ -165,6 +172,7 @@ export function generateMermaidGraph(graph, rootDir, pkgData = { dependencies: {
             safeTitle: 'Aman Dihapus (Safe)',
             reviewTitle: 'Butuh Peninjauan (Review)',
             riskyTitle: 'Berisiko Tinggi (Risky)',
+            protectedTitle: 'Dilindungi (Protected)',
             deadFilesTitle: 'File Tidak Terjangkau',
             unsafeTitle: 'File Dinamis (Akurasi Terbatas)',
             colFile: 'File',
@@ -194,6 +202,7 @@ export function generateMermaidGraph(graph, rootDir, pkgData = { dependencies: {
             safeTitle: 'Safe to Remove',
             reviewTitle: 'Needs Review',
             riskyTitle: 'High Risk (Risky)',
+            protectedTitle: 'Protected',
             deadFilesTitle: 'Unreachable Files',
             unsafeTitle: 'Dynamic Files (Limited Accuracy)',
             colFile: 'File',
@@ -207,13 +216,14 @@ export function generateMermaidGraph(graph, rootDir, pkgData = { dependencies: {
     });
 
     // === 6. Data JSON untuk Cytoscape.js ===
-    const elementsJson = JSON.stringify([...cyNodes, ...cyEdges]);
+    const elementsJson = serializeForInlineScript([...cyNodes, ...cyEdges]);
 
     return `<!DOCTYPE html>
 <html lang="id">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data:; connect-src 'none';">
     <title>Code Structure Traceability | DeadKiller</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
@@ -614,6 +624,7 @@ export function generateMermaidGraph(graph, rootDir, pkgData = { dependencies: {
         .report-stat.safe .num   { color: var(--green); }
         .report-stat.review .num { color: #D97706; }
         .report-stat.risky .num  { color: var(--red); }
+        .report-stat.protected .num { color: var(--accent); }
         .report-stat.dead .num   { color: #7C3AED; }
 
         /* Report Table */
@@ -645,6 +656,7 @@ export function generateMermaidGraph(graph, rootDir, pkgData = { dependencies: {
         .rbadge-safe   { background: #ECFDF5; color: #059669; }
         .rbadge-review { background: #FEF3C7; color: #D97706; }
         .rbadge-risky  { background: #FEE2E2; color: #DC2626; }
+        .rbadge-protected { background: var(--accent-bg); color: var(--accent); }
 
         /* File list in report */
         .report-file-list { list-style: none; }
@@ -682,6 +694,7 @@ export function generateMermaidGraph(graph, rootDir, pkgData = { dependencies: {
         body.dark .rbadge-safe   { background: #3fb95020; color: #3fb950; }
         body.dark .rbadge-review { background: #d2992220; color: #d29922; }
         body.dark .rbadge-risky  { background: #f8514920; color: #f85149; }
+        body.dark .rbadge-protected { background: #58a6ff20; color: #58a6ff; }
         body.dark .badge         { background: #0d419d30; color: var(--accent); border-color: #1f3a6e; }
         body.dark .badge.green   { background: var(--green-bg); color: var(--green); border-color: #1a472a; }
         body.dark .badge.red     { background: var(--red-bg);   color: var(--red);   border-color: #5c1f1f; }
@@ -840,30 +853,41 @@ function _escapeHtml(str) {
 /**
  * Helper: Membangun baris tabel untuk dead code nodes
  */
-function _renderTableRows(nodes, statusLabel) {
+function _renderTableRows(nodes, statusLabel, forcedStatus = null) {
     if (!nodes || nodes.length === 0) return '';
-    return nodes.map(n => `
+    return nodes.map(n => {
+        const confidence = ['high', 'medium', 'low'].includes(n.confidence) ? n.confidence : 'medium';
+        const status = forcedStatus || (['safe', 'review', 'risky'].includes(n.status) ? n.status : 'review');
+        return `
         <tr>
             <td><code>${_escapeHtml(n.file)}</code></td>
-            <td>${n.line}</td>
+            <td>${_escapeHtml(n.line)}</td>
             <td>${_escapeHtml(n.name)}</td>
-            <td>${n.type}</td>
-            <td><span class="rbadge rbadge-${n.confidence || 'medium'}">${(n.confidence || 'medium').toUpperCase()}</span></td>
-            <td><span class="rbadge rbadge-${n.status || 'review'}">${statusLabel}</span></td>
+            <td>${_escapeHtml(n.type)}</td>
+            <td><span class="rbadge rbadge-${confidence}">${confidence.toUpperCase()}</span></td>
+            <td><span class="rbadge rbadge-${status}">${_escapeHtml(statusLabel)}</span></td>
         </tr>
-    `).join('');
+    `;
+    }).join('');
 }
 
 /**
  * Membangun section HTML laporan Dead Code untuk dashboard.
- * @param {object|null} reportData - { safeNodes, reviewNodes, riskyNodes, deadFiles, unsafeFiles }
+ * @param {object|null} reportData - { safeNodes, reviewNodes, riskyNodes, protectedNodes, deadFiles, unsafeFiles }
  * @returns {string} HTML string
  */
 function _buildReportSection(reportData) {
     if (!reportData) return '<!-- No report data -->';
 
-    const { safeNodes = [], reviewNodes = [], riskyNodes = [], deadFiles = [], unsafeFiles = [] } = reportData;
-    const totalIssues = safeNodes.length + reviewNodes.length + riskyNodes.length;
+    const {
+        safeNodes = [],
+        reviewNodes = [],
+        riskyNodes = [],
+        protectedNodes = [],
+        deadFiles = [],
+        unsafeFiles = [],
+    } = reportData;
+    const totalIssues = safeNodes.length + reviewNodes.length + riskyNodes.length + protectedNodes.length;
 
     if (totalIssues === 0 && deadFiles.length === 0 && unsafeFiles.length === 0) {
         return `
@@ -900,6 +924,10 @@ function _buildReportSection(reportData) {
                 <div class="num">${riskyNodes.length}</div>
                 <div class="lbl" data-i18n="riskyTitle">Risky</div>
             </div>
+            <div class="report-stat protected">
+                <div class="num">${protectedNodes.length}</div>
+                <div class="lbl" data-i18n="protectedTitle">Protected</div>
+            </div>
             <div class="report-stat dead">
                 <div class="num">${deadFiles.length}</div>
                 <div class="lbl" data-i18n="deadFilesTitle">Dead Files</div>
@@ -915,6 +943,19 @@ function _buildReportSection(reportData) {
             </div>
             <div style="overflow-x:auto; padding:0 0.5rem">
                 <table class="report-table">${tableHeader}<tbody>${_renderTableRows(safeNodes, 'SAFE')}</tbody></table>
+            </div>
+        </div>`;
+    }
+
+    if (protectedNodes.length > 0) {
+        html += `
+        <div class="card" style="margin-bottom:1.25rem; border-left:4px solid var(--accent)">
+            <div class="card-header">
+                <h2 style="color:var(--accent)"><span data-i18n="protectedTitle">Protected</span> (${protectedNodes.length})</h2>
+            </div>
+            <p style="padding:0 1rem; color:var(--text-2); font-size:0.82rem;">Temuan dianalisis dan dilaporkan, tetapi tidak akan dieliminasi otomatis.</p>
+            <div style="overflow-x:auto; padding:0 0.5rem">
+                <table class="report-table">${tableHeader}<tbody>${_renderTableRows(protectedNodes, 'PROTECTED', 'protected')}</tbody></table>
             </div>
         </div>`;
     }

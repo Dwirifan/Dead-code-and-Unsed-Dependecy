@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildPostScanMenu } from '../../src/ui/wizard.js';
+import { buildCliInvocation, buildPostScanMenu } from '../../src/ui/wizard.js';
 
 describe('wizard post-scan menu', () => {
+    it('meneruskan path sebagai argumen proses tanpa shell interpolation', () => {
+        const hostilePath = 'project & echo injected';
+        const invocation = buildCliInvocation(['scan', hostilePath, '--advanced']);
+
+        expect(invocation.executable).toBe(process.execPath);
+        expect(invocation.options.shell).toBe(false);
+        expect(invocation.args.slice(1)).toEqual(['scan', hostilePath, '--advanced']);
+    });
+
     it('tidak menawarkan advanced atau fix ketika proyek bersih', () => {
         const menu = buildPostScanMenu({
             codeFindings: 0,

@@ -117,6 +117,21 @@ describe('Dependency Analyzer - conservative and pure pipeline', () => {
         expect(report.optionalDeclared).toBeInstanceOf(Set);
     });
 
+    it('does not report package self-references as missing dependencies', async () => {
+        await writePackage({
+            name: '@scope/cac',
+            version: '1.0.0',
+        });
+
+        const report = await findUnusedDependencies(
+            projectRoot,
+            new Set(['@scope/cac', '@scope/cac/testing', 'external-package']),
+        );
+
+        expect(report.missing).toEqual(['external-package']);
+        expect([...report.selfReferences]).toEqual(['@scope/cac']);
+    });
+
     it('does not execute JavaScript configs and still extracts static config dependencies', async () => {
         const markerPath = path.join(projectRoot, 'executed.marker');
         await writePackage({

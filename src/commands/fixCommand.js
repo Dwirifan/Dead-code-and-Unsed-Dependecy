@@ -79,6 +79,7 @@ async function _fixSingleFile(absolutePath, startTime, inquirer, level = 3, auto
         console.log(chalk.yellow(`[!] File '${path.basename(absolutePath)}' diabaikan berdasarkan konfigurasi.`));
         return;
     }
+    const protectedFile = ruleEngine.isPreservedFile(absolutePath, projectRoot);
 
     const ast = await parseCode(code, absolutePath);
     const dummyRegistry = { usedExports: new Map(), unsafeFiles: new Set() };
@@ -114,6 +115,13 @@ async function _fixSingleFile(absolutePath, startTime, inquirer, level = 3, auto
     if (riskyNodes.length > 0) {
         console.log(chalk.red(`\n   ${chalk.bold('[RISKY]')} — Tidak dihapus (${riskyNodes.length} item):`));
         riskyNodes.forEach(n => console.log(`      Line ${n.line}: ${n.type} '${n.name}'`));
+    }
+
+    if (protectedFile) {
+        console.log(chalk.cyan(
+            `\n[i] File dilindungi oleh preserveFiles/framework: temuan dilaporkan tanpa perubahan.\n`,
+        ));
+        return;
     }
 
     // Terapkan aturan Modul Eliminator
@@ -228,13 +236,15 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
     // Dead files — normalisasi path glob ke format OS lokal
     const allFiles = (await glob([SCRIPT_GLOB], {
         cwd: absolutePath,
-        ignore: ['**/node_modules/**', '**/dist/**', '**/test/**', '**/tests/**', '**/coverage/**', '*.config.*', '.*.js', '.*.mjs', '.*.ts'],
+        ignore: ['**/node_modules/**', '**/dist/**', '**/coverage/**', '*.config.*', '.*.js', '.*.mjs', '.*.ts'],
         absolute: true
     })).map(f => path.resolve(f));
 
+    const preservedFiles = allFiles.filter(f => ruleEngine.isPreservedFile(f, absolutePath));
     const deadFiles = allFiles
         .filter(f => !graph.liveFiles.has(f))
-        .filter(f => !ruleEngine.isIgnoredFile(f, absolutePath));
+        .filter(f => !ruleEngine.isIgnoredFile(f, absolutePath))
+        .filter(f => !ruleEngine.isPreservedFile(f, absolutePath));
 
     // Dead code di dalam live files (global, otomatis)
     const deadCodeReport = [];
@@ -242,10 +252,13 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
     const cache = new ParseCache();
     let originalLoc = 0, originalSize = 0, newLoc = 0, newSize = 0;
 
-    for (const file of graph.liveFiles) {
+    const filesToAnalyze = new Set([...graph.liveFiles, ...preservedFiles]);
+    for (const file of filesToAnalyze) {
         // Skip file yang bukan JavaScript/TypeScript (tidak bisa di-parse)
         const ext = path.extname(file).toLowerCase();
         if (!SCRIPT_EXTENSION_SET.has(ext) || file.includes('node_modules')) continue;
+        if (ruleEngine.isIgnoredFile(file, absolutePath)) continue;
+        const protectedFile = ruleEngine.isPreservedFile(file, absolutePath);
 
         // File dinamis (unsafeFiles): Safety Fallback melindungi EKSPOR di graph (sudah ditangani saat traversal).
         // Tapi dead code STRUKTURAL (unreachable code, unused import, unused variable) tetap aman dieliminasi.
@@ -284,13 +297,14 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
             // Untuk file dinamis (unsafeFiles): filter tambahan — hanya proses tipe struktural.
             const nodesToProcess = allDead.filter(n => {
                 if (n.status !== 'safe') return false;
+                if (protectedFile) return false;
                 if (isUnsafeFile && !STRUCTURAL_SAFE_TYPES.has(n.type)) return false;
                 return true;
             });
             const unsafeDead = allDead.filter(n => !nodesToProcess.includes(n));
 
             // Catat item yang tidak di-fix
-            unsafeDead.forEach(n => skippedReport.push({ file, ...n }));
+            unsafeDead.forEach(n => skippedReport.push({ file, ...n, protected: protectedFile }));
 
             if (nodesToProcess.length > 0) {
                 const simLevel = level === 0 ? 3 : level;
@@ -328,7 +342,8 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
         uncertainDeps.length > 0 ||
         dependencyDiagnostics.length > 0 ||
         deadFiles.length > 0 ||
-        deadCodeReport.length > 0;
+        deadCodeReport.length > 0 ||
+        skippedReport.length > 0;
     if (!hasAnything) {
         console.log(chalk.green('\n[ok] Proyek bersih! Tidak ada dead code maupun dependensi mati.\n'));
         console.log(`   [t] ${(performance.now() - startTime).toFixed(0)} ms`);
@@ -375,7 +390,11 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
         for (const [file, nodes] of Object.entries(byFile)) {
             console.log(`   -> ${file}`);
             nodes.forEach(n => {
-                const badge = n.status === 'review' ? chalk.yellow('[REVIEW]') : chalk.red('[RISKY]');
+                const badge = n.protected
+                    ? chalk.cyan('[PROTECTED]')
+                    : n.status === 'review'
+                        ? chalk.yellow('[REVIEW]')
+                        : chalk.red('[RISKY]');
                 console.log(`      Line ${n.line}: ${n.type} '${n.name}' ${badge}`);
             });
         }

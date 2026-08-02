@@ -142,4 +142,43 @@ describe('Graph Visualizer (HTML Generator)', () => {
         expect(html).toContain('unverified-pkg');
         expect(html).toContain('Unknown Status</span> (1)');
     });
+
+    it('mengamankan nama file dan direktori saat disisipkan ke HTML dan inline script', () => {
+        const maliciousFile = '/src/<img src=x onerror=alert(1)>/evil</script><script>alert(2)</script>.js';
+        const mockGraph = {
+            liveFiles: new Set([maliciousFile]),
+            usedPackages: new Set(),
+            edges: [],
+        };
+
+        const html = generateMermaidGraph(mockGraph, '/src');
+
+        expect(html).not.toContain('evil</script><script>alert(2)');
+        expect(html).toContain('evil\\u003c/script\\u003e\\u003cscript\\u003ealert(2)');
+        expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+        expect(html).toContain('Content-Security-Policy');
+    });
+
+    it('menampilkan temuan protected terpisah dari safe-to-remove', () => {
+        const mockGraph = { liveFiles: new Set(['/src/test.js']), usedPackages: new Set(), edges: [] };
+        const html = generateMermaidGraph(mockGraph, '/src', undefined, {
+            safeNodes: [],
+            reviewNodes: [],
+            riskyNodes: [],
+            protectedNodes: [{
+                file: 'test/example.test.js',
+                type: 'Variable',
+                name: 'unused',
+                status: 'safe',
+                confidence: 'high',
+                line: 1,
+            }],
+            deadFiles: [],
+            unsafeFiles: [],
+        });
+
+        expect(html).toContain('PROTECTED');
+        expect(html).toContain('rbadge-protected');
+        expect(html).toContain('Temuan dianalisis dan dilaporkan');
+    });
 });

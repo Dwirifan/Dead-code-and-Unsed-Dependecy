@@ -2,7 +2,7 @@ import inquirer from 'inquirer';
 import fs from 'fs-extra';
 import fg from 'fast-glob';
 import path from 'path';
-import { execSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import os from 'os';
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
@@ -13,6 +13,39 @@ import { removeUnusedDependencies } from '../eliminator/dependencyCleaner.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const cliPath = path.resolve(__dirname, '../../bin/dce-cli.js');
+
+export function buildCliInvocation(args) {
+    return {
+        executable: process.execPath,
+        args: [cliPath, ...args.map(String)],
+        options: {
+            stdio: 'inherit',
+            shell: false,
+            windowsHide: true,
+        },
+    };
+}
+
+export function runCliCommand(args) {
+    const invocation = buildCliInvocation(args);
+    const result = spawnSync(
+        invocation.executable,
+        invocation.args,
+        invocation.options,
+    );
+
+    if (result.error) throw result.error;
+    if (result.status !== 0) {
+        const detail = result.signal
+            ? ` dihentikan oleh signal ${result.signal}`
+            : ` selesai dengan exit code ${result.status}`;
+        const error = new Error(`Perintah DeadKiller${detail}.`);
+        error.status = result.status;
+        error.signal = result.signal;
+        throw error;
+    }
+    return result;
+}
 
 export function buildPostScanMenu(scanSummary, isAdvanced) {
     const totalFindings = scanSummary
@@ -133,9 +166,10 @@ export async function launchWizard() {
         let scanSummary = null;
         try {
             // stdio: 'inherit' memastikan warna dan interaksi CLI tetap berjalan
-            const advancedFlag = (action === 'scan' && isAdvanced) ? " --advanced" : "";
-            const summaryFlag = action === 'scan' ? ` --summary-file "${summaryPath}"` : '';
-            execSync(`node "${cliPath}" ${action} "${targetDirectory}"${advancedFlag}${summaryFlag}`, { stdio: 'inherit' });
+            const commandArgs = [action, targetDirectory];
+            if (action === 'scan' && isAdvanced) commandArgs.push('--advanced');
+            if (action === 'scan') commandArgs.push('--summary-file', summaryPath);
+            runCliCommand(commandArgs);
             if (action === 'scan' && await fs.pathExists(summaryPath)) {
                 scanSummary = await fs.readJson(summaryPath);
             }
@@ -199,7 +233,7 @@ export async function launchWizard() {
 
                     console.log(uiColors.primary(`\n[>>] Melanjutkan ke mode fix (Level ${elimLevel})...\n`));
                     try {
-                        execSync(`node "${cliPath}" fix "${targetDirectory}" --level ${elimLevel}`, { stdio: 'inherit' });
+                        runCliCommand(['fix', targetDirectory, '--level', elimLevel]);
                     } catch (error) {
                         if (process.env.DEBUG) console.warn(error);
                     }

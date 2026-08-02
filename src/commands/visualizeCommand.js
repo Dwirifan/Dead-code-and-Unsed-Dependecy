@@ -3,6 +3,7 @@ import fs from 'fs-extra';
 import glob from 'fast-glob';
 import chalk from 'chalk';
 import ora from 'ora';
+import { spawn } from 'node:child_process';
 import { generateMermaidGraph } from '../ui/graphVisualizer.js';
 import { parseCode } from '../parser/astParser.js';
 import { findDeadCode } from '../analyzer/deadcode/index.js';
@@ -10,6 +11,27 @@ import { analyzeProjectDependencies } from '../analyzer/dependency/dependencyRep
 import { RuleEngine } from '../analyzer/ruleEngine.js';
 import { SCRIPT_GLOB } from '../parser/supportedExtensions.js';
 import { buildGraphWithInteractiveFallback, printConfigDiagnostics } from './commandHelpers.js';
+
+export function createBrowserOpenInvocation(outputPath, platform = process.platform) {
+    if (platform === 'darwin') return { executable: 'open', args: [outputPath] };
+    if (platform === 'win32') return { executable: 'explorer.exe', args: [outputPath] };
+    return { executable: 'xdg-open', args: [outputPath] };
+}
+
+export function openReportInBrowser(outputPath, spawnImpl = spawn) {
+    const invocation = createBrowserOpenInvocation(outputPath);
+    const child = spawnImpl(invocation.executable, invocation.args, {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+        shell: false,
+    });
+    child.once?.('error', error => {
+        console.warn(chalk.yellow(`[Warning] Browser tidak dapat dibuka otomatis: ${error.message}`));
+    });
+    child.unref?.();
+    return child;
+}
 
 /**
  * Mendaftarkan perintah `visualize` ke instance Commander yang diberikan.
@@ -19,8 +41,9 @@ export function registerVisualizeCommand(program) {
     program
         .command('visualize')
         .argument('<path>', 'Path to project directory')
+        .option('--no-open', 'Buat dashboard tanpa membuka browser otomatis')
         .description('Analisis proyek dan buka HTML Dashboard keterlacakan kode (termasuk laporan dead code)')
-        .action(async (targetPath) => {
+        .action(async (targetPath, options) => {
             const absolutePath = path.resolve(targetPath);
             if (!fs.existsSync(absolutePath)) {
                 console.error(`[ERROR] Path '${absolutePath}' tidak ditemukan.`);
@@ -57,36 +80,46 @@ export function registerVisualizeCommand(program) {
 
                 // === Kumpulkan data Dead Code untuk ditampilkan di dashboard ===
                 const allDeadNodes = [];
-                for (const file of graph.liveFiles) {
+                const allFiles = (await glob([SCRIPT_GLOB], {
+                    cwd: absolutePath,
+                    ignore: ['**/node_modules/**', '**/dist/**', '**/coverage/**', '*.config.*', '.*.js', '.*.mjs', '.*.ts'],
+                    absolute: true
+                })).map(f => path.resolve(f));
+                const preservedFiles = allFiles.filter(f => ruleEngine.isPreservedFile(f, absolutePath));
+                const filesToAnalyze = new Set([...graph.liveFiles, ...preservedFiles]);
+
+                for (const file of filesToAnalyze) {
                     const ext = path.extname(file);
                     if (ext === '.json' || ext === '.css' || ext === '.scss' || ext === '.sass' || ext === '.less' || file.includes('node_modules')) continue;
+                    if (ruleEngine.isIgnoredFile(file, absolutePath)) continue;
                     try {
                         const code = await fs.readFile(file, 'utf-8');
                         const ast = await parseCode(code, file);
                         const deadNodes = findDeadCode(ast, file, graph.globalRegistry, ruleEngine);
-                        deadNodes.forEach(n => allDeadNodes.push({ file: path.relative(absolutePath, file), ...n }));
+                        const protectedFile = ruleEngine.isPreservedFile(file, absolutePath);
+                        deadNodes.forEach(n => allDeadNodes.push({
+                            file: path.relative(absolutePath, file),
+                            ...n,
+                            protected: protectedFile,
+                        }));
                     } catch (err) {
                         if (process.env.DEBUG) console.warn(`[Warning] Gagal mem-parse ${file} saat membuat visualisasi:`, err.message);
                     }
                 }
 
                 // Dead files
-                const allFiles = (await glob([SCRIPT_GLOB], {
-                    cwd: absolutePath,
-                    ignore: ['**/node_modules/**', '**/dist/**', '**/test/**', '**/tests/**', '**/coverage/**', '*.config.*', '.*.js', '.*.mjs', '.*.ts'],
-                    absolute: true
-                })).map(f => path.resolve(f));
-
                 const deadFiles = allFiles
                     .filter(f => !graph.liveFiles.has(f))
                     .filter(f => !ruleEngine.isIgnoredFile(f, absolutePath))
+                    .filter(f => !ruleEngine.isPreservedFile(f, absolutePath))
                     .map(f => path.relative(absolutePath, f));
 
                 // Data report untuk dashboard
                 const reportData = {
-                    safeNodes: allDeadNodes.filter(n => n.status === 'safe'),
-                    reviewNodes: allDeadNodes.filter(n => n.status === 'review'),
-                    riskyNodes: allDeadNodes.filter(n => n.status === 'risky'),
+                    safeNodes: allDeadNodes.filter(n => n.status === 'safe' && !n.protected),
+                    reviewNodes: allDeadNodes.filter(n => n.status === 'review' && !n.protected),
+                    riskyNodes: allDeadNodes.filter(n => n.status === 'risky' && !n.protected),
+                    protectedNodes: allDeadNodes.filter(n => n.protected),
                     deadFiles,
                     unsafeFiles: graph.unsafeFiles ? [...graph.unsafeFiles].map(f => path.relative(absolutePath, f)) : [],
                     dependencyReport
@@ -98,16 +131,12 @@ export function registerVisualizeCommand(program) {
 
                 spinner.succeed(`Berhasil! Dashboard dibuat: ${outputPath}`);
 
-                // Buka di browser default
-                const { exec } = await import('child_process');
-                const cmd = process.platform === 'darwin'
-                    ? `open "${outputPath}"`
-                    : process.platform === 'win32'
-                        ? `start "" "${outputPath}"`
-                        : `xdg-open "${outputPath}"`;
-                exec(cmd);
-
-                console.log(chalk.green('   [web] Browser akan terbuka untuk menampilkan Dashboard.'));
+                if (options.open) {
+                    openReportInBrowser(outputPath);
+                    console.log(chalk.green('   [web] Browser akan terbuka untuk menampilkan Dashboard.'));
+                } else {
+                    console.log(chalk.gray('   [web] Browser tidak dibuka karena --no-open.'));
+                }
             } catch (err) {
                 spinner.fail('Visualisasi gagal');
                 console.error(err.message);

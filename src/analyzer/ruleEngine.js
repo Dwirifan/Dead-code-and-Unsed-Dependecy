@@ -3,6 +3,7 @@ import path from 'path';
 import { pathToFileURL } from 'url';
 import micromatch from 'micromatch';
 import { validateAndNormalizeConfig } from './configValidator.js';
+import { createRecommendedConfig, inspectProject } from '../commands/initProjectProfiler.js';
 
 const DEFAULT_RULES = {
     mode: 'vanilla',
@@ -75,6 +76,8 @@ export class RuleEngine {
         this.configPath = null;
         this.configLoaded = false;
         this.configValid = true;
+        this.configSource = 'defaults';
+        this.autoProfile = null;
 
         // Direktori yang dilindungi oleh framework mode
         this._frameworkPreservedPaths = {
@@ -98,6 +101,8 @@ export class RuleEngine {
         this.configPath = null;
         this.configLoaded = false;
         this.configValid = true;
+        this.configSource = 'defaults';
+        this.autoProfile = null;
 
         const jsConfigPath = path.join(projectRoot, 'deadkiller.config.js');
         const mjsConfigPath = path.join(projectRoot, 'deadkiller.config.mjs');
@@ -145,6 +150,19 @@ export class RuleEngine {
                     file: this.configPath,
                 }));
                 this.configLoaded = true;
+                this.configSource = 'file';
+            } else {
+                // Zero-config memakai rekomendasi yang sama dengan `deadkiller init`,
+                // tetapi hanya di memori. Tidak ada file yang dibuat atau diubah.
+                this.autoProfile = await inspectProject(projectRoot);
+                const recommended = createRecommendedConfig(this.autoProfile);
+                const validated = validateAndNormalizeConfig(recommended, freshDefaultRules());
+                this.rules = validated.config;
+                this.configDiagnostics = validated.diagnostics.map(item => ({
+                    ...item,
+                    file: null,
+                }));
+                this.configSource = 'auto';
             }
 
             // --- AUTO DETECT REACT RUNTIME ---
@@ -178,6 +196,8 @@ export class RuleEngine {
             return {
                 loaded: this.configLoaded,
                 path: this.configPath,
+                source: this.configSource,
+                profile: this.autoProfile,
                 diagnostics: [...this.configDiagnostics],
             };
         } catch (err) {
@@ -249,27 +269,15 @@ export class RuleEngine {
     }
 
     /**
-     * Mengecek apakah file masuk dalam target perlindungan (preserveFiles)
-     * 
-     * @param {string} absolutePath Path file absolut
-     * @param {string} projectRoot Lokasi root project
-     * @returns {boolean} True jika file dilindungi
+     * Mengecek apakah file dikeluarkan sepenuhnya dari analisis.
+     * `preserveFiles` sengaja tidak diperiksa di sini: file preserved tetap
+     * dibaca dan dilaporkan, tetapi tidak boleh dieliminasi.
      */
     isIgnoredFile(absolutePath, projectRoot) {
         this.projectRoot = projectRoot || this.projectRoot;
         const relativePath = path.relative(this.projectRoot, absolutePath).replace(/\\/g, '/');
 
         const rules = this._resolveConfigForFile(absolutePath);
-
-        // 1. Cek preserveFiles manual dari config
-        if (rules.preserveFiles && rules.preserveFiles.length > 0) {
-            const matchManual = micromatch.isMatch(relativePath, rules.preserveFiles, {
-                dot: true,
-            });
-            if (matchManual) return true;
-        }
-
-        // 2. Cek ignoreFiles (folder yang sepenuhnya diabaikan dari AST)
         if (rules.ignoreFiles && rules.ignoreFiles.length > 0) {
             const isIgnoredDir = rules.ignoreFiles.some(pattern => {
                 if (micromatch.isMatch(relativePath, pattern, { dot: true })) return true;
@@ -289,7 +297,27 @@ export class RuleEngine {
             if (isIgnoredDir) return true;
         }
 
-        // 3. Framework-aware auto-protection
+        return false;
+    }
+
+    /**
+     * Mengecek apakah file tetap dianalisis, tetapi dilindungi dari seluruh
+     * tindakan eliminasi otomatis dan kandidat penghapusan file.
+     */
+    isPreservedFile(absolutePath, projectRoot) {
+        this.projectRoot = projectRoot || this.projectRoot;
+        const relativePath = path.relative(this.projectRoot, absolutePath).replace(/\\/g, '/');
+        const rules = this._resolveConfigForFile(absolutePath);
+
+        if (rules.preserveFiles && rules.preserveFiles.length > 0) {
+            const matchManual = micromatch.isMatch(relativePath, rules.preserveFiles, {
+                dot: true,
+            });
+            if (matchManual) return true;
+        }
+
+        // Convention-based framework files tetap dianalisis agar temuan dapat
+        // ditinjau, tetapi tidak pernah diubah otomatis.
         const mode = rules.mode || 'vanilla';
         const protectedPaths = this._frameworkPreservedPaths[mode] || [];
         return protectedPaths.some(p => relativePath.startsWith(p) || relativePath.includes('/' + p));

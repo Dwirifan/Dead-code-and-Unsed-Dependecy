@@ -73,16 +73,20 @@ function detectFramework(dependencies) {
     )) || { id: 'vanilla', mode: 'vanilla', label: 'Vanilla JavaScript/TypeScript' };
 }
 
-function detectProjectType(pkg, framework, monorepo) {
+function detectProjectType(pkg, monorepo) {
     if (monorepo) return 'monorepo';
     if (pkg.bin) return 'cli';
 
     const scripts = pkg.scripts || {};
     const hasApplicationScript = ['start', 'dev', 'serve'].some(name => scripts[name]);
-    const hasLibraryManifest = Boolean(pkg.exports || pkg.types || pkg.typings || pkg.module);
-    const applicationFramework = !['vanilla'].includes(framework.id);
+    const hasExplicitLibraryApi = Boolean(pkg.exports || pkg.types || pkg.typings || pkg.module);
+    const hasPublishableMain = Boolean(pkg.main) && pkg.private !== true;
+    const hasLibraryManifest = hasExplicitLibraryApi || hasPublishableMain;
 
-    if (hasLibraryManifest && !hasApplicationScript && !applicationFramework) return 'library';
+    // Pemakaian React/Vue tidak otomatis berarti aplikasi; component library
+    // juga memakai framework. Manifest API publik tanpa script aplikasi adalah
+    // sinyal library yang lebih kuat dan membuat zero-config lebih aman.
+    if (hasLibraryManifest && !hasApplicationScript) return 'library';
     return 'application';
 }
 
@@ -129,7 +133,8 @@ function detectJsxRuntime(dependenciesByName, tsconfig) {
 
 export async function inspectProject(projectRoot) {
     const packagePath = path.join(projectRoot, 'package.json');
-    const pkg = await fs.pathExists(packagePath) ? await fs.readJson(packagePath) : {};
+    const hasPackageJson = await fs.pathExists(packagePath);
+    const pkg = hasPackageJson ? await fs.readJson(packagePath) : {};
     const dependenciesByName = {
         ...(pkg.dependencies || {}),
         ...(pkg.devDependencies || {}),
@@ -155,9 +160,10 @@ export async function inspectProject(projectRoot) {
     }
     const monorepo = await detectMonorepo(projectRoot, pkg);
     const framework = detectFramework(dependencies);
-    const projectType = detectProjectType(pkg, framework, monorepo);
+    const projectType = detectProjectType(pkg, monorepo);
 
     return {
+        hasPackageJson,
         packageName: pkg.name || path.basename(projectRoot),
         packageManager: await detectPackageManager(projectRoot, pkg),
         language: detectLanguage(projectRoot, dependencies, projectSourceFiles),
@@ -168,7 +174,10 @@ export async function inspectProject(projectRoot) {
         projectType,
         monorepo,
         sourceFileCount: projectSourceFiles.length,
-        preserveExports: ['library', 'cli', 'monorepo'].includes(projectType),
+        // Tanpa manifest, DeadKiller tidak punya bukti yang cukup untuk
+        // membedakan API publik dari export internal. Pertahankan export agar
+        // zero-config tetap konservatif dan tidak menyesatkan pemula.
+        preserveExports: !hasPackageJson || ['library', 'cli', 'monorepo'].includes(projectType),
         reactRuntime: detectJsxRuntime(dependenciesByName, tsconfig),
     };
 }

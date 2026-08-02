@@ -47,11 +47,12 @@ describe('Rule Engine — Konfigurasi & Filter', () => {
     });
 
     // Test 46
-    it('TC-46: isIgnoredFile mengenali framework mode next', () => {
+    it('TC-46: file konvensi Next dipertahankan tetapi tetap dianalisis', () => {
         const engine = new RuleEngine();
         engine.rules.mode = 'next';
-        assert.strictEqual(engine.isIgnoredFile('/project/pages/index.js', '/project'), true);
-        assert.strictEqual(engine.isIgnoredFile('/project/app/layout.js', '/project'), true);
+        assert.strictEqual(engine.isPreservedFile('/project/pages/index.js', '/project'), true);
+        assert.strictEqual(engine.isPreservedFile('/project/app/layout.js', '/project'), true);
+        assert.strictEqual(engine.isIgnoredFile('/project/pages/index.js', '/project'), false);
     });
 
     // Test 47
@@ -87,12 +88,24 @@ describe('Rule Engine — Konfigurasi & Filter', () => {
         assert.strictEqual(engine.isIgnoredFile('/project/src/index.js', '/project'), false);
     });
 
+    it('membedakan preserveFiles dari ignoreFiles', () => {
+        const engine = new RuleEngine();
+        engine.rules.preserveFiles = ['test/**'];
+        engine.rules.ignoreFiles = ['dist/**'];
+
+        assert.strictEqual(engine.isPreservedFile('/project/test/example.test.js', '/project'), true);
+        assert.strictEqual(engine.isIgnoredFile('/project/test/example.test.js', '/project'), false);
+        assert.strictEqual(engine.isIgnoredFile('/project/dist/index.js', '/project'), true);
+        assert.strictEqual(engine.isPreservedFile('/project/dist/index.js', '/project'), false);
+    });
+
     it('mode vue melindungi convention-based framework paths', () => {
         const engine = new RuleEngine();
         engine.rules.mode = 'vue';
 
-        assert.strictEqual(engine.isIgnoredFile('/project/pages/index.vue', '/project'), true);
-        assert.strictEqual(engine.isIgnoredFile('/project/plugins/auth.ts', '/project'), true);
+        assert.strictEqual(engine.isPreservedFile('/project/pages/index.vue', '/project'), true);
+        assert.strictEqual(engine.isPreservedFile('/project/plugins/auth.ts', '/project'), true);
+        assert.strictEqual(engine.isIgnoredFile('/project/pages/index.vue', '/project'), false);
     });
 });
 

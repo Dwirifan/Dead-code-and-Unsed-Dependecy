@@ -6,13 +6,15 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'html'],
       include: ['src/**/*.js'],
-      exclude: ['src/ui/**'],
+      // Wizard interaktif dan theme terminal sulit diukur secara stabil; generator
+      // HTML tetap masuk coverage karena memproses data proyek tak tepercaya.
+      exclude: ['src/ui/wizard.js', 'src/ui/theme.js'],
       reportsDirectory: 'test/coverage',
       thresholds: {
-        statements: 55,
-        branches: 50,
-        functions: 60,
-        lines: 55
+        statements: 60,
+        branches: 55,
+        functions: 62,
+        lines: 60
       }
     },
   },

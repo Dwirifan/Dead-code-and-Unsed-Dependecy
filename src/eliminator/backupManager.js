@@ -118,7 +118,7 @@ export async function createBackup(projectRoot, filesToBackup, backupPackageJson
     } catch (err) {
         // Transaksi Atomik: Bersihkan direktori backup parsial jika terjadi kegagalan saat proses backup
         if (await fs.pathExists(backupDir)) {
-            await fs.remove(backupDir).catch(() => { });
+            await fs.remove(backupDir).catch(() => undefined);
         }
         throw err;
     }

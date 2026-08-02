@@ -32,6 +32,19 @@ export async function findProjectRoot(startDirectory) {
  */
 export function printConfigDiagnostics(ruleEngine, { silent = false } = {}) {
     if (silent) return;
+
+    if (ruleEngine.configSource === 'auto' && ruleEngine.autoProfile) {
+        const profile = ruleEngine.autoProfile;
+        const exportPolicy = profile.preserveExports
+            ? 'export publik dipertahankan'
+            : 'export internal ikut diperiksa';
+        console.log(chalk.cyan('\n[i] Tidak ada konfigurasi; DeadKiller memakai profil otomatis (tanpa menulis file).'));
+        console.log(chalk.gray(
+            `    ${profile.frameworkLabel} · ${profile.language} · ${profile.projectType} · ${exportPolicy}`,
+        ));
+        console.log(chalk.gray('    Jalankan `deadkiller init` hanya jika Anda ingin menyesuaikan aturan.'));
+    }
+
     const warnings = (ruleEngine.configDiagnostics || [])
         .filter(item => item.level === 'warning');
     if (warnings.length === 0) return;
@@ -46,11 +59,17 @@ export function printConfigDiagnostics(ruleEngine, { silent = false } = {}) {
  * Membangun Project Graph dengan fallback prompt interaktif
  * jika Entry Point tidak ditemukan.
  */
-export async function buildGraphWithInteractiveFallback(absolutePath, ruleEngine, spinner) {
+export async function buildGraphWithInteractiveFallback(
+    absolutePath,
+    ruleEngine,
+    spinner,
+    { interactive = true } = {},
+) {
     try {
         return await buildProjectGraph(absolutePath, ruleEngine);
     } catch (err) {
         if (err.message.includes('Could not auto-detect entry point')) {
+            if (!interactive) throw err;
             if (spinner) spinner.stop();
             
             console.log(chalk.yellow('\n[!] Kami tidak dapat mendeteksi file utama proyek Anda (Entry Point) secara otomatis.'));

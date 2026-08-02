@@ -110,6 +110,18 @@ function isTsconfigAlias(projectRoot, depName) {
     return false;
 }
 
+function rootPackageName(specifier) {
+    if (typeof specifier !== 'string' || !specifier) return null;
+    const parts = specifier.split('/');
+    return specifier.startsWith('@')
+        ? parts.slice(0, 2).join('/')
+        : parts[0];
+}
+
+function isPackageSelfReference(specifier, projectPackageName) {
+    return Boolean(projectPackageName) && rootPackageName(specifier) === projectPackageName;
+}
+
 /**
  * Membaca seluruh section dependency yang relevan. Key lama tetap tersedia.
  */
@@ -540,6 +552,7 @@ export async function findUnusedDependencies(projectRoot, usedPackages, ruleEngi
     }
 
     const missing = [];
+    const selfReferences = new Set();
     if (workspaceAnalysisComplete) {
         for (const dependency of effectiveUsedPackages) {
             if (dependency.startsWith('.') || dependency.startsWith('/') || path.isAbsolute(dependency)) continue;
@@ -547,6 +560,10 @@ export async function findUnusedDependencies(projectRoot, usedPackages, ruleEngi
             if (isTsconfigAlias(projectRoot, dependency)) continue;
             if (isWorkspaceDependency(pkg, dependency)) continue;
             if (NODE_BUILTINS.has(dependency)) continue;
+            if (isPackageSelfReference(dependency, pkg.name)) {
+                selfReferences.add(rootPackageName(dependency));
+                continue;
+            }
             if (allDeclared.has(dependency)) continue;
             missing.push(dependency);
         }
@@ -633,6 +650,7 @@ export async function findUnusedDependencies(projectRoot, usedPackages, ruleEngi
         // Kontrak lama
         unused: unusedRuntime,
         missing,
+        selfReferences,
         missingBinaries: scriptReport.missingBinaries,
         deadDevDeps,
         declared: runtimeDeps,

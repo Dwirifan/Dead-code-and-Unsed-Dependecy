@@ -51,7 +51,14 @@ Audits the project and outputs dead code plus findings for direct runtime and de
 deadkiller scan <path>
 # Output in JSON format for CI/CD integration:
 deadkiller scan <path> --json
+# Jadikan temuan tertentu sebagai kegagalan CI (exit code 2):
+deadkiller scan <path> --json --fail-on safe,dependency
 ```
+
+Output JSON memakai schema version, path relatif dengan separator `/`, waktu
+numerik dalam `summary.analysisTimeMs`, jumlah per status, dan kebijakan CI pada
+field `ci`. Kategori `--fail-on` yang tersedia adalah `safe`, `review`, `risky`,
+`dependency`, `dead-file`, dan `any`.
 
 **2. Fix (Interactive Deletion)**
 Detects dead code, displays a diff preview, and requests confirmation before deletion. Only `safe` source-code items are processed automatically. A direct runtime dependency is never preselected for removal: it must be reviewed, explicitly selected, and approved in the final confirmation. Development dependencies are not removed by this command.
@@ -69,6 +76,8 @@ deadkiller show-deps <path>
 Generates an interactive HTML dashboard containing the dependency graph and the complete dead code report.
 ```bash
 deadkiller visualize <path>
+# Generate saja, tanpa membuka browser:
+deadkiller visualize <path> --no-open
 # or
 deadkiller report <path>
 ```
@@ -92,6 +101,13 @@ deadkiller history <path>
 ```
 
 ## Setup & Configuration
+
+Konfigurasi bersifat opsional. Jika tidak ada file konfigurasi, DeadKiller
+mendeteksi bahasa, framework, module system, runtime JSX, dan jenis proyek lalu
+menerapkan profil aman hanya di memori. Zero-config tidak menulis file. Library,
+CLI, monorepo, dan proyek tanpa `package.json` mempertahankan public exports;
+aplikasi tetap memeriksa export internal. Jalankan `deadkiller init` hanya bila
+aturan tersebut perlu disesuaikan.
 
 The easiest way to set up DeadKiller in your project is by using the interactive initialization command. It will scan your project and generate the appropriate configuration file.
 

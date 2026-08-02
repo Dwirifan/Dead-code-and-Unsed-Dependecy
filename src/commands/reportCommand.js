@@ -14,8 +14,9 @@ export function registerReportCommand(program) {
     program
         .command('report')
         .argument('<path>', 'Path ke direktori proyek')
+        .option('--no-open', 'Buat dashboard tanpa membuka browser otomatis')
         .description('Alias dari visualize — Generate HTML Dashboard + Laporan Dead Code')
-        .action(async (targetPath) => {
+        .action(async (targetPath, options) => {
             const absolutePath = path.resolve(targetPath);
             if (!fs.existsSync(absolutePath)) {
                 console.error(chalk.red(`[ERROR] Path '${absolutePath}' tidak ditemukan.`));
@@ -25,6 +26,8 @@ export function registerReportCommand(program) {
             console.log(chalk.gray('[i] Perintah `report` menjalankan `visualize` (laporan sudah terintegrasi di dashboard).\n'));
 
             // Jalankan visualize secara programatik
-            await program.parseAsync(['node', 'deadkiller', 'visualize', targetPath]);
+            const args = ['node', 'deadkiller', 'visualize', targetPath];
+            if (!options.open) args.push('--no-open');
+            await program.parseAsync(args);
         });
 }

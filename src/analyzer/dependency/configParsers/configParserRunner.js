@@ -1,10 +1,12 @@
 import { parseEslintConfigDetailed } from './eslintParser.js';
 import { parseBabelConfigDetailed } from './babelParser.js';
 import { parsePackageJsonConfigDetailed } from './packageJsonConfigParser.js';
+import { parseVitestConfigDetailed } from './vitestParser.js';
 
 const PARSERS = [
     { name: 'eslint', run: parseEslintConfigDetailed },
     { name: 'babel', run: parseBabelConfigDetailed },
+    { name: 'vitest', run: parseVitestConfigDetailed },
     { name: 'package-json-implicit', run: parsePackageJsonConfigDetailed },
 ];
 
