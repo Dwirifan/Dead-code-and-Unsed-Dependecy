@@ -8,12 +8,24 @@ import { visitorKeys as tsVisitorKeys } from '@typescript-eslint/visitor-keys';
 import { resolveBarrelExports } from '../deadcode/core/barrelResolver.js';
 import { resolvePath } from './pathResolver.js';
 import { findEntryPoints } from './entryPointFinder.js';
-import micromatch from 'micromatch';
 import { SCRIPT_EXTENSION_SET } from '../../parser/supportedExtensions.js';
+import { matchesOrderedPatterns } from '../globMatcher.js';
+import { isExistingPathInsideRoot } from '../pathContainment.js';
 
 // Gabungkan Visitor Keys ESTree standar dengan ekstrasi TypeScript/JSX
 const visitorKeys = { ...estraverse.VisitorKeys, ...tsVisitorKeys };
 const NON_PACKAGE_SCHEMES = /^(?:https?|jsr|deno|bun|data):/i;
+
+function isIgnoredGraphFile(filePath, projectRoot, ruleEngine) {
+    if (!ruleEngine) return false;
+    if (typeof ruleEngine.isIgnoredFile === 'function') {
+        return ruleEngine.isIgnoredFile(filePath, projectRoot);
+    }
+    const relativePath = path.relative(projectRoot, filePath).replace(/\\/g, '/');
+    return matchesOrderedPatterns(relativePath, ruleEngine.rules?.ignoreFiles || [], {
+        legacyDirectories: true,
+    });
+}
 
 /**
  * Membangun sebuah graf struktural yang komprehensif merayapi titik masuk (entry point) menggunakan BFS.
@@ -176,7 +188,11 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
                             const globPattern = node.arguments[0].quasis.map(q => q.value.raw).join('*');
                             if (globPattern.startsWith('.') || globPattern.startsWith('/')) {
                                 try {
-                                    const matchedFiles = glob.sync(globPattern, { cwd: fileDir, absolute: false });
+                                    const matchedFiles = glob.sync(globPattern, {
+                                        cwd: fileDir,
+                                        absolute: false,
+                                        followSymbolicLinks: false,
+                                    });
                                     for (const relMatch of matchedFiles) {
                                         const globPath = relMatch.startsWith('.') || relMatch.startsWith('/') ? relMatch : './' + relMatch;
                                         importsToResolve.push({ path: globPath, names: ['*'], details: [{ imported: '*', local: '*' }], isGlob: true });
@@ -313,11 +329,24 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
                 const absolute = await resolvePath(projectRoot, fileDir, imp.path);
 
                 if (absolute) {
-                    if (absolute.includes('node_modules')) {
+                    const containedInProject = isExistingPathInsideRoot(projectRoot, absolute);
+                    if (
+                        absolute.includes('node_modules') ||
+                        (imp.pkgName && !containedInProject)
+                    ) {
                         // Jika ternyata mengarah ke node_modules (misal alias yang salah, atau explicit), 
-                        // kita catat saja sebagai package jika belum
+                        // atau package manager meletakkan package di cache luar
+                        // root, catat sebagai package tanpa merayapi source-nya.
                         if (imp.pkgName) usedPackages.add(imp.pkgName);
                     } else {
+                        if (!containedInProject) {
+                            globalRegistry.unresolvedImports.push({
+                                file: currentFile,
+                                importPath: imp.path,
+                                reason: 'outside-project-root',
+                            });
+                            continue;
+                        }
                         edges.push({ from: currentFile, to: absolute, names: imp.names, isTypeOnly: Boolean(imp.isTypeOnly) });
 
                         if (!globalRegistry.usedExports.has(absolute)) {
@@ -340,11 +369,11 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
                         });
 
                         if (!visitedFiles.has(absolute)) {
-                            let isIgnored = false;
-                            if (ruleEngine && ruleEngine.rules.ignoreFiles && ruleEngine.rules.ignoreFiles.length > 0) {
-                                const relativePath = path.relative(projectRoot, absolute).replace(/\\/g, '/');
-                                isIgnored = micromatch.isMatch(relativePath, ruleEngine.rules.ignoreFiles, { dot: true });
-                            }
+                            const isIgnored = isIgnoredGraphFile(
+                                absolute,
+                                projectRoot,
+                                ruleEngine,
+                            );
 
                             if (!isIgnored) {
                                 visitedFiles.add(absolute);

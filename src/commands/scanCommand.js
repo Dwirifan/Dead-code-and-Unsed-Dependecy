@@ -11,6 +11,10 @@ import { findDeadCode } from '../analyzer/deadcode/index.js';
 import { analyzeProjectDependencies } from '../analyzer/dependency/dependencyReportService.js';
 import { RuleEngine } from '../analyzer/ruleEngine.js';
 import {
+    assertExistingPathInsideRoot,
+    isExistingPathInsideRoot,
+} from '../analyzer/pathContainment.js';
+import {
     buildGraphWithInteractiveFallback,
     findProjectRoot,
     printConfigDiagnostics,
@@ -31,12 +35,15 @@ export function registerScanCommand(program) {
         .command('scan')
         .argument('<path>', 'Path ke file tunggal atau direktori proyek')
         .option('--json', 'Output hasil analisis dalam format JSON (untuk integrasi CI/CD)')
+        .option('--no-config', 'Abaikan konfigurasi DeadKiller pada target dan gunakan profil otomatis')
         .option('--summary-file <path>', 'Simpan ringkasan internal scan untuk integrasi wizard')
         .option('-a, --advanced', 'Tampilkan hasil linter AST lanjutan (Undeclared Variables, Unused Methods, dll)')
         .option('--fail-on <categories>', 'Exit code 2 jika kategori ditemukan: safe,review,risky,dependency,dead-file,any')
         .description('Pindai dead code dan dependensi tidak terpakai tanpa mengubah file')
         .action(async (targetPath, options) => {
             const jsonMode = options.json || false;
+            // Commander memetakan negated option `--no-config` ke `config: false`.
+            const ignoreConfig = options.config === false;
             let failCategories;
             try {
                 failCategories = parseFailOn(options.failOn);
@@ -81,9 +88,10 @@ export function registerScanCommand(program) {
             // --- MODE SATU FILE ---
             if (stats.isFile()) {
                 try {
-                    const projectRoot = await findProjectRoot(path.dirname(absolutePath));
+                    const projectRoot = await findProjectRoot(path.dirname(absolutePath), { ignoreConfig });
+                    assertExistingPathInsideRoot(projectRoot, absolutePath, 'memindai');
                     const ruleEngine = new RuleEngine();
-                    await ruleEngine.loadConfig(projectRoot);
+                    await ruleEngine.loadConfig(projectRoot, { ignoreConfig });
                     printConfigDiagnostics(ruleEngine, { silent: jsonMode });
 
                     if (!jsonMode) {
@@ -156,7 +164,7 @@ export function registerScanCommand(program) {
             // --- MODE DIREKTORI ---
             console.log(`\n[>] Menganalisis proyek di: ${chalk.cyan(absolutePath)}`);
             const ruleEngine = new RuleEngine();
-            await ruleEngine.loadConfig(absolutePath);
+            await ruleEngine.loadConfig(absolutePath, { ignoreConfig });
             printConfigDiagnostics(ruleEngine, { silent: jsonMode });
             const spinner = jsonMode
                 ? null
@@ -255,8 +263,11 @@ export function registerScanCommand(program) {
             const allFiles = (await glob([SCRIPT_GLOB], {
                 cwd: absolutePath,
                 ignore: ['**/node_modules/**', '**/dist/**', '**/coverage/**', '*.config.*', '.*.js', '.*.mjs', '.*.ts'],
-                absolute: true
-            })).map(f => path.resolve(f));
+                absolute: true,
+                followSymbolicLinks: false,
+            }))
+                .map(f => path.resolve(f))
+                .filter(file => isExistingPathInsideRoot(absolutePath, file));
 
             const preservedFiles = allFiles.filter(f => ruleEngine.isPreservedFile(f, absolutePath));
             const deadFiles = allFiles
@@ -358,6 +369,7 @@ export function registerScanCommand(program) {
                 // Skip file yang bukan JavaScript/TypeScript (tidak bisa di-parse)
                 const ext = path.extname(file).toLowerCase();
                 if (!SCRIPT_EXTENSION_SET.has(ext) || file.includes('node_modules')) continue;
+                if (!isExistingPathInsideRoot(absolutePath, file)) continue;
 
                 try {
                     // Cek cache terlebih dahulu

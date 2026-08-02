@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "name": "benchmark-repo-example",
+  "repoRoot": "../../../evaluation-worktrees/example-z",
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "scanTimeoutMs": 300000,
+  "validationCommands": [
+    {
+      "command": "npm",
+      "args": ["test", "--", "--runInBand"],
+      "cwd": ".",
+      "timeoutMs": 180000
+    }
+  ],
+  "groundTruth": {
+    "findings": [
+      {
+        "file": "src/legacy.js",
+        "type": "Function",
+        "name": "unusedHelper"
+      },
+      {
+        "file": "src/obsolete.js",
+        "type": "DeadFile",
+        "name": "*"
+      },
+      {
+        "file": "package.json",
+        "type": "UnusedDependency",
+        "name": "left-pad"
+      }
+    ]
+  },
+  "arms": {
+    "Z": {
+      "validationCommands": []
+    },
+    "G": {
+      "repoRoot": "../../../evaluation-worktrees/example-g",
+      "configPath": "deadkiller.config.mjs",
+      "validationCommands": []
+    },
+    "T": {
+      "repoRoot": "../../../evaluation-worktrees/example-t",
+      "configPath": ".deadkillerrc.json",
+      "validationCommands": []
+    }
+  }
+}

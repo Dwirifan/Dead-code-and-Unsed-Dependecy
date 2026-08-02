@@ -17,7 +17,7 @@ describe('CLI Commands & Router', () => {
         expect(graph).toBeDefined();
     });
 
-    it('TC-R1: Should prompt for entry point if auto-detect fails', async () => {
+    it('TC-R1: Should prompt for an in-memory entry point without saving config', async () => {
         // Mock it to throw the auto-detect error first, then succeed the second time
         vi.spyOn(projectGraph, 'buildProjectGraph')
             .mockRejectedValueOnce(new Error('Could not auto-detect entry point'))
@@ -31,7 +31,8 @@ describe('CLI Commands & Router', () => {
         const graph = await buildGraphWithInteractiveFallback('/src', mockRuleEngine, spinner);
         
         expect(inquirer.prompt).toHaveBeenCalled();
-        expect(mockRuleEngine.saveConfig).toHaveBeenCalled();
+        expect(mockRuleEngine.rules.entryPoints).toEqual(['src/index.js']);
+        expect(mockRuleEngine.saveConfig).not.toHaveBeenCalled();
         expect(spinner.stop).toHaveBeenCalled();
         expect(spinner.start).toHaveBeenCalled();
         expect(graph).toBeDefined();

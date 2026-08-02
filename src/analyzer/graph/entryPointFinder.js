@@ -2,6 +2,10 @@ import fs from 'fs-extra';
 import path from 'path';
 import glob from 'fast-glob';
 import micromatch from 'micromatch';
+import { SCRIPT_GLOB } from '../../parser/supportedExtensions.js';
+import { matchesOrderedPatterns } from '../globMatcher.js';
+import { isExistingPathInsideRoot, isPathInsideRoot } from '../pathContainment.js';
+import { NEXT_ENTRY_GLOBS } from '../frameworkConventions.js';
 
 const ENTRY_GLOB_IGNORE = [
     '**/node_modules/**',
@@ -34,6 +38,10 @@ const TEST_RUNNERS = new Set([
     'vitest',
 ]);
 
+const MANIFEST_ENTRY_EXTENSIONS = [
+    '.js', '.mjs', '.cjs', '.jsx', '.ts', '.mts', '.cts', '.tsx',
+];
+
 function expandEntryGlob(pattern, projectRoot, extraOptions = {}) {
     return glob.sync(pattern, {
         cwd: projectRoot,
@@ -43,6 +51,164 @@ function expandEntryGlob(pattern, projectRoot, extraOptions = {}) {
         ignore: ENTRY_GLOB_IGNORE,
         ...extraOptions,
     });
+}
+
+function isContainedEntry(projectRoot, candidatePath) {
+    const absoluteRoot = path.resolve(projectRoot);
+    const absoluteCandidate = path.resolve(candidatePath);
+    if (!isPathInsideRoot(absoluteRoot, absoluteCandidate)) return false;
+    // Path yang belum ada dilaporkan kemudian sebagai entry hilang. Kandidat
+    // existing selalu memakai realpath dan fail-closed pada error filesystem.
+    if (!fs.existsSync(absoluteCandidate)) return true;
+    return isExistingPathInsideRoot(absoluteRoot, absoluteCandidate);
+}
+
+function relativeEntryPath(projectRoot, entryPath) {
+    return path.relative(projectRoot, entryPath).replace(/\\/g, '/');
+}
+
+function isIgnoredEntry(entryPath, projectRoot, ruleEngine) {
+    if (typeof ruleEngine?.isIgnoredFile === 'function') {
+        return ruleEngine.isIgnoredFile(entryPath, projectRoot);
+    }
+    const patterns = ruleEngine?.rules?.ignoreFiles || [];
+    return patterns.length > 0 && matchesOrderedPatterns(
+        relativeEntryPath(projectRoot, entryPath),
+        patterns,
+        { legacyDirectories: true },
+    );
+}
+
+function expandExistingEntry(entryPath, projectRoot) {
+    const absoluteEntry = path.resolve(entryPath);
+    if (!isContainedEntry(projectRoot, absoluteEntry) || !fs.existsSync(absoluteEntry)) {
+        return [];
+    }
+
+    let stat;
+    try {
+        stat = fs.statSync(absoluteEntry);
+    } catch (_error) {
+        return [];
+    }
+
+    if (stat.isFile()) return [path.normalize(absoluteEntry)];
+    if (!stat.isDirectory()) return [];
+
+    return expandEntryGlob(SCRIPT_GLOB, absoluteEntry)
+        .filter(filePath => isContainedEntry(projectRoot, filePath))
+        .map(filePath => path.normalize(filePath));
+}
+
+function createEntryPointError(code, message, details = {}) {
+    const error = new Error(message);
+    error.name = 'EntryPointError';
+    error.code = code;
+    error.diagnostics = [{
+        level: 'error',
+        code,
+        path: 'entryPoints',
+        message,
+        ...details,
+    }];
+    return error;
+}
+
+function assertPatternInsideProject(pattern, projectRoot) {
+    const patternPath = path.resolve(projectRoot, pattern);
+    if (!isPathInsideRoot(path.resolve(projectRoot), patternPath)) {
+        throw createEntryPointError(
+            'DEADKILLER_ENTRY_OUTSIDE_PROJECT',
+            `Entry point '${pattern}' berada di luar root proyek dan tidak dapat dianalisis.`,
+            { pattern },
+        );
+    }
+}
+
+function removeCustomPatternMatches(entrySet, pattern, projectRoot) {
+    const absolutePattern = path.resolve(projectRoot, pattern);
+    const exactDirectory = !glob.isDynamicPattern(pattern) &&
+        fs.existsSync(absolutePattern) &&
+        fs.statSync(absolutePattern).isDirectory();
+
+    for (const entry of entrySet) {
+        const matchesExactDirectory = exactDirectory && isPathInsideRoot(absolutePattern, entry);
+        const matchesPattern = micromatch.isMatch(
+            relativeEntryPath(projectRoot, entry),
+            pattern,
+            { dot: true },
+        );
+        if (matchesExactDirectory || matchesPattern) entrySet.delete(entry);
+    }
+}
+
+function collectCustomEntries(patterns, projectRoot) {
+    const customEntries = new Set();
+
+    for (const originalPattern of patterns) {
+        if (typeof originalPattern !== 'string') continue;
+        const negated = originalPattern.startsWith('!') && !originalPattern.startsWith('!(');
+        const pattern = (negated ? originalPattern.slice(1) : originalPattern)
+            .trim()
+            .replace(/\\/g, '/');
+        if (!pattern) continue;
+
+        assertPatternInsideProject(pattern, projectRoot);
+
+        if (negated) {
+            removeCustomPatternMatches(customEntries, pattern, projectRoot);
+            continue;
+        }
+
+        if (glob.isDynamicPattern(pattern)) {
+            for (const match of expandEntryGlob(pattern, projectRoot)) {
+                if (isContainedEntry(projectRoot, match)) {
+                    customEntries.add(path.normalize(match));
+                }
+            }
+            continue;
+        }
+
+        const exactEntry = path.resolve(projectRoot, pattern);
+        if (!fs.existsSync(exactEntry)) {
+            throw createEntryPointError(
+                'DEADKILLER_ENTRY_NOT_FOUND',
+                `Entry point eksplisit '${pattern}' tidak ditemukan. Periksa path pada konfigurasi entryPoints.`,
+                { pattern, resolvedPath: exactEntry },
+            );
+        }
+        if (!isContainedEntry(projectRoot, exactEntry)) {
+            throw createEntryPointError(
+                'DEADKILLER_ENTRY_OUTSIDE_PROJECT',
+                `Entry point '${pattern}' mengarah ke luar root proyek dan tidak dapat dianalisis.`,
+                { pattern, resolvedPath: exactEntry },
+            );
+        }
+
+        const expandedEntries = expandExistingEntry(exactEntry, projectRoot);
+        if (expandedEntries.length === 0) {
+            throw createEntryPointError(
+                'DEADKILLER_ENTRY_DIRECTORY_EMPTY',
+                `Direktori entry point '${pattern}' tidak berisi file JavaScript atau TypeScript yang didukung.`,
+                { pattern, resolvedPath: exactEntry },
+            );
+        }
+        expandedEntries.forEach(entry => customEntries.add(entry));
+    }
+
+    return customEntries;
+}
+
+function collectPreservedScriptEntries(patterns, projectRoot) {
+    if (!Array.isArray(patterns) || patterns.length === 0) return [];
+    return expandEntryGlob(SCRIPT_GLOB, projectRoot)
+        .filter(filePath => isContainedEntry(projectRoot, filePath))
+        .filter(filePath => matchesOrderedPatterns(
+            relativeEntryPath(projectRoot, filePath),
+            patterns,
+            { legacyDirectories: true },
+        ))
+        .map(filePath => path.normalize(filePath));
 }
 
 function hasTestRunner(pkg) {
@@ -91,18 +257,54 @@ function addRuntimeEntriesFromScripts(entrySet, pkg, projectRoot) {
     }
 }
 
+function resolveManifestEntry(packageRoot, manifestValue) {
+    if (typeof manifestValue !== 'string' || !manifestValue.trim()) return null;
+    const candidate = path.resolve(packageRoot, manifestValue);
+    const fileCandidates = path.extname(candidate)
+        ? [candidate]
+        : [candidate, ...MANIFEST_ENTRY_EXTENSIONS.map(extension => `${candidate}${extension}`)];
+    for (const fileCandidate of fileCandidates) {
+        try {
+            if (fs.statSync(fileCandidate).isFile()) return fileCandidate;
+        } catch (_error) {
+            // Lanjutkan ke kandidat Node-style berikutnya.
+        }
+    }
+
+    try {
+        if (fs.statSync(candidate).isDirectory()) {
+            for (const extension of MANIFEST_ENTRY_EXTENSIONS) {
+                const indexCandidate = path.join(candidate, `index${extension}`);
+                if (fs.existsSync(indexCandidate) && fs.statSync(indexCandidate).isFile()) {
+                    return indexCandidate;
+                }
+            }
+            return null;
+        }
+    } catch (_error) {
+        // Path manifest yang hilang tetap dicatat agar fallback source aktif dan
+        // diagnostic DEBUG dapat menjelaskan kandidat yang rusak.
+    }
+    return candidate;
+}
+
+function addManifestEntry(entrySet, packageRoot, manifestValue) {
+    const resolved = resolveManifestEntry(packageRoot, manifestValue);
+    if (resolved) entrySet.add(resolved);
+}
+
 function collectPackageManifestEntries(entrySet, pkg, packageRoot) {
-    if (pkg.main) entrySet.add(path.resolve(packageRoot, pkg.main));
-    if (pkg.module) entrySet.add(path.resolve(packageRoot, pkg.module));
+    if (pkg.main) addManifestEntry(entrySet, packageRoot, pkg.main);
+    if (pkg.module) addManifestEntry(entrySet, packageRoot, pkg.module);
 
     if (pkg.bin) {
         const bins = typeof pkg.bin === 'string' ? [pkg.bin] : Object.values(pkg.bin);
-        bins.forEach(binPath => entrySet.add(path.resolve(packageRoot, binPath)));
+        bins.forEach(binPath => addManifestEntry(entrySet, packageRoot, binPath));
     }
 
     const collectExports = value => {
         if (typeof value === 'string') {
-            entrySet.add(path.resolve(packageRoot, value));
+            addManifestEntry(entrySet, packageRoot, value);
         } else if (value && typeof value === 'object') {
             Object.values(value).forEach(collectExports);
         }
@@ -113,7 +315,7 @@ function collectPackageManifestEntries(entrySet, pkg, packageRoot) {
 
 function frameworkEntryGlobs(pkg) {
     const dependencies = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
-    if (dependencies.next) return ['pages/**/*.{js,jsx,ts,tsx}', 'app/**/*.{js,jsx,ts,tsx}', 'src/pages/**/*.{js,jsx,ts,tsx}', 'src/app/**/*.{js,jsx,ts,tsx}'];
+    if (dependencies.next) return [...NEXT_ENTRY_GLOBS];
     if (dependencies.nuxt || dependencies.nuxt3) return ['pages/**/*.vue', 'app.vue', 'layouts/**/*.vue'];
     if (dependencies['@remix-run/react'] || dependencies['@remix-run/node']) return ['app/root.{js,jsx,ts,tsx}', 'app/routes/**/*.{js,jsx,ts,tsx}'];
     if (dependencies['@angular/core']) return ['src/main.ts', 'src/app/**/*.ts'];
@@ -176,7 +378,9 @@ export function classifyEntryPoint(entryPath, projectRoot) {
     ) {
         return 'test';
     }
-    if (/(?:^|\/)[^/]+\.config\.[cm]?[jt]s$/i.test(relativePath)) {
+    if (
+        /(?:^|\/)(?:[^/]+\.config|webpack\.(?:common|dev|prod)|\.eslintrc)\.[cm]?[jt]s$/i.test(relativePath)
+    ) {
         return 'config';
     }
     if (/(?:^|\/)examples?\//i.test(relativePath)) {
@@ -185,12 +389,12 @@ export function classifyEntryPoint(entryPath, projectRoot) {
     return 'runtime';
 }
 
-function hasValidRuntimeEntry(entrySet, projectRoot) {
-    return [...entrySet].some(entry =>
-        fs.existsSync(entry) &&
-        !entry.endsWith('.json') &&
-        classifyEntryPoint(entry, projectRoot) === 'runtime'
-    );
+function hasValidRuntimeEntry(entrySet, projectRoot, ruleEngine) {
+    return [...entrySet].some(entry => expandExistingEntry(entry, projectRoot).some(candidate =>
+        !isIgnoredEntry(candidate, projectRoot, ruleEngine) &&
+        !candidate.endsWith('.json') &&
+        classifyEntryPoint(candidate, projectRoot) === 'runtime'
+    ));
 }
 
 /**
@@ -202,6 +406,7 @@ function hasValidRuntimeEntry(entrySet, projectRoot) {
  * @returns {Promise<Array<string>>} Daftar file entry points terverifikasi
  */
 export async function findEntryPoints(projectRoot, ruleEngine = null) {
+    projectRoot = path.resolve(projectRoot);
     const pkgPath = path.join(projectRoot, 'package.json');
     let pkg = {};
     if (await fs.pathExists(pkgPath)) {
@@ -223,6 +428,7 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
             ignore: ENTRY_GLOB_IGNORE,
         });
         for (const wsDir of workspaceDirs) {
+            if (!isContainedEntry(projectRoot, wsDir)) continue;
             try {
                 const wsPkgPath = path.join(wsDir, 'package.json');
                 if (await fs.pathExists(wsPkgPath)) {
@@ -243,15 +449,16 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
 
     // 1. Tambahkan Custom Entry Points dari RuleEngine
     if (ruleEngine && ruleEngine.rules && ruleEngine.rules.entryPoints) {
-        for (const ep of ruleEngine.rules.entryPoints) {
-            const matches = expandEntryGlob(ep, projectRoot);
-            if (matches.length > 0) {
-                matches.forEach(m => entrySet.add(path.normalize(m)));
-            } else {
-                entrySet.add(path.resolve(projectRoot, ep));
-            }
-        }
+        const customEntries = collectCustomEntries(ruleEngine.rules.entryPoints, projectRoot);
+        customEntries.forEach(entry => entrySet.add(entry));
     }
+
+    // Preserved files tetap menjadi bukti reachability dan dependency. Mereka
+    // hanya kebal dari eliminasi, bukan dikeluarkan dari analisis.
+    collectPreservedScriptEntries(
+        ruleEngine?.rules?.preserveFiles || [],
+        projectRoot,
+    ).forEach(entry => entrySet.add(entry));
 
     // 2. Manifest root: main/module/exports/bin dan runtime scripts.
     collectPackageManifestEntries(entrySet, pkg, projectRoot);
@@ -336,21 +543,18 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
     }
 
     if (frameworkGlobs.length > 0) {
-        for (const pattern of frameworkGlobs) {
-            const matches = glob.sync(pattern, { cwd: projectRoot, absolute: true });
-            matches.forEach(m => entrySet.add(path.resolve(m)));
-        }
+        addMatchedEntries(entrySet, frameworkGlobs, projectRoot);
     }
 
     // Fallback: kandidat umum jika source entry points tidak ada atau tidak valid (misal dist belum dibuild)
-    let hasValidSource = hasValidRuntimeEntry(entrySet, projectRoot);
+    let hasValidSource = hasValidRuntimeEntry(entrySet, projectRoot, ruleEngine);
     
     if (!hasValidSource) {
         addConventionalSourceEntry(entrySet, projectRoot);
     }
 
     // HTML Fallback
-    hasValidSource = hasValidRuntimeEntry(entrySet, projectRoot);
+    hasValidSource = hasValidRuntimeEntry(entrySet, projectRoot, ruleEngine);
     
     if (!hasValidSource) {
         const htmlCandidates = ['index.html', 'public/index.html', 'src/index.html'];
@@ -379,9 +583,9 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
     }
 
     // Ultimate Fallback
-    hasValidSource = hasValidRuntimeEntry(entrySet, projectRoot);
+    hasValidSource = hasValidRuntimeEntry(entrySet, projectRoot, ruleEngine);
     if (!hasValidSource) {
-        const deepSearch = glob.sync('src/**/index.{js,jsx,mjs,cjs,ts,tsx,mts,cts}', { cwd: projectRoot, absolute: true });
+        const deepSearch = expandEntryGlob('src/**/index.{js,jsx,mjs,cjs,ts,tsx,mts,cts}', projectRoot);
         if (deepSearch.length > 0) {
             deepSearch.forEach(f => entrySet.add(path.resolve(f)));
         }
@@ -396,21 +600,20 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
         entrySet.add(conf);
     }
     
+    const seenValidatedEntries = new Set();
     for (const entry of entrySet) {
-        let isIgnored = false;
-        if (ruleEngine && ruleEngine.rules.ignoreFiles && ruleEngine.rules.ignoreFiles.length > 0) {
-            const relativePath = path.relative(projectRoot, entry).replace(/\\/g, '/');
-            isIgnored = micromatch.isMatch(relativePath, ruleEngine.rules.ignoreFiles, { dot: true });
-        }
-
-        if (isIgnored) {
+        const expandedEntries = expandExistingEntry(entry, projectRoot);
+        if (expandedEntries.length === 0) {
+            invalidEntries.push(entry);
             continue;
         }
 
-        if (await fs.pathExists(entry)) {
-            validatedEntries.push(entry);
-        } else {
-            invalidEntries.push(entry);
+        for (const candidate of expandedEntries) {
+            if (isIgnoredEntry(candidate, projectRoot, ruleEngine)) continue;
+            if (!seenValidatedEntries.has(candidate)) {
+                seenValidatedEntries.add(candidate);
+                validatedEntries.push(candidate);
+            }
         }
     }
 
@@ -419,8 +622,14 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
         invalidEntries.forEach(e => console.warn(`    - ${path.relative(projectRoot, e)}`));
     }
 
-    if (validatedEntries.length === 0) {
-        throw new Error('Could not auto-detect entry point. Please specify "main" in package.json or define "entryPoints" in .deadkillerrc.json.');
+    const hasRuntimeEntry = validatedEntries.some(entry =>
+        !entry.endsWith('.json') && classifyEntryPoint(entry, projectRoot) === 'runtime'
+    );
+    if (!hasRuntimeEntry) {
+        throw createEntryPointError(
+            'DEADKILLER_ENTRY_POINT_NOT_FOUND',
+            'Could not auto-detect entry point: tidak ditemukan file runtime yang valid di dalam root proyek. File config, test, atau example saja tidak cukup; tentukan "main" di package.json atau "entryPoints" pada konfigurasi DeadKiller.',
+        );
     }
 
     const entryKindOrder = new Map([

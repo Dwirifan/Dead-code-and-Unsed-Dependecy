@@ -1,5 +1,22 @@
 import micromatch from 'micromatch';
 
+const FRAMEWORK_MODES = Object.freeze({
+    vanilla: 'vanilla',
+    next: 'next',
+    nuxt: 'vue',
+    vue: 'vue',
+    remix: 'react',
+    'react-native': 'react',
+    react: 'react',
+    preact: 'react',
+    angular: 'vanilla',
+    svelte: 'vanilla',
+    solid: 'vanilla',
+    astro: 'vanilla',
+    nestjs: 'vanilla',
+    express: 'vanilla',
+});
+
 const LIST_FIELDS = new Set([
     'entryPoints',
     'preserveFiles',
@@ -13,8 +30,23 @@ const BOOLEAN_FIELDS = new Set([
     'detectDeadStores',
 ]);
 
+const OVERRIDE_FIELDS = new Set([
+    'mode',
+    'framework',
+    'ignorePrefixedVariables',
+    'preserveExports',
+    'reactRuntime',
+    'preserveUnsafeFiles',
+    'detectDeadStores',
+    'preserveFiles',
+    'ignoreFiles',
+    'globals',
+    'eliminator',
+]);
+
 const KNOWN_FIELDS = new Set([
     'mode',
+    'framework',
     'ignorePrefixedVariables',
     'preserveExports',
     'reactRuntime',
@@ -73,7 +105,7 @@ function normalizeStringList(value, configPath, diagnostics, { paths = false } =
 function validateGlobList(values, configPath, diagnostics) {
     for (const pattern of values) {
         try {
-            micromatch.makeRe(pattern);
+            micromatch.makeRe(pattern, { strictBrackets: true });
         } catch (error) {
             diagnostics.push(diagnostic('error', 'CONFIG_INVALID_GLOB', configPath, `Glob '${pattern}' tidak valid: ${error.message}`));
         }
@@ -128,6 +160,15 @@ function normalizeRuleObject(value, defaults, configPath, diagnostics, { overrid
             result.files = normalized;
             continue;
         }
+        if (override && !OVERRIDE_FIELDS.has(key)) {
+            diagnostics.push(diagnostic(
+                'error',
+                'CONFIG_OVERRIDE_FIELD_NOT_ALLOWED',
+                fieldPath,
+                'Opsi ini hanya berlaku pada tingkat proyek dan tidak dapat digunakan dalam override file.',
+            ));
+            continue;
+        }
         if (!KNOWN_FIELDS.has(key)) {
             diagnostics.push(diagnostic('error', 'CONFIG_UNKNOWN_KEY', fieldPath, 'Opsi tidak dikenal. Periksa kemungkinan typo.'));
             continue;
@@ -157,6 +198,18 @@ function normalizeRuleObject(value, defaults, configPath, diagnostics, { overrid
                     diagnostics.push(diagnostic('error', 'CONFIG_INVALID_MODE', fieldPath, 'Gunakan vanilla, react, next, atau vue.'));
                 } else result.mode = fieldValue;
                 break;
+            case 'framework': {
+                const supportedFrameworks = Object.keys(FRAMEWORK_MODES);
+                if (!supportedFrameworks.includes(fieldValue)) {
+                    diagnostics.push(diagnostic(
+                        'error',
+                        'CONFIG_INVALID_FRAMEWORK',
+                        fieldPath,
+                        `Gunakan salah satu framework yang didukung: ${supportedFrameworks.join(', ')}.`,
+                    ));
+                } else result.framework = fieldValue;
+                break;
+            }
             case 'reactRuntime':
                 if (!['classic', 'automatic'].includes(fieldValue)) {
                     diagnostics.push(diagnostic('error', 'CONFIG_INVALID_REACT_RUNTIME', fieldPath, 'Gunakan classic atau automatic.'));
@@ -202,6 +255,21 @@ function normalizeRuleObject(value, defaults, configPath, diagnostics, { overrid
             default:
                 break;
         }
+    }
+
+    if (
+        Object.hasOwn(value, 'mode') &&
+        Object.hasOwn(value, 'framework') &&
+        FRAMEWORK_MODES[result.framework] &&
+        result.mode &&
+        FRAMEWORK_MODES[result.framework] !== result.mode
+    ) {
+        diagnostics.push(diagnostic(
+            'error',
+            'CONFIG_INCOMPATIBLE_FRAMEWORK_MODE',
+            configPath || 'config',
+            `Framework '${result.framework}' membutuhkan mode '${FRAMEWORK_MODES[result.framework]}', bukan '${result.mode}'.`,
+        ));
     }
     return result;
 }

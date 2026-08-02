@@ -51,13 +51,17 @@ Audits the project and outputs dead code plus findings for direct runtime and de
 deadkiller scan <path>
 # Output in JSON format for CI/CD integration:
 deadkiller scan <path> --json
+# Abaikan config target dan gunakan profil otomatis murni:
+deadkiller scan <path> --json --no-config
 # Jadikan temuan tertentu sebagai kegagalan CI (exit code 2):
 deadkiller scan <path> --json --fail-on safe,dependency
 ```
 
 Output JSON memakai schema version, path relatif dengan separator `/`, waktu
-numerik dalam `summary.analysisTimeMs`, jumlah per status, dan kebijakan CI pada
-field `ci`. Kategori `--fail-on` yang tersedia adalah `safe`, `review`, `risky`,
+numerik dalam `summary.analysisTimeMs`, jumlah per status, aturan dasar pada
+`config.baseRules`, aturan efektif file tunggal pada `config.effectiveRules`,
+konteksnya pada `config.rulesScope`, kebijakan pemuatan pada `config.policy`, dan
+kebijakan CI pada field `ci`. Kategori `--fail-on` yang tersedia adalah `safe`, `review`, `risky`,
 `dependency`, `dead-file`, dan `any`.
 
 **2. Fix (Interactive Deletion)**
@@ -107,7 +111,14 @@ mendeteksi bahasa, framework, module system, runtime JSX, dan jenis proyek lalu
 menerapkan profil aman hanya di memori. Zero-config tidak menulis file. Library,
 CLI, monorepo, dan proyek tanpa `package.json` mempertahankan public exports;
 aplikasi tetap memeriksa export internal. Jalankan `deadkiller init` hanya bila
-aturan tersebut perlu disesuaikan.
+aturan tersebut perlu disesuaikan. Perintah `scan` tidak menyimpan entry point
+hasil prompt; gunakan `init` bila keputusan tersebut ingin dipersistenkan.
+
+Jika config tersedia, aturan pengguna ditumpuk di atas profil otomatis dengan
+precedence: built-in defaults, auto-profile, user config, ordered file override,
+kemudian opsi CLI. Karena itu config parsial tidak mematikan deteksi framework.
+Gunakan `scan --no-config` untuk eksperimen zero-config murni atau ketika memindai
+repo asing tanpa mengeksekusi config JavaScript milik target.
 
 The easiest way to set up DeadKiller in your project is by using the interactive initialization command. It will scan your project and generate the appropriate configuration file.
 
@@ -133,8 +144,8 @@ Gunakan `--force` untuk mengganti konfigurasi lama. DeadKiller membuat backup di
 yang aktif agar tidak terjadi konflik precedence.
 
 This command allows you to choose between two configuration formats:
-- **JavaScript Dinamis (`deadkiller.config.mjs`)** - Mendukung konfigurasi dinamis tanpa bergantung pada tipe modul proyek (opsi disarankan).
-- **JSON Statis (`.deadkillerrc.json`)**
+- **JavaScript Dinamis (`deadkiller.config.mjs`)** - Mendukung konfigurasi dinamis pada proyek yang dipercaya. Node.js mengeksekusi file ini ketika dimuat.
+- **JSON Statis (`.deadkillerrc.json`)** - Pilihan paling aman dan mudah direproduksi untuk CI atau repo eksternal.
 
 ### Configuration Options
 
@@ -144,13 +155,17 @@ Berikut adalah contoh konfigurasi penuh yang dihasilkan:
 // deadkiller.config.mjs
 export default {
     mode: "react",
+    framework: "react",
     entryPoints: [], // Disarankan: runtime, test runner, dan config dideteksi otomatis
     ignorePrefixedVariables: "^_",
     preserveExports: true,
+    preserveUnsafeFiles: true,
+    detectDeadStores: true,
     preserveFiles: ["test/**", "tests/**", "__tests__/**", "**/*.test.*", "**/*.spec.*"],
     ignoreFiles: ["**/dist/**", "**/build/**", "**/coverage/**"],
     ignoreDependencies: [],
     globals: [],
+    eliminator: { maxBackups: 20 },
     overrides: [
         {
             files: ["**/*.test.js", "tests/**/*.js"],
@@ -161,12 +176,13 @@ export default {
 ```
 
 - **mode**: Framework mode (`vanilla`, `react`, `next`, `vue`).
+- **framework**: Preset spesifik seperti `react`, `next`, `remix`, atau `vue`. Aturan export framework hanya aktif pada preset dan lokasi file yang sesuai.
 - **entryPoints**: Root untuk membangun graph. **Secara default, DeadKiller mendeteksi entry point secara otomatis** dari `package.json` (`main`, `module`, `exports`, `bin`, `workspaces`), struktur framework, file konfigurasi, dan pola test ketika test runner seperti Mocha, Vitest, atau Jest terdeteksi. Isi manual hanya untuk root khusus yang tidak mengikuti konvensi.
 - **ignorePrefixedVariables**: Regex untuk mengabaikan variabel tak terpakai spesifik (contoh: `^_` mengabaikan `_unusedVar`).
-- **preserveExports**: Atur ke `true` jika proyek adalah Library/NPM Package publik agar semua exported functions aman dari penghapusan. Atur ke `false` untuk aplikasi web biasa.
+- **preserveExports**: `true` mempertahankan seluruh public export. Nilai `false` atau `"strict"` memeriksa penggunaan lintas file; `"strict"` dipertahankan sebagai nama kebijakan eksplisit untuk config lama.
 - **preserveFiles**: File tetap dibaca untuk graph dan bukti dependency, tetapi dilindungi dari penghapusan. Gunakan ini untuk test dan example.
 - **ignoreFiles**: File tidak dibaca sama sekali, termasuk import dependency di dalamnya. Gunakan hanya untuk output generator seperti `dist`, `build`, dan `coverage`; jangan menaruh folder test di sini.
-- **overrides**: Aturan khusus untuk pola file tertentu. Setup default hanya melindungi export test; unused variable di dalam test tetap dianalisis. Tambahkan `ignorePrefixedVariables` sendiri hanya jika proyek memang membutuhkannya.
+- **overrides**: Aturan efektif per file. Mendukung glob berurutan dan negasi, misalnya `["src/**", "!src/vendor/**"]`. Opsi tingkat proyek seperti `entryPoints` dan `ignoreDependencies` ditolak di dalam override.
 
 DeadKiller memvalidasi konfigurasi sebelum analisis. Tipe, regex, mode, glob,
 opsi tak dikenal, konflik beberapa file config, atau override yang invalid akan
@@ -190,6 +206,15 @@ Contoh: test Mocha tidak diimpor oleh aplikasi, tetapi merupakan root eksekusi
 tersendiri. Ketika `mocha` terdeteksi dari dependency atau script `test`,
 DeadKiller otomatis memasukkan `test/**/*` ke graph. Dengan demikian package
 seperti `chai-http` yang hanya digunakan oleh test tidak salah dilaporkan mati.
+
+Entry point eksplisit harus berada di dalam root proyek. Path file yang tidak ada
+menjadi error, sedangkan direktori entry diekspansi ke ekstensi JavaScript dan
+TypeScript yang didukung. Setidaknya satu runtime entry wajib ditemukan; file
+config, test, atau example saja tidak dianggap sebagai root aplikasi.
+
+Vue/Nuxt/Svelte single-file components dapat ditemukan sebagai entry framework,
+tetapi isi `.vue`/`.svelte` belum diparse sebagai AST penuh. Hasil dependency pada
+proyek tersebut diperlakukan konservatif dan dapat berstatus `UNKNOWN`.
 
 ## Confidence and Safety Classification
 

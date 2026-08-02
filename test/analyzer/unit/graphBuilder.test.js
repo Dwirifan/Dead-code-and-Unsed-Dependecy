@@ -97,6 +97,91 @@ describe('[TC-G01] BFS Traversal & Entry Point Finder', () => {
         }
     });
 
+    it('tetap menelusuri import saat integrasi memberi object rules sederhana', async () => {
+        const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'deadkiller-plain-rules-'));
+        try {
+            await fs.writeJson(path.join(projectRoot, 'package.json'), {
+                name: 'plain-rules-project',
+                main: 'index.js',
+            });
+            await fs.writeFile(path.join(projectRoot, 'index.js'), "import './dependency.js';\n");
+            await fs.writeFile(path.join(projectRoot, 'dependency.js'), 'export const value = 1;\n');
+
+            const graph = await buildProjectGraph(projectRoot, {
+                rules: { entryPoints: [], ignoreFiles: [] },
+            });
+            const relativeFiles = [...graph.liveFiles].map(file => (
+                path.relative(projectRoot, file).replace(/\\/g, '/')
+            ));
+
+            assert.ok(relativeFiles.includes('index.js'));
+            assert.ok(relativeFiles.includes('dependency.js'));
+        } finally {
+            await fs.remove(projectRoot);
+        }
+    });
+
+    it('menolak import relatif yang keluar dari root proyek', async () => {
+        const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'deadkiller-graph-boundary-'));
+        const projectRoot = path.join(fixtureRoot, 'project');
+        try {
+            await fs.ensureDir(projectRoot);
+            await fs.writeJson(path.join(projectRoot, 'package.json'), {
+                name: 'boundary-project',
+                main: 'index.js',
+            });
+            await fs.writeFile(path.join(projectRoot, 'index.js'), "import '../outside.js';\n");
+            const outsideFile = path.join(fixtureRoot, 'outside.js');
+            await fs.writeFile(outsideFile, 'export const secret = 1;\n');
+
+            const graph = await buildProjectGraph(projectRoot);
+
+            assert.ok(!graph.liveFiles.has(outsideFile));
+            assert.ok(!graph.edges.some(edge => edge.to === outsideFile));
+            assert.ok(graph.globalRegistry.unresolvedImports.some(item => (
+                item.importPath === '../outside.js' && item.reason === 'outside-project-root'
+            )));
+        } finally {
+            await fs.remove(fixtureRoot);
+        }
+    });
+
+    it('menolak import melalui symlink yang mengarah keluar root', async () => {
+        const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'deadkiller-graph-symlink-'));
+        const projectRoot = path.join(fixtureRoot, 'project');
+        const outsideDirectory = path.join(fixtureRoot, 'outside');
+        try {
+            await fs.ensureDir(projectRoot);
+            await fs.ensureDir(outsideDirectory);
+            await fs.writeJson(path.join(projectRoot, 'package.json'), {
+                name: 'symlink-boundary-project',
+                main: 'index.js',
+            });
+            await fs.writeFile(path.join(projectRoot, 'index.js'), "import './linked/outside.js';\n");
+            const outsideFile = path.join(outsideDirectory, 'outside.js');
+            await fs.writeFile(outsideFile, 'export const secret = 1;\n');
+            try {
+                await fs.symlink(
+                    outsideDirectory,
+                    path.join(projectRoot, 'linked'),
+                    process.platform === 'win32' ? 'junction' : 'dir',
+                );
+            } catch (error) {
+                if (['EPERM', 'EACCES', 'ENOSYS'].includes(error.code)) return;
+                throw error;
+            }
+
+            const graph = await buildProjectGraph(projectRoot);
+
+            assert.ok(![...graph.liveFiles].some(file => fs.realpathSync(file) === outsideFile));
+            assert.ok(graph.globalRegistry.unresolvedImports.some(item => (
+                item.importPath === './linked/outside.js' && item.reason === 'outside-project-root'
+            )));
+        } finally {
+            await fs.remove(fixtureRoot);
+        }
+    });
+
     it('custom entry glob tidak merayapi node_modules atau symlink di bawah examples', async () => {
         const proyekDummy = await buatProyekDummy();
         try {
@@ -214,6 +299,38 @@ describe('[TC-G01] BFS Traversal & Entry Point Finder', () => {
             assert.ok(!graph.usedPackages.has('chai-http'));
         } finally {
             await fs.remove(proyekDummy);
+        }
+    });
+
+    it('memakai preserveFiles sebagai bukti dependency tanpa menjadikannya removable', async () => {
+        const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'deadkiller-preserve-evidence-'));
+        try {
+            await fs.writeJson(path.join(projectRoot, 'package.json'), {
+                name: 'preserve-evidence',
+                main: 'index.js',
+                dependencies: { 'example-only-dep': '1.0.0' },
+            });
+            await fs.writeFile(path.join(projectRoot, 'index.js'), "console.log('runtime');\n");
+            await fs.outputFile(
+                path.join(projectRoot, 'examples', 'demo.js'),
+                "import example from 'example-only-dep';\nconsole.log(example);\n",
+            );
+            const ruleEngine = new RuleEngine();
+            ruleEngine.projectRoot = projectRoot;
+            ruleEngine.rules.preserveFiles = ['examples/**'];
+
+            const graph = await buildProjectGraph(projectRoot, ruleEngine);
+
+            assert.ok(graph.usedPackages.has('example-only-dep'));
+            assert.ok([...graph.liveFiles].some(file => (
+                path.relative(projectRoot, file).replace(/\\/g, '/') === 'examples/demo.js'
+            )));
+            assert.equal(
+                ruleEngine.isPreservedFile(path.join(projectRoot, 'examples', 'demo.js')),
+                true,
+            );
+        } finally {
+            await fs.remove(projectRoot);
         }
     });
 

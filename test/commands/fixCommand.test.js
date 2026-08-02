@@ -79,6 +79,38 @@ describe('Fix Command Safety & Dry-Run Tests', () => {
         expect(await fs.pathExists(path.join(tmpDir, '.deadkiller_backup'))).toBe(false);
     });
 
+    it('menolak memperbaiki symlink file yang mengarah keluar root proyek', async () => {
+        await fs.writeJson(path.join(tmpDir, 'package.json'), {
+            name: 'fix-boundary-project',
+            main: 'index.js',
+        });
+        await fs.writeFile(path.join(tmpDir, 'index.js'), "console.log('runtime');\n");
+        const outsidePath = path.join(
+            path.dirname(tmpDir),
+            `deadkiller-outside-${path.basename(tmpDir)}.js`,
+        );
+        const initialCode = 'const mustStay = 1;\n';
+        await fs.writeFile(outsidePath, initialCode);
+        try {
+            const linkedPath = path.join(tmpDir, 'linked.js');
+            try {
+                await fs.symlink(outsidePath, linkedPath, 'file');
+            } catch (error) {
+                if (['EPERM', 'EACCES', 'ENOSYS'].includes(error.code)) return;
+                throw error;
+            }
+
+            const program = new Command();
+            registerFixCommand(program);
+            await program.parseAsync(['node', 'test', 'fix', linkedPath, '--yes']);
+
+            expect(await fs.readFile(outsidePath, 'utf8')).toBe(initialCode);
+            expect(await fs.pathExists(path.join(tmpDir, '.deadkiller_backup'))).toBe(false);
+        } finally {
+            await fs.remove(outsidePath);
+        }
+    });
+
     it('Should ONLY remove SAFE items and NOT remove REVIEW items even in Level 3', async () => {
         const filePath = path.join(tmpDir, 'reviewTest.js');
         // 'unusedSafe' adalah safe dead code.

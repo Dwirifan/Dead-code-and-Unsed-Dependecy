@@ -27,6 +27,39 @@ const MODE_CHOICES = [
 
 const VALID_MODES = new Set(MODE_CHOICES.map(choice => choice.value));
 const VALID_PROJECT_TYPES = new Set(PROJECT_TYPE_CHOICES.map(choice => choice.value));
+const FRAMEWORK_MODES = Object.freeze({
+    vanilla: 'vanilla',
+    next: 'next',
+    nuxt: 'vue',
+    vue: 'vue',
+    remix: 'react',
+    'react-native': 'react',
+    react: 'react',
+    preact: 'react',
+    angular: 'vanilla',
+    svelte: 'vanilla',
+    solid: 'vanilla',
+    astro: 'vanilla',
+    nestjs: 'vanilla',
+    express: 'vanilla',
+});
+const MODE_DEFAULT_FRAMEWORK = Object.freeze({
+    vanilla: { id: 'vanilla', label: 'Vanilla JavaScript/TypeScript' },
+    react: { id: 'react', label: 'React' },
+    next: { id: 'next', label: 'Next.js' },
+    vue: { id: 'vue', label: 'Vue' },
+});
+
+function applyProfileMode(profile, mode) {
+    if (!mode) return;
+    const currentFrameworkMatchesMode = FRAMEWORK_MODES[profile.framework] === mode;
+    profile.mode = mode;
+    if (!currentFrameworkMatchesMode) {
+        const fallback = MODE_DEFAULT_FRAMEWORK[mode];
+        profile.framework = fallback.id;
+        profile.frameworkLabel = fallback.label;
+    }
+}
 
 function normalizeInvocation(targetPathOrOptions, maybeOptions) {
     if (targetPathOrOptions && typeof targetPathOrOptions === 'object') {
@@ -226,7 +259,7 @@ export async function initCommand(targetPathOrOptions = '.', maybeOptions = {}) 
         useRecommended = answer.useRecommended;
     }
 
-    if (options.mode) profile.mode = options.mode;
+    if (options.mode) applyProfileMode(profile, options.mode);
     if (options.projectType) profile.projectType = options.projectType;
     if (options.projectType) profile.preserveExports = ['library', 'cli', 'monorepo'].includes(options.projectType);
 
@@ -267,7 +300,7 @@ export async function initCommand(targetPathOrOptions = '.', maybeOptions = {}) 
                 default: format,
             },
         ]);
-        profile.mode = options.mode || custom.mode;
+        applyProfileMode(profile, options.mode || custom.mode);
         profile.projectType = options.projectType || custom.projectType;
         profile.preserveExports = ['library', 'cli', 'monorepo'].includes(profile.projectType);
         additionalEntries = normalizeEntries([options.entry || [], custom.additionalEntries].flat());

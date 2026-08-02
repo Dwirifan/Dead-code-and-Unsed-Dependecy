@@ -151,6 +151,23 @@ describe('init command project-aware UX', () => {
         expect(await fs.pathExists(path.join(tempDir, '.deadkillerrc.json'))).toBe(false);
     });
 
+    it('--mode menyelaraskan framework config agar hasil init tetap valid', async () => {
+        await createProject({ name: 'mode-override', main: 'src/index.js' }, {
+            'src/index.js': `export {};\n`,
+        });
+
+        const result = await initCommand(tempDir, {
+            yes: true,
+            dryRun: true,
+            mode: 'next',
+        });
+
+        expect(result.config).toEqual(expect.objectContaining({
+            mode: 'next',
+            framework: 'next',
+        }));
+    });
+
     it('mendeteksi pnpm monorepo dan source campuran', async () => {
         await createProject({ name: 'workspace-root', private: true }, {
             'pnpm-workspace.yaml': `packages:\n  - 'packages/*'\n`,

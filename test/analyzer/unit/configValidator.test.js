@@ -10,9 +10,11 @@ import { RuleEngine } from '../../../src/analyzer/ruleEngine.js';
 
 const DEFAULTS = {
     mode: 'vanilla',
+    framework: 'vanilla',
     ignorePrefixedVariables: '^_',
     preserveExports: true,
     preserveUnsafeFiles: true,
+    detectDeadStores: true,
     preserveFiles: [],
     ignoreFiles: [],
     ignoreDependencies: [],
@@ -20,6 +22,7 @@ const DEFAULTS = {
     eliminator: {
         autoRenameUnusedParameters: false,
         autoRemoveEmptyBlocks: false,
+        maxBackups: 20,
     },
     globals: [],
     overrides: [],
@@ -85,6 +88,37 @@ describe('configValidator', () => {
             ]),
         }));
     });
+
+    it('menolak glob dengan bracket yang tidak seimbang', () => {
+        expect(() => validateAndNormalizeConfig({
+            ignoreFiles: ['src/[generated.js'],
+        }, DEFAULTS)).toThrowError(expect.objectContaining({
+            diagnostics: expect.arrayContaining([
+                expect.objectContaining({ code: 'CONFIG_INVALID_GLOB' }),
+            ]),
+        }));
+    });
+
+    it('menolak field tingkat proyek di dalam override', () => {
+        expect(() => validateAndNormalizeConfig({
+            overrides: [{ files: ['test/**'], entryPoints: ['test/index.js'] }],
+        }, DEFAULTS)).toThrowError(expect.objectContaining({
+            diagnostics: expect.arrayContaining([
+                expect.objectContaining({ code: 'CONFIG_OVERRIDE_FIELD_NOT_ALLOWED' }),
+            ]),
+        }));
+    });
+
+    it('menolak pasangan framework dan mode yang bertentangan', () => {
+        expect(() => validateAndNormalizeConfig({
+            mode: 'vanilla',
+            framework: 'next',
+        }, DEFAULTS)).toThrowError(expect.objectContaining({
+            diagnostics: expect.arrayContaining([
+                expect.objectContaining({ code: 'CONFIG_INCOMPATIBLE_FRAMEWORK_MODE' }),
+            ]),
+        }));
+    });
 });
 
 describe('RuleEngine config lifecycle', () => {
@@ -128,13 +162,127 @@ describe('RuleEngine config lifecycle', () => {
 
         expect(state.loaded).toBe(true);
         expect(state.source).toBe('file');
-        expect(state.profile).toBeNull();
+        expect(state.profile).toEqual(expect.objectContaining({
+            packageName: 'config-fixture',
+        }));
         expect(engine.configValid).toBe(true);
         expect(engine.rules.entryPoints).toEqual(['src/index.jsx']);
         expect(state.diagnostics).toContainEqual(expect.objectContaining({
             code: 'CONFIG_LIST_NORMALIZED',
             file: path.join(projectRoot, '.deadkillerrc.json'),
         }));
+    });
+
+    it('mewariskan profil otomatis ke config parsial', async () => {
+        await fs.writeJson(path.join(projectRoot, 'package.json'), {
+            name: 'partial-react-app',
+            private: true,
+            scripts: { dev: 'vite' },
+            dependencies: { react: '^19.0.0' },
+        });
+        await fs.writeJson(path.join(projectRoot, '.deadkillerrc.json'), {
+            globals: ['APP_VERSION'],
+        });
+        const engine = new RuleEngine();
+
+        await engine.loadConfig(projectRoot);
+
+        expect(engine.configSource).toBe('file');
+        expect(engine.rules).toEqual(expect.objectContaining({
+            mode: 'react',
+            framework: 'react',
+            reactRuntime: 'automatic',
+            preserveExports: false,
+            globals: ['APP_VERSION'],
+        }));
+        expect(engine.rules.ignoreFiles).toContain('**/coverage/**');
+    });
+
+    it('menurunkan mode dari framework pada config parsial', async () => {
+        await fs.writeJson(path.join(projectRoot, '.deadkillerrc.json'), {
+            framework: 'next',
+        });
+        const engine = new RuleEngine();
+
+        await engine.loadConfig(projectRoot);
+
+        expect(engine.rules.framework).toBe('next');
+        expect(engine.rules.mode).toBe('next');
+    });
+
+    it('mengabaikan seluruh file config ketika policy none dipilih', async () => {
+        const markerPath = path.join(projectRoot, 'config-executed.marker');
+        await fs.writeFile(
+            path.join(projectRoot, 'deadkiller.config.mjs'),
+            `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(markerPath)}, 'executed'); export default { mode: 'next' };\n`,
+        );
+        const engine = new RuleEngine();
+
+        const state = await engine.loadConfig(projectRoot, { ignoreConfig: true });
+
+        expect(state.loaded).toBe(false);
+        expect(state.source).toBe('auto');
+        expect(state.policy).toBe('none');
+        expect(state.ignoredPaths).toEqual([path.join(projectRoot, 'deadkiller.config.mjs')]);
+        expect(await fs.pathExists(markerPath)).toBe(false);
+    });
+
+    it('menghormati negasi ordered glob pada ignore dan preserve', () => {
+        const engine = new RuleEngine();
+        engine.projectRoot = projectRoot;
+        engine.rules.ignoreFiles = ['src/**', '!src/vendor/**'];
+        engine.rules.preserveFiles = ['src/**', '!src/vendor/**'];
+
+        expect(engine.isIgnoredFile(path.join(projectRoot, 'src', 'app.js'))).toBe(true);
+        expect(engine.isIgnoredFile(path.join(projectRoot, 'src', 'vendor', 'lib.js'))).toBe(false);
+        expect(engine.isPreservedFile(path.join(projectRoot, 'src', 'app.js'))).toBe(true);
+        expect(engine.isPreservedFile(path.join(projectRoot, 'src', 'vendor', 'lib.js'))).toBe(false);
+    });
+
+    it('menyelaraskan framework pada override mode-only', () => {
+        const engine = new RuleEngine();
+        engine.projectRoot = projectRoot;
+        engine.rules.mode = 'vanilla';
+        engine.rules.framework = 'vanilla';
+        engine.rules.overrides = [{ files: ['app/**'], mode: 'next' }];
+
+        expect(engine.effectiveRulesFor(path.join(projectRoot, 'app', 'page.js')))
+            .toEqual(expect.objectContaining({ mode: 'next', framework: 'next' }));
+        expect(engine.effectiveRulesFor(path.join(projectRoot, 'src', 'index.js')))
+            .toEqual(expect.objectContaining({ mode: 'vanilla', framework: 'vanilla' }));
+    });
+
+    it('mencocokkan nama direktori lama berdasarkan segmen, bukan substring', () => {
+        const engine = new RuleEngine();
+        engine.projectRoot = projectRoot;
+        engine.rules.ignoreFiles = ['dist'];
+
+        expect(engine.isIgnoredFile(path.join(projectRoot, 'dist', 'index.js'))).toBe(true);
+        expect(engine.isIgnoredFile(path.join(projectRoot, 'packages', 'api', 'dist', 'index.js'))).toBe(true);
+        expect(engine.isIgnoredFile(path.join(projectRoot, 'src', 'distinct.js'))).toBe(false);
+    });
+
+    it('tidak memperluas literal file root ke file bernama sama di workspace', () => {
+        const engine = new RuleEngine();
+        engine.projectRoot = projectRoot;
+        engine.rules.ignoreFiles = ['src/index.js'];
+
+        expect(engine.isIgnoredFile(path.join(projectRoot, 'src', 'index.js'))).toBe(true);
+        expect(engine.isIgnoredFile(
+            path.join(projectRoot, 'packages', 'api', 'src', 'index.js'),
+        )).toBe(false);
+    });
+
+    it('melindungi file convention Next tanpa melindungi helper app biasa', () => {
+        const engine = new RuleEngine();
+        engine.projectRoot = projectRoot;
+        engine.rules.mode = 'next';
+        engine.rules.framework = 'next';
+
+        expect(engine.isPreservedFile(path.join(projectRoot, 'app', 'page.tsx'))).toBe(true);
+        expect(engine.isPreservedFile(path.join(projectRoot, 'instrumentation.ts'))).toBe(true);
+        expect(engine.isPreservedFile(path.join(projectRoot, 'proxy.ts'))).toBe(true);
+        expect(engine.isPreservedFile(path.join(projectRoot, 'app', 'lib', 'dead.ts'))).toBe(false);
     });
 
     it('menerapkan profil React otomatis tanpa menulis file konfigurasi', async () => {
@@ -193,6 +341,7 @@ describe('RuleEngine config lifecycle', () => {
             name: 'react-components',
             type: 'module',
             exports: './src/index.js',
+            scripts: { dev: 'vite' },
             peerDependencies: { react: '^19.0.0' },
         });
         const engine = new RuleEngine();

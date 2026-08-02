@@ -86,6 +86,9 @@ function detectProjectType(pkg, monorepo) {
     // Pemakaian React/Vue tidak otomatis berarti aplikasi; component library
     // juga memakai framework. Manifest API publik tanpa script aplikasi adalah
     // sinyal library yang lebih kuat dan membuat zero-config lebih aman.
+    // API publik eksplisit lebih kuat daripada keberadaan script `dev`, karena
+    // component library juga lazim memakai Vite/Storybook saat pengembangan.
+    if (hasExplicitLibraryApi && pkg.private !== true) return 'library';
     if (hasLibraryManifest && !hasApplicationScript) return 'library';
     return 'application';
 }
@@ -185,10 +188,12 @@ export async function inspectProject(projectRoot) {
 export function createRecommendedConfig(profile, entryPoints = []) {
     return {
         mode: profile.mode,
+        framework: profile.framework,
         entryPoints,
         ignorePrefixedVariables: '^_',
         preserveExports: profile.preserveExports,
         preserveUnsafeFiles: true,
+        detectDeadStores: true,
         preserveFiles: [
             'test/**',
             'tests/**',
@@ -221,6 +226,11 @@ export function createRecommendedConfig(profile, entryPoints = []) {
         ignoreDependencies: [],
         globals: [],
         reactRuntime: profile.reactRuntime,
+        eliminator: {
+            autoRenameUnusedParameters: false,
+            autoRemoveEmptyBlocks: false,
+            maxBackups: 20,
+        },
         overrides: [
             {
                 files: [

@@ -37,6 +37,7 @@ function normalizeUnresolvedImports(projectRoot, values = []) {
         .map(item => ({
             file: toPortablePath(projectRoot, item.file),
             importPath: item.importPath,
+            reason: item.reason || 'not-found',
         }))
         .sort((left, right) => (
             left.file.localeCompare(right.file) ||
@@ -71,6 +72,24 @@ function statusCounts(deadCode) {
         }
     }
     return counts;
+}
+
+function configData(ruleEngine, file = null) {
+    const hasFileContext = Boolean(file) && typeof ruleEngine.effectiveRulesFor === 'function';
+    return {
+        loaded: ruleEngine.configLoaded,
+        path: ruleEngine.configPath,
+        source: ruleEngine.configSource,
+        policy: ruleEngine.configPolicy || 'auto',
+        ignoredPaths: [...(ruleEngine.ignoredConfigPaths || [])],
+        profile: ruleEngine.autoProfile,
+        baseRules: ruleEngine.rules,
+        effectiveRules: hasFileContext ? ruleEngine.effectiveRulesFor(file) : null,
+        rulesScope: hasFileContext
+            ? { type: 'file', file: toPortablePath(ruleEngine.projectRoot, file) }
+            : { type: 'project-base' },
+        diagnostics: ruleEngine.configDiagnostics,
+    };
 }
 
 function dependencyData(dependencyReport, dependencyAnalysisError) {
@@ -143,13 +162,7 @@ export function createDirectoryScanReport({
         schemaVersion: SCAN_SCHEMA_VERSION,
         mode: 'directory',
         projectRoot,
-        config: {
-            loaded: ruleEngine.configLoaded,
-            path: ruleEngine.configPath,
-            source: ruleEngine.configSource,
-            profile: ruleEngine.autoProfile,
-            diagnostics: ruleEngine.configDiagnostics,
-        },
+        config: configData(ruleEngine),
         summary: {
             liveFiles: graph.liveFiles.size,
             totalIssues: totalFindings,
@@ -218,13 +231,7 @@ export function createSingleFileScanReport({
         file,
         ignored,
         protected: Boolean(protectedFile),
-        config: {
-            loaded: ruleEngine.configLoaded,
-            path: ruleEngine.configPath,
-            source: ruleEngine.configSource,
-            profile: ruleEngine.autoProfile,
-            diagnostics: ruleEngine.configDiagnostics,
-        },
+        config: configData(ruleEngine, file),
         summary: {
             totalIssues: deadCode.length,
             totalFindings: deadCode.length,

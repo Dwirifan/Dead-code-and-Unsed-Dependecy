@@ -8,14 +8,16 @@ import { buildProjectGraph } from '../analyzer/graph/projectGraph.js';
  * Mencari root konfigurasi terdekat agar perintah file tunggal memakai aturan
  * yang sama dengan scan proyek penuh.
  */
-export async function findProjectRoot(startDirectory) {
+export async function findProjectRoot(startDirectory, { ignoreConfig = false } = {}) {
     let current = path.resolve(startDirectory);
-    const rootMarkers = [
-        'deadkiller.config.js',
-        'deadkiller.config.mjs',
-        '.deadkillerrc.json',
-        'package.json',
-    ];
+    const rootMarkers = ignoreConfig
+        ? ['package.json']
+        : [
+            'deadkiller.config.js',
+            'deadkiller.config.mjs',
+            '.deadkillerrc.json',
+            'package.json',
+        ];
 
     while (true) {
         for (const marker of rootMarkers) {
@@ -38,7 +40,10 @@ export function printConfigDiagnostics(ruleEngine, { silent = false } = {}) {
         const exportPolicy = profile.preserveExports
             ? 'export publik dipertahankan'
             : 'export internal ikut diperiksa';
-        console.log(chalk.cyan('\n[i] Tidak ada konfigurasi; DeadKiller memakai profil otomatis (tanpa menulis file).'));
+        const ignoredConfig = ruleEngine.configPolicy === 'none' && ruleEngine.ignoredConfigPaths?.length > 0;
+        console.log(chalk.cyan(ignoredConfig
+            ? '\n[i] Konfigurasi target diabaikan oleh --no-config; DeadKiller memakai profil otomatis.'
+            : '\n[i] Tidak ada konfigurasi; DeadKiller memakai profil otomatis (tanpa menulis file).'));
         console.log(chalk.gray(
             `    ${profile.frameworkLabel} · ${profile.language} · ${profile.projectType} · ${exportPolicy}`,
         ));
@@ -84,11 +89,12 @@ export async function buildGraphWithInteractiveFallback(
 
             const entryPointsArray = entryPointsInput.split(',').map(s => s.trim()).filter(Boolean);
             
-            // Simpan ke konfigurasi lokal
+            // Entry point manual hanya berlaku untuk proses saat ini. Perintah
+            // analisis tidak boleh membuat atau mengubah konfigurasi target.
             ruleEngine.rules.entryPoints = entryPointsArray;
-            await ruleEngine.saveConfig(absolutePath);
-            
-            console.log(chalk.green('\n[v] Konfigurasi diselamatkan di deadkiller.config.js!\n'));
+
+            console.log(chalk.green('\n[v] Entry point diterapkan sementara untuk analisis ini.'));
+            console.log(chalk.gray('    Jalankan `deadkiller init` jika ingin menyimpannya sebagai konfigurasi proyek.\n'));
             if (spinner) spinner.start('Melanjutkan Membangun Graph...');
             
             return await buildProjectGraph(absolutePath, ruleEngine);

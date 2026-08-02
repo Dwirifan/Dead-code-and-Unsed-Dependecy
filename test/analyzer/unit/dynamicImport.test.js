@@ -92,7 +92,8 @@ describe('Dynamic Imports & import.meta.glob Support', () => {
         try {
             const { globalRegistry } = await buildProjectGraph(tmpDir);
             const ast = await parseCode(code, unsafeFilePath);
-            const ruleEngine = new RuleEngine({ preserveExports: 'strict' });
+            const ruleEngine = new RuleEngine();
+            ruleEngine.rules.preserveExports = 'strict';
 
             const deadNodes = findDeadCode(ast, unsafeFilePath, globalRegistry, ruleEngine);
             assert.equal(deadNodes.length, 0, 'Should not report any dead exports in unsafeFiles');

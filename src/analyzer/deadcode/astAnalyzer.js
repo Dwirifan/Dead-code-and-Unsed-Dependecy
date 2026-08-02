@@ -126,6 +126,9 @@ function getWriteOperationNode(identifier, nodeParents) {
 }
 
 export function analyzeAstCode(ast, fileName = null, globalRegistry = null, ruleEngine = null) {
+    const effectiveRules = ruleEngine
+        ? (ruleEngine.effectiveRulesFor?.(fileName) || ruleEngine._resolveConfigForFile?.(fileName) || ruleEngine.rules || {})
+        : {};
     const allScopes = [];
     const globalScope = new Scope();
     allScopes.push(globalScope);
@@ -144,7 +147,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
     try {
         tsScopeManager = analyze(ast, {
             sourceType: ast.sourceType || 'module',
-            jsxPragma: ruleEngine?.rules?.reactRuntime === 'automatic' ? null : 'React',
+            jsxPragma: effectiveRules.reactRuntime === 'automatic' ? null : 'React',
             lib: ['esnext']
         });
     } catch (error) {
@@ -370,7 +373,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
             // Implicit JSX React Usage (Older React)
             // Di React < 17, JSX butuh import React from 'react' meskipun tidak dipanggil secara eksplisit.
             if (node.type === 'JSXElement' || node.type === 'JSXFragment') {
-                const reactRuntime = ruleEngine && ruleEngine.rules ? ruleEngine.rules.reactRuntime : 'classic';
+                const reactRuntime = effectiveRules.reactRuntime || 'classic';
                 if (reactRuntime === 'classic') {
                     const currentOwners = ownerStack.length > 0 ? ownerStack[ownerStack.length - 1] : null;
                     currentScope.addReadReference('React', node, currentOwners);
@@ -724,7 +727,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
         if (node) reportedUndeclaredNodes.add(node);
 
         // Ambil globals kustom milik pengguna dari ruleEngine
-        const userGlobals = ruleEngine ? (ruleEngine._resolveConfigForFile(fileName).globals || []) : [];
+        const userGlobals = effectiveRules.globals || [];
 
         // Abaikan variabel bawaan JS, Node, Browser, custom globals, dan yang di-ignore ruleEngine
         if (BUILTIN_GLOBALS.has(name) || userGlobals.includes(name) || (ruleEngine && ruleEngine.isIgnoredVariable(name, fileName))) {

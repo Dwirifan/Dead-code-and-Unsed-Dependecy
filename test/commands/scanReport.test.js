@@ -14,7 +14,17 @@ function ruleEngineFixture() {
         configLoaded: false,
         configPath: null,
         configSource: 'auto',
+        configPolicy: 'none',
+        ignoredConfigPaths: ['deadkiller.config.mjs'],
         autoProfile: { projectType: 'application' },
+        projectRoot,
+        rules: { mode: 'vanilla', preserveExports: false },
+        effectiveRulesFor(file) {
+            return {
+                ...this.rules,
+                preserveExports: file.includes(`${path.sep}test${path.sep}`),
+            };
+        },
         configDiagnostics: [],
     };
 }
@@ -66,6 +76,13 @@ describe('scanReport', () => {
         });
 
         expect(report.schemaVersion).toBe(1);
+        expect(report.config).toEqual(expect.objectContaining({
+            policy: 'none',
+            ignoredPaths: ['deadkiller.config.mjs'],
+            baseRules: { mode: 'vanilla', preserveExports: false },
+            effectiveRules: null,
+            rulesScope: { type: 'project-base' },
+        }));
         expect(report.deadCode.map(item => item.file)).toEqual([
             'src/index.js',
             'src/index.js',
@@ -99,6 +116,10 @@ describe('scanReport', () => {
         expect(report.summary.protected).toBe(1);
         expect(report.summary.safe).toBe(0);
         expect(report.summary.actionableFindings).toBe(0);
+        expect(report.config).toEqual(expect.objectContaining({
+            effectiveRules: { mode: 'vanilla', preserveExports: true },
+            rulesScope: { type: 'file', file: 'test/x.test.js' },
+        }));
     });
 
     it('memvalidasi dan mencocokkan kebijakan fail-on', () => {

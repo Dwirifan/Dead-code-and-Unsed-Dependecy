@@ -80,7 +80,9 @@ export function findDeadCode(ast, fileName = null, globalRegistry = null, ruleEn
     deadCode.push(...pathFindings);
 
     // 7.5 Dead Stores (Useless Assignment) Analysis
-    const ruleConfig = ruleEngine ? ruleEngine.rules : {};
+    const ruleConfig = ruleEngine
+        ? (ruleEngine.effectiveRulesFor?.(fileName) || ruleEngine.rules)
+        : {};
     const deadStores = analyzeDeadStores(ast, ruleConfig);
     deadStores.forEach(node => {
         const { confidence, status, reason } = classifyConfidence(node.type);

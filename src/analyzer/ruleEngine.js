@@ -1,15 +1,18 @@
 import fs from 'fs-extra';
 import path from 'path';
 import { pathToFileURL } from 'url';
-import micromatch from 'micromatch';
 import { validateAndNormalizeConfig } from './configValidator.js';
+import { matchesOrderedPatterns } from './globMatcher.js';
 import { createRecommendedConfig, inspectProject } from '../commands/initProjectProfiler.js';
+import { NEXT_PRESERVE_GLOBS } from './frameworkConventions.js';
 
 const DEFAULT_RULES = {
     mode: 'vanilla',
+    framework: 'vanilla',
     ignorePrefixedVariables: '^_',
     preserveExports: true,
     preserveUnsafeFiles: true,
+    detectDeadStores: true,
     preserveFiles: [],
     ignoreFiles: [],
     ignoreDependencies: [],
@@ -17,10 +20,49 @@ const DEFAULT_RULES = {
     eliminator: {
         autoRenameUnusedParameters: false,
         autoRemoveEmptyBlocks: false,
+        maxBackups: 20,
     },
     globals: [],
     overrides: [],
 };
+
+const FRAMEWORK_MODES = Object.freeze({
+    vanilla: 'vanilla',
+    next: 'next',
+    nuxt: 'vue',
+    vue: 'vue',
+    remix: 'react',
+    'react-native': 'react',
+    react: 'react',
+    preact: 'react',
+    angular: 'vanilla',
+    svelte: 'vanilla',
+    solid: 'vanilla',
+    astro: 'vanilla',
+    nestjs: 'vanilla',
+    express: 'vanilla',
+});
+
+function modeForFramework(framework, fallback = 'vanilla') {
+    return FRAMEWORK_MODES[framework] || fallback;
+}
+
+function frameworkForMode(mode, currentFramework = null) {
+    if (currentFramework && modeForFramework(currentFramework, null) === mode) {
+        return currentFramework;
+    }
+    return {
+        vanilla: 'vanilla',
+        react: 'react',
+        next: 'next',
+        vue: 'vue',
+    }[mode] || currentFramework || 'vanilla';
+}
+
+function comparablePath(filePath) {
+    const resolved = path.resolve(filePath);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
 
 function freshDefaultRules() {
     return {
@@ -43,8 +85,9 @@ async function importConfigModule(configPath, projectRoot) {
 
     // Konfigurasi lama yang dibuat sebagai `deadkiller.config.js` memakai
     // `export default`. Pada proyek CommonJS, import langsung memicu warning
-    // MODULE_TYPELESS_PACKAGE_JSON dari Node. Config hasil generator hanya
-    // berisi object literal, sehingga aman dimuat sebagai data URL.
+    // MODULE_TYPELESS_PACKAGE_JSON dari Node. Config hasil generator dapat
+    // dimuat melalui data URL untuk kompatibilitas module system. Mekanisme ini
+    // bukan sandbox; gunakan `scan --no-config` untuk repo yang tidak dipercaya.
     if (path.basename(configPath) === 'deadkiller.config.js' && pkg.type !== 'module') {
         const source = await fs.readFile(configPath, 'utf8');
         const isPlainGeneratedEsmConfig =
@@ -78,12 +121,14 @@ export class RuleEngine {
         this.configValid = true;
         this.configSource = 'defaults';
         this.autoProfile = null;
+        this.configPolicy = 'auto';
+        this.ignoredConfigPaths = [];
 
         // Direktori yang dilindungi oleh framework mode
         this._frameworkPreservedPaths = {
             vanilla: [],
             react: ['public/'],
-            next: ['pages/', 'app/', 'api/', 'public/', 'middleware.'],
+            next: [],
             vue: ['pages/', 'layouts/', 'middleware/', 'plugins/', 'public/']
         };
 
@@ -94,7 +139,7 @@ export class RuleEngine {
      * Membaca konfigurasi `deadkiller.config.js` atau `.deadkillerrc.json` dari root project.
      * @param {string} projectRoot Lokasi root project
      */
-    async loadConfig(projectRoot) {
+    async loadConfig(projectRoot, { ignoreConfig = false } = {}) {
         this.projectRoot = projectRoot;
         this.rules = freshDefaultRules();
         this.configDiagnostics = [];
@@ -103,18 +148,30 @@ export class RuleEngine {
         this.configValid = true;
         this.configSource = 'defaults';
         this.autoProfile = null;
+        this.configPolicy = ignoreConfig ? 'none' : 'auto';
+        this.ignoredConfigPaths = [];
 
         const jsConfigPath = path.join(projectRoot, 'deadkiller.config.js');
         const mjsConfigPath = path.join(projectRoot, 'deadkiller.config.mjs');
         const jsonConfigPath = path.join(projectRoot, '.deadkillerrc.json');
 
         try {
+            // Profil selalu menjadi base konfigurasi, termasuk ketika pengguna
+            // hanya menyediakan beberapa override. Ini mencegah config parsial
+            // mematikan deteksi framework dan perlindungan zero-config.
+            this.autoProfile = await inspectProject(projectRoot);
+            const recommended = createRecommendedConfig(this.autoProfile);
+            const autoValidated = validateAndNormalizeConfig(recommended, freshDefaultRules());
+            const baseRules = autoValidated.config;
+
             let userConfig = null;
             const existingConfigs = [];
             for (const candidate of [mjsConfigPath, jsConfigPath, jsonConfigPath]) {
                 if (await fs.pathExists(candidate)) existingConfigs.push(candidate);
             }
-            if (existingConfigs.length > 1) {
+            if (ignoreConfig) {
+                this.ignoredConfigPaths = [...existingConfigs];
+            } else if (existingConfigs.length > 1) {
                 const conflictError = new Error(
                     `Ditemukan beberapa file konfigurasi aktif: ${existingConfigs.map(file => path.basename(file)).join(', ')}. Sisakan satu file saja.`,
                 );
@@ -129,22 +186,32 @@ export class RuleEngine {
                 throw conflictError;
             }
 
-            if (existingConfigs[0] === mjsConfigPath) {
+            if (!ignoreConfig && existingConfigs[0] === mjsConfigPath) {
                 this.configPath = mjsConfigPath;
                 const configModule = await importConfigModule(mjsConfigPath, projectRoot);
                 userConfig = configModule.default || configModule;
-            } else if (existingConfigs[0] === jsConfigPath) {
+            } else if (!ignoreConfig && existingConfigs[0] === jsConfigPath) {
                 this.configPath = jsConfigPath;
                 const configModule = await importConfigModule(jsConfigPath, projectRoot);
                 userConfig = configModule.default || configModule;
-            } else if (existingConfigs[0] === jsonConfigPath) {
+            } else if (!ignoreConfig && existingConfigs[0] === jsonConfigPath) {
                 this.configPath = jsonConfigPath;
                 userConfig = await fs.readJson(jsonConfigPath);
             }
 
             if (userConfig) {
-                const validated = validateAndNormalizeConfig(userConfig, freshDefaultRules());
+                const validated = validateAndNormalizeConfig(userConfig, baseRules);
                 this.rules = validated.config;
+                const hasUserMode = Object.hasOwn(userConfig, 'mode');
+                const hasUserFramework = Object.hasOwn(userConfig, 'framework');
+                if (hasUserMode && !hasUserFramework) {
+                    this.rules.framework = frameworkForMode(
+                        this.rules.mode,
+                        this.autoProfile.framework,
+                    );
+                } else if (hasUserFramework && !hasUserMode) {
+                    this.rules.mode = modeForFramework(this.rules.framework, this.rules.mode);
+                }
                 this.configDiagnostics = validated.diagnostics.map(item => ({
                     ...item,
                     file: this.configPath,
@@ -154,38 +221,12 @@ export class RuleEngine {
             } else {
                 // Zero-config memakai rekomendasi yang sama dengan `deadkiller init`,
                 // tetapi hanya di memori. Tidak ada file yang dibuat atau diubah.
-                this.autoProfile = await inspectProject(projectRoot);
-                const recommended = createRecommendedConfig(this.autoProfile);
-                const validated = validateAndNormalizeConfig(recommended, freshDefaultRules());
-                this.rules = validated.config;
-                this.configDiagnostics = validated.diagnostics.map(item => ({
+                this.rules = baseRules;
+                this.configDiagnostics = autoValidated.diagnostics.map(item => ({
                     ...item,
                     file: null,
                 }));
                 this.configSource = 'auto';
-            }
-
-            // --- AUTO DETECT REACT RUNTIME ---
-            // Baca package.json untuk melihat versi React
-            const pkgJsonPath = path.join(projectRoot, 'package.json');
-            if (await fs.pathExists(pkgJsonPath)) {
-                const pkg = await fs.readJson(pkgJsonPath);
-                const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
-                const reactVersion = deps['react'];
-                
-                if (reactVersion) {
-                    // Cek apakah versinya >= 17
-                    // Menghapus karakter khusus seperti ^, ~, >=, dll.
-                    const cleanVersion = reactVersion.replace(/[^0-9.]/g, '');
-                    const majorVersion = parseInt(cleanVersion.split('.')[0], 10);
-                    
-                    if (!isNaN(majorVersion) && majorVersion >= 17) {
-                        // Jika tidak disetel secara manual, aktifkan runtime automatic
-                        if (!this.rules.reactRuntime) {
-                            this.rules.reactRuntime = 'automatic';
-                        }
-                    }
-                }
             }
             
             // Set default reactRuntime jika belum diatur
@@ -197,7 +238,9 @@ export class RuleEngine {
                 loaded: this.configLoaded,
                 path: this.configPath,
                 source: this.configSource,
+                policy: this.configPolicy,
                 profile: this.autoProfile,
+                ignoredPaths: [...this.ignoredConfigPaths],
                 diagnostics: [...this.configDiagnostics],
             };
         } catch (err) {
@@ -227,7 +270,7 @@ export class RuleEngine {
      * @param {string} absolutePath Path absolut file yang sedang dianalisis
      * @returns {Object} Aturan yang telah digabungkan untuk file tersebut
      */
-    _resolveConfigForFile(absolutePath) {
+    effectiveRulesFor(absolutePath) {
         if (!absolutePath || !this.projectRoot) return this.rules;
 
         const relativePath = path.relative(this.projectRoot, absolutePath).replace(/\\/g, '/');
@@ -236,17 +279,42 @@ export class RuleEngine {
         if (this.rules.overrides && Array.isArray(this.rules.overrides)) {
             for (const override of this.rules.overrides) {
                 if (override.files && Array.isArray(override.files)) {
-                    // Evaluasi kecocokan file terhadap target overrides menggunakan micromatch (dukung negasi & array)
-                    const isMatch = micromatch([relativePath], override.files).length > 0 ||
-                                    override.files.some(pattern => !pattern.startsWith('!') && !pattern.includes('*') && relativePath.includes(pattern));
+                    // Evaluasi kecocokan file terhadap glob berurutan, termasuk negasi.
+                    const isMatch = matchesOrderedPatterns(relativePath, override.files, {
+                        legacyDirectories: true,
+                    });
 
                     if (isMatch) {
-                        resolvedRules = { ...resolvedRules, ...override };
+                        const { files: _files, ...overrideRules } = override;
+                        if (Object.hasOwn(overrideRules, 'mode') && !Object.hasOwn(overrideRules, 'framework')) {
+                            overrideRules.framework = frameworkForMode(
+                                overrideRules.mode,
+                                resolvedRules.framework,
+                            );
+                        } else if (Object.hasOwn(overrideRules, 'framework') && !Object.hasOwn(overrideRules, 'mode')) {
+                            overrideRules.mode = modeForFramework(
+                                overrideRules.framework,
+                                resolvedRules.mode,
+                            );
+                        }
+                        resolvedRules = {
+                            ...resolvedRules,
+                            ...overrideRules,
+                            eliminator: overrideRules.eliminator
+                                ? { ...(resolvedRules.eliminator || {}), ...overrideRules.eliminator }
+                                : resolvedRules.eliminator,
+                        };
                     }
                 }
             }
         }
         return resolvedRules;
+    }
+
+    // Alias kompatibilitas untuk integrasi lama. Kode baru harus memakai API
+    // publik `effectiveRulesFor()` agar seluruh analyzer konsisten.
+    _resolveConfigForFile(absolutePath) {
+        return this.effectiveRulesFor(absolutePath);
     }
 
     /**
@@ -257,7 +325,7 @@ export class RuleEngine {
      * @returns {boolean} True jika diselamatkan, False jika tetap divonis mati
      */
     isIgnoredVariable(name, absolutePath) {
-        const rules = this._resolveConfigForFile(absolutePath);
+        const rules = this.effectiveRulesFor(absolutePath);
         if (!rules.ignorePrefixedVariables || !name) return false;
 
         try {
@@ -277,22 +345,22 @@ export class RuleEngine {
         this.projectRoot = projectRoot || this.projectRoot;
         const relativePath = path.relative(this.projectRoot, absolutePath).replace(/\\/g, '/');
 
-        const rules = this._resolveConfigForFile(absolutePath);
-        if (rules.ignoreFiles && rules.ignoreFiles.length > 0) {
-            const isIgnoredDir = rules.ignoreFiles.some(pattern => {
-                if (micromatch.isMatch(relativePath, pattern, { dot: true })) return true;
+        // `--no-config` bukan sekadar mencegah eksekusi config. Berkas config
+        // target juga harus keluar dari graph agar import di dalamnya tidak
+        // mencemari bukti penggunaan dependency pada arm zero-config.
+        if (
+            this.configPolicy === 'none' &&
+            this.ignoredConfigPaths.some(configPath => (
+                comparablePath(configPath) === comparablePath(absolutePath)
+            ))
+        ) {
+            return true;
+        }
 
-                // Backward compatibility untuk config lama yang memakai nama
-                // direktori polos seperti "dist" alih-alih glob "**/dist/**".
-                const hasGlobSyntax = ['*', '!', '?', '[', ']', '{', '}', '(', ')']
-                    .some(character => pattern.includes(character));
-                if (!hasGlobSyntax) {
-                    const directory = pattern.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
-                    return relativePath === directory ||
-                        relativePath.startsWith(`${directory}/`) ||
-                        relativePath.includes(`/${directory}/`);
-                }
-                return false;
+        const rules = this.effectiveRulesFor(absolutePath);
+        if (rules.ignoreFiles && rules.ignoreFiles.length > 0) {
+            const isIgnoredDir = matchesOrderedPatterns(relativePath, rules.ignoreFiles, {
+                legacyDirectories: true,
             });
             if (isIgnoredDir) return true;
         }
@@ -307,11 +375,11 @@ export class RuleEngine {
     isPreservedFile(absolutePath, projectRoot) {
         this.projectRoot = projectRoot || this.projectRoot;
         const relativePath = path.relative(this.projectRoot, absolutePath).replace(/\\/g, '/');
-        const rules = this._resolveConfigForFile(absolutePath);
+        const rules = this.effectiveRulesFor(absolutePath);
 
         if (rules.preserveFiles && rules.preserveFiles.length > 0) {
-            const matchManual = micromatch.isMatch(relativePath, rules.preserveFiles, {
-                dot: true,
+            const matchManual = matchesOrderedPatterns(relativePath, rules.preserveFiles, {
+                legacyDirectories: true,
             });
             if (matchManual) return true;
         }
@@ -319,6 +387,9 @@ export class RuleEngine {
         // Convention-based framework files tetap dianalisis agar temuan dapat
         // ditinjau, tetapi tidak pernah diubah otomatis.
         const mode = rules.mode || 'vanilla';
+        if (rules.framework === 'next' || mode === 'next') {
+            return matchesOrderedPatterns(relativePath, NEXT_PRESERVE_GLOBS);
+        }
         const protectedPaths = this._frameworkPreservedPaths[mode] || [];
         return protectedPaths.some(p => relativePath.startsWith(p) || relativePath.includes('/' + p));
     }

@@ -1,35 +1,279 @@
 import { describe, it } from 'vitest';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { parseCode } from '../../../src/parser/astParser.js';
 import { findDeadCode } from '../../../src/analyzer/deadcode/index.js';
 import { RuleEngine } from '../../../src/analyzer/ruleEngine.js';
 
 describe('Framework-Specific Behavior & TypeScript Advanced Syntax', () => {
-    it('Should preserve Next.js / Remix framework exports (getServerSideProps, metadata, loader, action)', async () => {
-        const code = `
+    it('preserves Next.js exports only in the matching route conventions', async () => {
+        const pagesCode = `
             export async function getServerSideProps() {
                 return { props: {} };
             }
-            export const metadata = { title: 'App' };
-            export async function loader() { return null; }
-            export async function action() { return null; }
             export function unusedFunction() {}
         `;
-        const ast = await parseCode(code, 'page.js');
+        const appCode = `
+            export const metadata = { title: 'App' };
+            export const viewport = { themeColor: 'black' };
+            export const dynamic = 'force-static';
+            export const dynamicParams = false;
+            export async function GET() { return null; }
+            export default function Page() { return null; }
+        `;
+        const routeCode = `
+            export async function GET() { return null; }
+        `;
         const globalRegistry = { usedExports: new Map(), projectExports: new Map() };
-        globalRegistry.usedExports.set('page.js', new Set()); // file di-import oleh sistem (misal routing)
+        globalRegistry.usedExports.set('pages/index.js', new Set());
+        globalRegistry.usedExports.set('app/page.js', new Set());
+        globalRegistry.usedExports.set('app/api/users/route.js', new Set());
 
         const ruleEngine = new RuleEngine();
+        ruleEngine.rules.mode = 'next';
+        ruleEngine.rules.framework = 'next';
         ruleEngine.rules.preserveExports = 'strict';
 
-        const results = await findDeadCode(ast, 'page.js', globalRegistry, ruleEngine);
+        const pagesResults = await findDeadCode(
+            await parseCode(pagesCode),
+            'pages/index.js',
+            globalRegistry,
+            ruleEngine,
+        );
+        const appResults = await findDeadCode(
+            await parseCode(appCode),
+            'app/page.js',
+            globalRegistry,
+            ruleEngine,
+        );
+        const routeResults = await findDeadCode(
+            await parseCode(routeCode),
+            'app/api/users/route.js',
+            globalRegistry,
+            ruleEngine,
+        );
+
+        const pagesUnused = pagesResults.map(result => result.name);
+        const appUnused = appResults.map(result => result.name);
+        const routeUnused = routeResults.map(result => result.name);
+
+        assert.ok(!pagesUnused.includes('getServerSideProps'), 'Pages Router export should be preserved');
+        assert.ok(pagesUnused.includes('unusedFunction'), 'ordinary Pages Router export should still be checked');
+        assert.ok(!appUnused.includes('metadata'), 'App Router metadata should be preserved');
+        assert.ok(!appUnused.includes('viewport'), 'App Router viewport should be preserved');
+        assert.ok(!appUnused.includes('dynamic'), 'App Router route config should be preserved');
+        assert.ok(!appUnused.includes('dynamicParams'), 'dynamicParams should be preserved');
+        assert.ok(!appUnused.includes('Page'), 'App Router default component should be preserved');
+        assert.ok(appUnused.includes('GET'), 'HTTP method should not be preserved in page.js');
+        assert.ok(!routeUnused.includes('GET'), 'HTTP method should be preserved in route.js');
+    });
+
+    it('preserves Next.js metadata file contracts', async () => {
+        const registry = { usedExports: new Map(), projectExports: new Map() };
+        const ruleEngine = new RuleEngine();
+        ruleEngine.rules.mode = 'next';
+        ruleEngine.rules.framework = 'next';
+        ruleEngine.rules.preserveExports = 'strict';
+        const iconFile = 'app/products/icon.tsx';
+        const sitemapFile = 'app/products/sitemap.ts';
+        registry.usedExports.set(iconFile, new Set());
+        registry.usedExports.set(sitemapFile, new Set());
+
+        const iconResults = findDeadCode(
+            await parseCode(`
+                export function generateImageMetadata() { return []; }
+                export default function Icon() { return null; }
+            `),
+            iconFile,
+            registry,
+            ruleEngine,
+        );
+        const sitemapResults = findDeadCode(
+            await parseCode(`
+                export function generateSitemaps() { return []; }
+                export default function sitemap() { return []; }
+            `),
+            sitemapFile,
+            registry,
+            ruleEngine,
+        );
+
+        assert.ok(!iconResults.some(result => ['generateImageMetadata', 'Icon'].includes(result.name)));
+        assert.ok(!sitemapResults.some(result => ['generateSitemaps', 'sitemap'].includes(result.name)));
+    });
+
+    it('preserves Next.js instrumentation and proxy contracts', async () => {
+        const registry = { usedExports: new Map(), projectExports: new Map() };
+        const ruleEngine = new RuleEngine();
+        ruleEngine.rules.mode = 'next';
+        ruleEngine.rules.framework = 'next';
+        ruleEngine.rules.preserveExports = 'strict';
+
+        const instrumentationResults = findDeadCode(
+            await parseCode(`
+                export function register() {}
+                export function onRequestError() {}
+                export function unusedHelper() {}
+            `),
+            'instrumentation.ts',
+            registry,
+            ruleEngine,
+        );
+        const proxyResults = findDeadCode(
+            await parseCode(`
+                export const config = { matcher: '/api/:path*' };
+                export default function proxy() {}
+            `),
+            'src/proxy.ts',
+            registry,
+            ruleEngine,
+        );
+        const mdxResults = findDeadCode(
+            await parseCode('export function useMDXComponents() { return {}; }'),
+            'src/mdx-components.tsx',
+            registry,
+            ruleEngine,
+        );
+        const nestedLookalikeResults = findDeadCode(
+            await parseCode('export function register() {}'),
+            'src/lib/instrumentation.ts',
+            registry,
+            ruleEngine,
+        );
+
+        assert.ok(!instrumentationResults.some(result => ['register', 'onRequestError'].includes(result.name)));
+        assert.ok(instrumentationResults.some(result => result.name === 'unusedHelper'));
+        assert.ok(!proxyResults.some(result => ['config', 'proxy'].includes(result.name)));
+        assert.ok(!mdxResults.some(result => result.name === 'useMDXComponents'));
+        assert.ok(nestedLookalikeResults.some(result => result.name === 'register'));
+    });
+
+    it('preserves Remix exports only in route modules', async () => {
+        const routeCode = `
+            export async function loader() { return null; }
+            export async function action() { return null; }
+            export async function clientLoader() { return null; }
+            export function ErrorBoundary() { return null; }
+            export function unusedFunction() {}
+            export default function Route() { return null; }
+        `;
+        const globalRegistry = { usedExports: new Map(), projectExports: new Map() };
+        globalRegistry.usedExports.set('app/routes/products.jsx', new Set());
+
+        const ruleEngine = new RuleEngine();
+        ruleEngine.rules.mode = 'react';
+        ruleEngine.rules.framework = 'remix';
+        ruleEngine.rules.preserveExports = 'strict';
+
+        const results = await findDeadCode(
+            await parseCode(routeCode),
+            'app/routes/products.jsx',
+            globalRegistry,
+            ruleEngine,
+        );
         const unusedNames = results.map(r => r.name);
 
-        assert.ok(!unusedNames.includes('getServerSideProps'), 'getServerSideProps should be preserved');
-        assert.ok(!unusedNames.includes('metadata'), 'metadata should be preserved');
         assert.ok(!unusedNames.includes('loader'), 'loader should be preserved');
         assert.ok(!unusedNames.includes('action'), 'action should be preserved');
+        assert.ok(!unusedNames.includes('clientLoader'), 'clientLoader should be preserved');
+        assert.ok(!unusedNames.includes('ErrorBoundary'), 'ErrorBoundary should be preserved');
+        assert.ok(!unusedNames.includes('Route'), 'default route component should be preserved');
         assert.ok(unusedNames.includes('unusedFunction'), 'unusedFunction should still be detected as unused');
+    });
+
+    it('does not preserve generic framework-like names in vanilla files', async () => {
+        const code = `
+            export const size = 42;
+            export async function action() { return null; }
+            export async function GET() { return null; }
+        `;
+        const fileName = 'src/domain/commands.js';
+        const globalRegistry = { usedExports: new Map(), projectExports: new Map() };
+        globalRegistry.usedExports.set(fileName, new Set());
+        const ruleEngine = new RuleEngine();
+        ruleEngine.rules.mode = 'vanilla';
+        ruleEngine.rules.preserveExports = 'strict';
+
+        const results = await findDeadCode(
+            await parseCode(code),
+            fileName,
+            globalRegistry,
+            ruleEngine,
+        );
+        const unusedNames = results.map(result => result.name);
+
+        assert.ok(unusedNames.includes('size'));
+        assert.ok(unusedNames.includes('action'));
+        assert.ok(unusedNames.includes('GET'));
+    });
+
+    it('uses effective per-file rules and honors preserveUnsafeFiles', async () => {
+        const code = `export function unusedExport() {}`;
+        const fileName = 'src/unsafe.js';
+        const globalRegistry = {
+            usedExports: new Map([[fileName, new Set()]]),
+            projectExports: new Map(),
+            unsafeFiles: new Set([fileName]),
+        };
+        let effectiveRulesCalls = 0;
+        const ruleEngine = {
+            rules: { preserveExports: true, preserveUnsafeFiles: true, mode: 'next' },
+            effectiveRulesFor(receivedFileName) {
+                effectiveRulesCalls += 1;
+                assert.equal(receivedFileName, fileName);
+                return {
+                    preserveExports: 'strict',
+                    preserveUnsafeFiles: false,
+                    mode: 'vanilla',
+                };
+            },
+            isIgnoredVariable: () => false,
+        };
+
+        const results = await findDeadCode(
+            await parseCode(code),
+            fileName,
+            globalRegistry,
+            ruleEngine,
+        );
+
+        assert.ok(effectiveRulesCalls >= 2, 'seluruh analyzer harus meminta aturan efektif file');
+        assert.ok(results.some(result => result.name === 'unusedExport'));
+    });
+
+    it('applies preserveExports from a real RuleEngine file override', async () => {
+        const projectRoot = path.resolve('virtual-deadkiller-project');
+        const testFile = path.join(projectRoot, 'test', 'public-api.js');
+        const sourceFile = path.join(projectRoot, 'src', 'internal.js');
+        const code = 'export const unusedExport = 1;';
+        const registry = {
+            usedExports: new Map([
+                [testFile, new Set()],
+                [sourceFile, new Set()],
+            ]),
+            projectExports: new Map(),
+            unsafeFiles: new Set(),
+        };
+        const ruleEngine = new RuleEngine();
+        ruleEngine.projectRoot = projectRoot;
+        ruleEngine.rules.preserveExports = 'strict';
+        ruleEngine.rules.overrides = [{ files: ['test/**'], preserveExports: true }];
+
+        const testFindings = findDeadCode(
+            await parseCode(code),
+            testFile,
+            registry,
+            ruleEngine,
+        );
+        const sourceFindings = findDeadCode(
+            await parseCode(code),
+            sourceFile,
+            registry,
+            ruleEngine,
+        );
+
+        assert.ok(!testFindings.some(result => result.name === 'unusedExport'));
+        assert.ok(sourceFindings.some(result => result.name === 'unusedExport'));
     });
 
     it('Should preserve exports in files or functions with "use server" or "use client" directives', async () => {

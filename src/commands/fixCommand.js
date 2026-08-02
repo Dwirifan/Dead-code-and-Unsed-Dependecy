@@ -15,6 +15,10 @@ import { generateDiff } from '../eliminator/diffGenerator.js';
 import { createBackup, rollbackBackup } from '../eliminator/backupManager.js';
 import { RuleEngine } from '../analyzer/ruleEngine.js';
 import {
+    assertExistingPathInsideRoot,
+    isExistingPathInsideRoot,
+} from '../analyzer/pathContainment.js';
+import {
     buildGraphWithInteractiveFallback,
     findProjectRoot,
     printConfigDiagnostics,
@@ -66,12 +70,19 @@ export function registerFixCommand(program) {
 async function _fixSingleFile(absolutePath, startTime, inquirer, level = 3, autoConfirm = false) {
     console.log(chalk.cyan(`\n[>] Fix mode: file tunggal — ${path.basename(absolutePath)}\n`));
 
+    const projectRoot = await findProjectRoot(path.dirname(absolutePath));
+    try {
+        assertExistingPathInsideRoot(projectRoot, absolutePath, 'memperbaiki');
+    } catch (error) {
+        console.error(chalk.red(`[ABORTED] ${error.message}`));
+        return;
+    }
+
     let code;
     try { code = await fs.readFile(absolutePath, 'utf-8'); }
     catch (e) { console.error(`[ERROR] Tidak bisa membaca file: ${e.message}`); process.exit(1); }
 
     const ruleEngine = new RuleEngine();
-    const projectRoot = await findProjectRoot(path.dirname(absolutePath));
     await ruleEngine.loadConfig(projectRoot);
     printConfigDiagnostics(ruleEngine);
 
@@ -125,7 +136,8 @@ async function _fixSingleFile(absolutePath, startTime, inquirer, level = 3, auto
     }
 
     // Terapkan aturan Modul Eliminator
-    const eliminatorConfig = ruleEngine.rules.eliminator || {};
+    const effectiveRules = ruleEngine.effectiveRulesFor(absolutePath);
+    const eliminatorConfig = effectiveRules.eliminator || {};
     if (eliminatorConfig.autoRenameUnusedParameters) {
         deadNodes.forEach(n => { if (n.type === 'Parameter') n.status = 'safe'; });
     }
@@ -142,7 +154,7 @@ async function _fixSingleFile(absolutePath, startTime, inquirer, level = 3, auto
     }
 
     const simLevel = level === 0 ? 3 : level;
-    const newCode = removeDeadCode(code, nodesToProcess, ruleEngine, simLevel);
+    const newCode = removeDeadCode(code, nodesToProcess, { rules: effectiveRules }, simLevel);
     const diff = generateDiff(code, newCode, path.basename(absolutePath));
     console.log(chalk.gray('\n--- Preview ---'));
     console.log(diff);
@@ -164,7 +176,8 @@ async function _fixSingleFile(absolutePath, startTime, inquirer, level = 3, auto
     if (!ok) { console.log(chalk.gray('[.] Dibatalkan.\n')); return; }
 
     let backupDir;
-    try { 
+    try {
+        assertExistingPathInsideRoot(projectRoot, absolutePath, 'mencadangkan');
         const maxBackups = eliminatorConfig.maxBackups !== undefined ? eliminatorConfig.maxBackups : 20;
         backupDir = await createBackup(projectRoot, [absolutePath], false, maxBackups);
         console.log(chalk.gray(`   [ok] Checkpoint backup dibuat di ${path.relative(projectRoot, backupDir)}`));
@@ -175,6 +188,7 @@ async function _fixSingleFile(absolutePath, startTime, inquirer, level = 3, auto
     }
 
     try {
+        assertExistingPathInsideRoot(projectRoot, absolutePath, 'menulis');
         await fs.writeFile(absolutePath, newCode);
     } catch (err) {
         console.error(chalk.red(`\n[ERROR] Gagal menulis file: ${err.message}`));
@@ -237,8 +251,11 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
     const allFiles = (await glob([SCRIPT_GLOB], {
         cwd: absolutePath,
         ignore: ['**/node_modules/**', '**/dist/**', '**/coverage/**', '*.config.*', '.*.js', '.*.mjs', '.*.ts'],
-        absolute: true
-    })).map(f => path.resolve(f));
+        absolute: true,
+        followSymbolicLinks: false,
+    }))
+        .map(f => path.resolve(f))
+        .filter(file => isExistingPathInsideRoot(absolutePath, file));
 
     const preservedFiles = allFiles.filter(f => ruleEngine.isPreservedFile(f, absolutePath));
     const deadFiles = allFiles
@@ -257,6 +274,7 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
         // Skip file yang bukan JavaScript/TypeScript (tidak bisa di-parse)
         const ext = path.extname(file).toLowerCase();
         if (!SCRIPT_EXTENSION_SET.has(ext) || file.includes('node_modules')) continue;
+        if (!isExistingPathInsideRoot(absolutePath, file)) continue;
         if (ruleEngine.isIgnoredFile(file, absolutePath)) continue;
         const protectedFile = ruleEngine.isPreservedFile(file, absolutePath);
 
@@ -285,7 +303,8 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
             const allDead = findDeadCode(ast, file, graph.globalRegistry, ruleEngine);
 
             // Terapkan aturan Modul Eliminator
-            const eliminatorConfig = ruleEngine.rules.eliminator || {};
+            const effectiveRules = ruleEngine.effectiveRulesFor(file);
+            const eliminatorConfig = effectiveRules.eliminator || {};
             if (eliminatorConfig.autoRenameUnusedParameters) {
                 allDead.forEach(n => { if (n.type === 'Parameter') n.status = 'safe'; });
             }
@@ -308,7 +327,7 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
 
             if (nodesToProcess.length > 0) {
                 const simLevel = level === 0 ? 3 : level;
-                const newCode = removeDeadCode(code, nodesToProcess, ruleEngine, simLevel);
+                const newCode = removeDeadCode(code, nodesToProcess, { rules: effectiveRules }, simLevel);
                 newLoc += newCode.split('\n').length;
                 newSize += Buffer.byteLength(newCode);
                 deadCodeReport.push({
@@ -466,6 +485,9 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
     const filesToBackup = [...deadFiles, ...deadCodeReport.map(r => r.file)];
     let backupDir;
     try {
+        filesToBackup.forEach(file => (
+            assertExistingPathInsideRoot(absolutePath, file, 'mencadangkan')
+        ));
         const eliminatorConfig = ruleEngine.rules.eliminator || {};
         const maxBackups = eliminatorConfig.maxBackups !== undefined ? eliminatorConfig.maxBackups : 20;
         backupDir = await createBackup(absolutePath, filesToBackup, selectedDepsToRemove.length > 0, maxBackups);
@@ -481,10 +503,12 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
         // Package manager selalu menjadi langkah terakhir sehingga tidak ada
         // mutasi source lain yang dapat gagal setelah uninstall berhasil.
         for (const f of deadFiles) {
+            assertExistingPathInsideRoot(absolutePath, f, 'menghapus');
             await fs.remove(f);
             console.log(chalk.green(`   [ok] Dihapus: ${path.relative(absolutePath, f)}`));
         }
         for (const { file, newCode } of deadCodeReport) {
+            assertExistingPathInsideRoot(absolutePath, file, 'menulis');
             await fs.writeFile(file, newCode);
             console.log(chalk.green(`   [ok] Dibersihkan: ${path.relative(absolutePath, file)}`));
         }
