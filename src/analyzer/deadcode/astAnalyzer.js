@@ -791,6 +791,33 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                         ? false
                         : null,
                 };
+                // Fuzzy Member Tracing - Phase 4 Evaluasi:
+                if (info.type === 'UnusedClassMember') {
+                    const memberName = info.memberName || name.split('#')[1];
+                    const projectMemberNames = globalRegistry?.allProjectMemberNames;
+                    if (projectMemberNames && memberName) {
+                        if (!projectMemberNames.has(memberName)) {
+                            // Nama ini TIDAK pernah dipanggil di seluruh proyek -> 100% mati
+                            confidence = 'high';
+                            status = 'safe';
+                            reason = `Metode/properti '${memberName}' tidak ditemukan di seluruh basis kode proyek (Fuzzy Member Tracing).`;
+                        } else {
+                            // Nama ada di proyek, tapi bisa dari kelas lain -> tidak bisa memastikan
+                            originalStatus = status;
+                            confidence = 'low';
+                            status = 'review';
+                            uncertainty = 'cross-file-class-member-ambiguous';
+                            reason = `Metode/properti '${memberName}' ditemukan di proyek namun tidak dapat diverifikasi milik kelas ini tanpa Type Checker.`;
+                        }
+                    } else {
+                        // Tidak ada registry atau globalMemberNames belum siap
+                        originalStatus = status;
+                        confidence = 'low';
+                        status = 'review';
+                        uncertainty = 'cross-file-class-member-unproven';
+                        reason = `Metode/properti kelas tidak dapat diverifikasi secara lintas file; wajib ditinjau manual.`;
+                    }
+                }
 
                 deadCode.push({
                     name,
@@ -806,9 +833,15 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     proof,
                     ...(originalStatus ? { originalStatus } : {}),
                     ...(uncertainty ? { uncertainty } : {}),
+                    ...(info.type === 'UnusedClassMember' ? {
+                        memberName: info.memberName,
+                        ownerClass: info.ownerClass,
+                        isStatic: info.isStatic,
+                    } : {}),
                     analysisBackend: tsScopeManager ? 'scope-manager' : 'legacy-fallback'
                 });
            }
+
        });
     });
 
