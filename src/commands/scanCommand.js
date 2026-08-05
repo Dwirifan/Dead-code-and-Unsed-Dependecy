@@ -114,7 +114,15 @@ export function registerScanCommand(program) {
 
                     const code = await fs.readFile(absolutePath, 'utf-8');
                     const ast = await parseCode(code, absolutePath);
-                    const registry = { usedExports: new Map(), unsafeFiles: new Set() };
+                    const registry = {
+                        usedExports: new Map(),
+                        unsafeFiles: new Set(),
+                        graphCompleteness: {
+                            status: 'unknown',
+                            complete: false,
+                            reasons: ['scan satu file tidak membangun graph proyek'],
+                        },
+                    };
                     const deadNodes = findDeadCode(ast, absolutePath, registry, ruleEngine);
                     const protectedFile = ruleEngine.isPreservedFile(absolutePath, projectRoot);
                     const report = applyFailPolicy(createSingleFileScanReport({
@@ -185,6 +193,14 @@ export function registerScanCommand(program) {
             }
             spinner?.succeed(`Graf terbentuk: ${graph.liveFiles.size} File Aktif dipetakan.`);
 
+            if (graph.completeness?.complete === false && !jsonMode) {
+                console.log(chalk.yellow(`\n[!] MODULE GRAPH ${graph.completeness.status.toUpperCase()} — keputusan lintas file memakai fail-closed.`));
+                graph.completeness.reasons.forEach(reason => (
+                    console.log(chalk.gray(`   - ${reason}`))
+                ));
+                console.log(chalk.gray('   Export yang tidak memiliki bukti penggunaan diturunkan ke REVIEW, bukan SAFE.'));
+            }
+
             // Peringatan file dengan pola dinamis (eval, computed property, dynamic import)
             if (graph.unsafeFiles && graph.unsafeFiles.size > 0) {
                 console.log(chalk.yellow(`\n================================================================================`));
@@ -225,16 +241,22 @@ export function registerScanCommand(program) {
                     depReport.safety?.reasons?.forEach(reason => console.log(chalk.gray(`     alasan: ${reason}`)));
                 }
 
-                // (2) Missing Dependencies (pakai di kode tapi tidak di package.json)
+                // (2) Missing Dependencies (Benar-benar tidak ada di node_modules maupun package.json)
                 if (depReport.missing && depReport.missing.length > 0) {
-                    console.log(chalk.red(`\n[!] [Missing Dependencies] (${depReport.missing.length}) — Dipakai di kode tapi tidak dideklarasikan di package.json:`))
-                    console.log(chalk.gray('    Paket ini mungkin tersedia sebagai sub-dependency sekarang, tapi berisiko hilang jika dependensi induknya berubah.'));
+                    console.log(chalk.red(`\n[!] [Missing Dependencies] (${depReport.missing.length}) — Dipakai di kode tapi tidak dideklarasikan dan tidak ditemukan di node_modules:`));
                     depReport.missing.forEach(d => console.log(`   - ${chalk.red(d)}`));
+                }
+
+                // (2.1) Phantom Dependencies (Dipakai di kode, tidak ada di package.json, tapi ADA di node_modules)
+                if (depReport.phantomDeps && depReport.phantomDeps.length > 0) {
+                    console.log(chalk.red(`\n[!] [Phantom Dependencies] (${depReport.phantomDeps.length}) — Dipakai di kode tapi tidak dideklarasikan di package.json:`));
+                    console.log(chalk.gray('    Paket ini ter-install otomatis via dependensi lain (Phantom), tapi berisiko rusak jika dependensi induk berubah. Harap daftarkan eksplisit.'));
+                    depReport.phantomDeps.forEach(d => console.log(`   - ${chalk.red(d)}`));
                 }
 
                 // FITUR 9: Missing Binaries
                 if (depReport.missingBinaries && depReport.missingBinaries.length > 0) {
-                    console.log(chalk.red(`\n[!] [Missing Binaries] (${depReport.missingBinaries.length}) — Dipanggil di npm scripts tapi tidak di-install:`))
+                    console.log(chalk.red(`\n[!] [Missing Binaries] (${depReport.missingBinaries.length}) — Dipanggil di npm scripts tapi tidak di-install:`));
                     depReport.missingBinaries.forEach(d => console.log(`   - ${chalk.red(d)}`));
                 }
 
@@ -258,7 +280,6 @@ export function registerScanCommand(program) {
                 dependencyAnalysisError = err.message;
                 console.warn(chalk.yellow(`[Warning] Analisis dependency gagal; status dependency dianggap UNKNOWN: ${err.message}`));
             }
-
             // Dead files — normalisasi path glob ke format OS lokal
             const allFiles = (await glob([SCRIPT_GLOB], {
                 cwd: absolutePath,
@@ -290,7 +311,11 @@ export function registerScanCommand(program) {
                 console.log(chalk.gray('Import statement menunjuk ke path yang tidak dapat ditemukan di disk.'));
                 console.log(`================================================`);
                 graph.globalRegistry.unresolvedImports.forEach(ui => {
-                    console.log(`   - ${chalk.red(ui.importPath)} (di ${path.relative(absolutePath, ui.file)})`);
+                    const reasonCode = ui.reasonCode ? ` [${ui.reasonCode}]` : '';
+                    console.log(`   - ${chalk.red(ui.importPath)}${reasonCode} (di ${path.relative(absolutePath, ui.file)})`);
+                    if (ui.configPath) {
+                        console.log(chalk.gray(`     config: ${path.relative(absolutePath, ui.configPath)}`));
+                    }
                 });
             }
 

@@ -79,6 +79,45 @@ describe('Fix Command Safety & Dry-Run Tests', () => {
         expect(await fs.pathExists(path.join(tmpDir, '.deadkiller_backup'))).toBe(false);
     });
 
+    it('melindungi export pada fix satu file karena graph proyek tidak dibangun', async () => {
+        const filePath = path.join(tmpDir, 'public-api.js');
+        const initialCode = "export const getAccessToken = () => 'token';\n";
+        await fs.writeJson(path.join(tmpDir, 'package.json'), {
+            name: 'single-file-application',
+            private: true,
+            main: 'public-api.js',
+        });
+        await fs.writeJson(path.join(tmpDir, '.deadkillerrc.json'), {
+            preserveExports: false,
+        });
+        await fs.writeFile(filePath, initialCode);
+
+        const program = new Command();
+        registerFixCommand(program);
+        await program.parseAsync(['node', 'test', 'fix', filePath, '--yes']);
+
+        expect(await fs.readFile(filePath, 'utf8')).toBe(initialCode);
+        expect(await fs.pathExists(path.join(tmpDir, '.deadkiller_backup'))).toBe(false);
+    });
+
+    it('memblokir penghapusan file tak terjangkau ketika module graph parsial', async () => {
+        const entryPath = path.join(tmpDir, 'index.js');
+        const orphanPath = path.join(tmpDir, 'orphan.js');
+        await fs.writeJson(path.join(tmpDir, 'package.json'), {
+            name: 'partial-graph-project',
+            main: 'index.js',
+        });
+        await fs.writeFile(entryPath, "import './missing.js';\nconsole.log('runtime');\n");
+        await fs.writeFile(orphanPath, "console.log('must stay');\n");
+
+        const program = new Command();
+        registerFixCommand(program);
+        await program.parseAsync(['node', 'test', 'fix', tmpDir, '--yes']);
+
+        expect(await fs.pathExists(orphanPath)).toBe(true);
+        expect(await fs.pathExists(path.join(tmpDir, '.deadkiller_backup'))).toBe(false);
+    });
+
     it('menolak memperbaiki symlink file yang mengarah keluar root proyek', async () => {
         await fs.writeJson(path.join(tmpDir, 'package.json'), {
             name: 'fix-boundary-project',

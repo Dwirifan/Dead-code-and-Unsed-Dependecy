@@ -36,14 +36,17 @@ describe('Smart Background Analysis 3 Lapis untuk Ignored Variables', () => {
         assert.ok(hasResult(results, '_temp'), '_temp harus terdeteksi mati');
     });
 
-    it('TC-SMART-03: Parameter fungsi dan callback berawalan _ TETAP dilindungi (di-skip)', async () => {
+    it('TC-SMART-03: Parameter positional berawalan _ tetap dilaporkan sebagai anomali RISKY', async () => {
         const code = `
             function process(_req, res) {
                 return res.send('ok');
             }
         `;
         const results = await analyze(code, engine);
-        assert.ok(!hasResult(results, '_req'), 'Parameter _req tidak boleh dilaporkan mati');
+        const finding = results.find(result => result.name === '_req');
+        assert.ok(finding, 'Parameter _req harus dilaporkan melalui kebijakan positional khusus');
+        assert.strictEqual(finding.positional, true);
+        assert.strictEqual(finding.status, 'risky');
     });
 
     it('TC-SMART-04: Parameter blok catch berawalan _ TETAP dilindungi (di-skip)', async () => {

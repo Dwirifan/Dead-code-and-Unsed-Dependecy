@@ -28,12 +28,14 @@ const LIST_FIELDS = new Set([
 const BOOLEAN_FIELDS = new Set([
     'preserveUnsafeFiles',
     'detectDeadStores',
+    'reportPositionalParameters',
 ]);
 
 const OVERRIDE_FIELDS = new Set([
     'mode',
     'framework',
     'ignorePrefixedVariables',
+    'reportPositionalParameters',
     'preserveExports',
     'reactRuntime',
     'preserveUnsafeFiles',

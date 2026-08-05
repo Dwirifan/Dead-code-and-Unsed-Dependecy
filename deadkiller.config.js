@@ -9,6 +9,7 @@ export default {
         'vitest.config.js',
     ],
     ignorePrefixedVariables: '^_',
+    reportPositionalParameters: true,
     preserveExports: true,
     preserveUnsafeFiles: true,
     preserveFiles: [

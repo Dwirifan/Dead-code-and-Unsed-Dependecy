@@ -6,6 +6,109 @@ import { findDeadCode } from '../../../src/analyzer/deadcode/index.js';
 import { RuleEngine } from '../../../src/analyzer/ruleEngine.js';
 
 describe('Framework-Specific Behavior & TypeScript Advanced Syntax', () => {
+    it('menurunkan export SAFE menjadi REVIEW ketika module graph tidak lengkap', async () => {
+        const fileName = 'src/controllers/auth.ts';
+        const registry = {
+            usedExports: new Map([[fileName, new Set()]]),
+            projectExports: new Map(),
+            unsafeFiles: new Set(),
+            graphCompleteness: {
+                status: 'partial',
+                complete: false,
+                reasons: ['1 import belum terselesaikan'],
+            },
+        };
+        const ruleEngine = new RuleEngine();
+        ruleEngine.rules.preserveExports = false;
+        const results = findDeadCode(
+            await parseCode(`
+                export const getAccessToken = () => 'token';
+                const localUnused = 1;
+            `),
+            fileName,
+            registry,
+            ruleEngine,
+        );
+
+        const exportedFinding = results.find(result => result.name === 'getAccessToken');
+        assert.ok(exportedFinding);
+        assert.equal(exportedFinding.status, 'review');
+        assert.equal(exportedFinding.originalStatus, 'safe');
+        assert.equal(exportedFinding.uncertainty, 'module-graph-incomplete');
+        assert.equal(exportedFinding.proof.crossFileRequired, true);
+        assert.equal(exportedFinding.proof.moduleResolutionComplete, false);
+
+        const localFinding = results.find(result => result.name === 'localUnused');
+        assert.ok(localFinding);
+        assert.equal(localFinding.status, 'safe', 'binding lokal tidak bergantung pada graph lintas file');
+    });
+
+    it('mempertahankan bukti SAFE pada komponen sehat meskipun graph proyek partial', async () => {
+        const fileName = 'src/healthy/service.ts';
+        const registry = {
+            usedExports: new Map([[fileName, new Set()]]),
+            projectExports: new Map(),
+            unsafeFiles: new Set(),
+            graphCompleteness: {
+                status: 'partial',
+                complete: false,
+                reasons: ['1 import belum terselesaikan di entry point lain'],
+            },
+            fileGraphCompleteness: new Map([[
+                fileName,
+                {
+                    id: 0,
+                    status: 'complete',
+                    complete: true,
+                    reasons: [],
+                },
+            ]]),
+        };
+        const ruleEngine = new RuleEngine();
+        ruleEngine.rules.preserveExports = false;
+
+        const results = findDeadCode(
+            await parseCode(`export const unusedHealthyExport = 1;`),
+            fileName,
+            registry,
+            ruleEngine,
+        );
+        const finding = results.find(result => result.name === 'unusedHealthyExport');
+
+        assert.ok(finding);
+        assert.equal(finding.status, 'safe');
+        assert.equal(finding.proof.moduleGraphStatus, 'complete');
+        assert.equal(finding.proof.moduleGraphComponentId, 0);
+        assert.equal(finding.proof.projectGraphStatus, 'partial');
+        assert.equal(finding.proof.moduleResolutionComplete, true);
+    });
+
+    it('tidak menyatakan member enum export SAFE tanpa bukti penggunaan member lintas file', async () => {
+        const fileName = 'src/StatusCode.ts';
+        const registry = {
+            usedExports: new Map([[fileName, new Set(['StatusCode'])]]),
+            projectExports: new Map(),
+            unsafeFiles: new Set(),
+            graphCompleteness: { status: 'complete', complete: true, reasons: [] },
+        };
+        const ruleEngine = new RuleEngine();
+        ruleEngine.rules.preserveExports = false;
+        const results = findDeadCode(
+            await parseCode(`export enum StatusCode { OK, RETRY }`),
+            fileName,
+            registry,
+            ruleEngine,
+        );
+
+        const memberFindings = results.filter(result => result.type === 'UnusedEnumMember');
+        assert.equal(memberFindings.length, 2);
+        memberFindings.forEach(finding => {
+            assert.equal(finding.status, 'review');
+            assert.equal(finding.uncertainty, 'cross-file-enum-member-unproven');
+            assert.equal(finding.proof.semanticReferenceComplete, false);
+        });
+    });
+
     it('preserves Next.js exports only in the matching route conventions', async () => {
         const pagesCode = `
             export async function getServerSideProps() {

@@ -181,4 +181,25 @@ describe('Graph Visualizer (HTML Generator)', () => {
         expect(html).toContain('rbadge-protected');
         expect(html).toContain('Temuan dianalisis dan dilaporkan');
     });
+
+    it('menampilkan status module graph parsial dan alasan fail-closed', () => {
+        const mockGraph = { liveFiles: new Set(['/src/index.js']), usedPackages: new Set(), edges: [] };
+        const html = generateMermaidGraph(mockGraph, '/src', undefined, {
+            safeNodes: [],
+            reviewNodes: [],
+            riskyNodes: [],
+            protectedNodes: [],
+            deadFiles: [],
+            unsafeFiles: [],
+            graphAnalysis: {
+                status: 'partial',
+                complete: false,
+                reasons: ['1 import belum terselesaikan'],
+            },
+        });
+
+        expect(html).toContain('Module Graph: PARTIAL');
+        expect(html).toContain('Fail-closed aktif');
+        expect(html).toContain('1 import belum terselesaikan');
+    });
 });

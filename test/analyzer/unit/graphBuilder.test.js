@@ -85,15 +85,70 @@ describe('[TC-G01] BFS Traversal & Entry Point Finder', () => {
     it('TC-G01: Graph Builder menemukan semua file yang dapat dijangkau via BFS', async () => {
         const proyekDummy = await buatProyekDummy();
         try {
-            const { liveFiles } = await buildProjectGraph(proyekDummy);
+            const graph = await buildProjectGraph(proyekDummy);
+            const { liveFiles } = graph;
 
             assert.ok(liveFiles instanceof Set, 'liveFiles harus berupa Set');
             assert.ok(liveFiles.size > 0, 'BFS harus menemukan setidaknya satu file dari entry point');
+            assert.equal(graph.completeness.status, 'complete');
+            assert.equal(graph.completeness.complete, true);
 
             const entries = [...liveFiles].map(f => path.basename(f));
             assert.ok(entries.includes('index.js'), 'index.js (entry point) harus ada di liveFiles');
         } finally {
             await fs.remove(proyekDummy);
+        }
+    });
+
+    it('menandai graph partial ketika file reachable gagal diparse', async () => {
+        const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'deadkiller-parse-failure-'));
+        try {
+            await fs.writeJson(path.join(projectRoot, 'package.json'), {
+                name: 'parse-failure-project',
+                main: 'index.ts',
+            });
+            await fs.writeFile(path.join(projectRoot, 'index.ts'), 'const = ;\n');
+
+            const graph = await buildProjectGraph(projectRoot);
+
+            assert.equal(graph.completeness.status, 'partial');
+            assert.equal(graph.completeness.complete, false);
+            assert.equal(graph.completeness.parseFailureCount, 1);
+            assert.equal(graph.globalRegistry.parseFailures.length, 1);
+            assert.equal(graph.globalRegistry.parseFailures[0].reason, 'parse-error');
+        } finally {
+            await fs.remove(projectRoot);
+        }
+    });
+
+    it('menandai semua komponen tidak pasti ketika konfigurasi resolver invalid', async () => {
+        const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'deadkiller-invalid-config-'));
+        try {
+            await fs.writeJson(path.join(projectRoot, 'package.json'), {
+                name: 'invalid-config-project',
+                main: 'index.ts',
+            });
+            await fs.writeJson(path.join(projectRoot, 'tsconfig.json'), {
+                extends: './missing-base.json',
+            });
+            await fs.writeFile(
+                path.join(projectRoot, 'index.ts'),
+                "import { value } from './service.js';\nconsole.log(value);\n",
+            );
+            await fs.writeFile(path.join(projectRoot, 'service.ts'), 'export const value = 1;\n');
+
+            const graph = await buildProjectGraph(projectRoot);
+            const component = graph.globalRegistry.fileGraphCompleteness.get(
+                path.join(projectRoot, 'service.ts'),
+            );
+
+            assert.equal(graph.completeness.status, 'partial');
+            assert.ok(graph.globalRegistry.resolverDiagnostics.length > 0);
+            assert.ok(graph.completeness.resolverDiagnosticCount > 0);
+            assert.equal(component.status, 'partial');
+            assert.match(component.reasons.join(' '), /konfigurasi resolver/);
+        } finally {
+            await fs.remove(projectRoot);
         }
     });
 
@@ -121,6 +176,54 @@ describe('[TC-G01] BFS Traversal & Entry Point Finder', () => {
         }
     });
 
+    it('mengisolasi kelengkapan graph per komponen entry point', async () => {
+        const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'deadkiller-components-'));
+        try {
+            await fs.writeJson(path.join(projectRoot, 'package.json'), {
+                name: 'component-project',
+            });
+            await fs.writeFile(
+                path.join(projectRoot, 'healthy.ts'),
+                "import { value } from './healthy-service.js';\nconsole.log(value);\n",
+            );
+            await fs.writeFile(
+                path.join(projectRoot, 'healthy-service.ts'),
+                'export const value = 1;\n',
+            );
+            await fs.writeFile(
+                path.join(projectRoot, 'broken.ts'),
+                "import './missing.js';\n",
+            );
+
+            const ruleEngine = new RuleEngine();
+            ruleEngine.rules.entryPoints = ['healthy.ts', 'broken.ts'];
+            const graph = await buildProjectGraph(projectRoot, ruleEngine);
+            const healthyComponent = graph.globalRegistry.fileGraphCompleteness.get(
+                path.join(projectRoot, 'healthy-service.ts'),
+            );
+            const brokenComponent = graph.globalRegistry.fileGraphCompleteness.get(
+                path.join(projectRoot, 'broken.ts'),
+            );
+
+            assert.equal(graph.completeness.status, 'partial');
+            assert.equal(graph.globalRegistry.graphComponents.length, 2);
+            assert.equal(healthyComponent.status, 'complete');
+            assert.equal(brokenComponent.status, 'partial');
+            assert.equal(brokenComponent.unresolvedImportCount, 1);
+            assert.equal(
+                graph.globalRegistry.unresolvedImports[0].reasonCode,
+                'RESOLVE_NOT_FOUND',
+            );
+            assert.ok(graph.edges.some(edge => (
+                edge.specifier === './healthy-service.js' &&
+                edge.resolutionStrategy.includes('ts-extension-substitution') &&
+                edge.confidence === 'proven'
+            )));
+        } finally {
+            await fs.remove(projectRoot);
+        }
+    });
+
     it('menolak import relatif yang keluar dari root proyek', async () => {
         const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'deadkiller-graph-boundary-'));
         const projectRoot = path.join(fixtureRoot, 'project');
@@ -141,6 +244,10 @@ describe('[TC-G01] BFS Traversal & Entry Point Finder', () => {
             assert.ok(graph.globalRegistry.unresolvedImports.some(item => (
                 item.importPath === '../outside.js' && item.reason === 'outside-project-root'
             )));
+            assert.equal(graph.completeness.status, 'partial');
+            assert.equal(graph.completeness.complete, false);
+            assert.equal(graph.completeness.unresolvedImportCount, 1);
+            assert.match(graph.completeness.reasons.join(' '), /import belum terselesaikan/);
         } finally {
             await fs.remove(fixtureRoot);
         }

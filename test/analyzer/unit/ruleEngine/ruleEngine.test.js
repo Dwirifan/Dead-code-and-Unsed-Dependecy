@@ -78,6 +78,11 @@ describe('Rule Engine — Konfigurasi & Filter', () => {
         assert.strictEqual(engine.rules.preserveUnsafeFiles, false);
     });
 
+    it('melaporkan positional parameter secara default', () => {
+        const engine = new RuleEngine();
+        assert.strictEqual(engine.rules.reportPositionalParameters, true);
+    });
+
     it('mendukung glob ignoreFiles rekursif yang dihasilkan init', () => {
         const engine = new RuleEngine();
         engine.rules.ignoreFiles = ['**/dist/**', '**/.next/**', 'legacy-build'];

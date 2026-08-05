@@ -67,6 +67,40 @@ describe('Dependency Report Service safety policy', () => {
         expect(report.safety.unsupportedFiles[0]).toMatch(/app\.vue$/);
     });
 
+    it('moves candidates to UNKNOWN when a reachable source fails to parse', async () => {
+        const failedFile = path.join(projectRoot, 'index.js');
+        const report = await analyzeProjectDependencies(projectRoot, graph({
+            globalRegistry: {
+                unresolvedImports: [],
+                parseFailures: [{ file: failedFile, reason: 'parse-error' }],
+            },
+        }));
+
+        expect(report.analysisComplete).toBe(false);
+        expect(report.unused).toEqual([]);
+        expect(report.uncertain).toContain('axios');
+        expect(report.safety.parseFailures).toHaveLength(1);
+        expect(report.safety.reasons.join(' ')).toMatch(/gagal dianalisis/);
+    });
+
+    it('moves candidates to UNKNOWN when module configuration is invalid', async () => {
+        const report = await analyzeProjectDependencies(projectRoot, graph({
+            globalRegistry: {
+                unresolvedImports: [],
+                resolverDiagnostics: [{
+                    configName: 'tsconfig.json',
+                    message: 'missing base config',
+                }],
+            },
+        }));
+
+        expect(report.analysisComplete).toBe(false);
+        expect(report.unused).toEqual([]);
+        expect(report.uncertain).toContain('axios');
+        expect(report.safety.resolverDiagnostics).toHaveLength(1);
+        expect(report.safety.reasons.join(' ')).toMatch(/resolver tidak valid/);
+    });
+
     it('does not block dependency cleanup for generic computed properties alone', async () => {
         const computedFile = path.join(projectRoot, 'index.js');
         const report = await analyzeProjectDependencies(projectRoot, graph({

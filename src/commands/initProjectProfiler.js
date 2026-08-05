@@ -117,6 +117,7 @@ function detectLanguage(projectRoot, dependencies, sourceFiles) {
     return hasTypeScript ? 'typescript' : 'javascript';
 }
 
+
 function reactMajorVersion(dependenciesByName) {
     const rawVersion = dependenciesByName.react;
     if (!rawVersion) return null;
@@ -132,6 +133,41 @@ function detectJsxRuntime(dependenciesByName, tsconfig) {
     return usesAutomaticJsx || automaticFramework || (reactMajor !== null && reactMajor >= 17)
         ? 'automatic'
         : 'classic';
+}
+
+function extractEntryPoints(pkg, projectRoot) {
+    const entryPoints = new Set();
+    if (pkg.main) entryPoints.add(pkg.main);
+
+    if (pkg.bin) {
+        if (typeof pkg.bin === 'string') {
+            entryPoints.add(pkg.bin);
+        } else if (typeof pkg.bin === 'object') {
+            Object.values(pkg.bin).forEach(v => {
+                if (typeof v === 'string') entryPoints.add(v);
+            });
+        }
+    }
+
+    if (pkg.scripts) {
+        Object.values(pkg.scripts).forEach(script => {
+            if (typeof script !== 'string') return;
+            // Deteksi command runner: node, nodemon, ts-node, bun, deno
+            const regex = /(?:node|nodemon|ts-node|bun(?: run)?|deno(?: run)?)\s+([^\s&|;]+)/ig;
+            let match;
+            while ((match = regex.exec(script)) !== null) {
+                const file = match[1];
+                if (!file.startsWith('-')) { // Abaikan flag
+                    entryPoints.add(file);
+                }
+            }
+        });
+    }
+
+    // Normalisasi path separator dan buang file yang tidak ada (hindari FP 'index.js' bawaan npm init)
+    return Array.from(entryPoints)
+        .map(ep => ep.replace(/\\/g, '/'))
+        .filter(ep => fs.existsSync(path.join(projectRoot, ep)));
 }
 
 export async function inspectProject(projectRoot) {
@@ -182,28 +218,22 @@ export async function inspectProject(projectRoot) {
         // zero-config tetap konservatif dan tidak menyesatkan pemula.
         preserveExports: !hasPackageJson || ['library', 'cli', 'monorepo'].includes(projectType),
         reactRuntime: detectJsxRuntime(dependenciesByName, tsconfig),
+        entryPoints: extractEntryPoints(pkg, projectRoot),
     };
 }
 
 export function createRecommendedConfig(profile, entryPoints = []) {
+    const mergedEntryPoints = [...new Set([...(profile.entryPoints || []), ...entryPoints])];
     return {
         mode: profile.mode,
         framework: profile.framework,
-        entryPoints,
+        entryPoints: mergedEntryPoints,
         ignorePrefixedVariables: '^_',
+        reportPositionalParameters: true,
         preserveExports: profile.preserveExports,
         preserveUnsafeFiles: true,
         detectDeadStores: true,
         preserveFiles: [
-            'test/**',
-            'tests/**',
-            '__tests__/**',
-            '**/test/**',
-            '**/tests/**',
-            '**/__tests__/**',
-            '**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}',
-            'e2e/**',
-            '**/e2e/**',
             'examples/**',
             '**/examples/**',
             '**/fixtures/**',

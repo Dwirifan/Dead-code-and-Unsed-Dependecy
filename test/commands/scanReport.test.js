@@ -41,10 +41,42 @@ describe('scanReport', () => {
             graph: {
                 liveFiles: new Set(['a', 'b']),
                 unsafeFiles: new Set([path.join(projectRoot, 'src', 'dynamic.js')]),
+                completeness: {
+                    status: 'partial',
+                    complete: false,
+                    reasons: ['1 import belum terselesaikan'],
+                    entryPointCount: 1,
+                    unresolvedImportCount: 1,
+                    parseFailureCount: 0,
+                    dynamicFileCount: 1,
+                },
                 globalRegistry: {
                     unresolvedImports: [{
                         file: path.join(projectRoot, 'src', 'index.js'),
                         importPath: './missing.js',
+                        reasonCode: 'RESOLVE_NOT_FOUND',
+                        configPath: path.join(projectRoot, 'tsconfig.json'),
+                        attempts: [{
+                            request: './missing.ts',
+                            strategy: 'enhanced-resolve:ts-extension-substitution',
+                            configPath: path.join(projectRoot, 'tsconfig.json'),
+                        }],
+                    }],
+                    graphComponents: [{
+                        id: 0,
+                        status: 'partial',
+                        complete: false,
+                        reasons: ['1 import belum terselesaikan'],
+                        files: [path.join(projectRoot, 'src', 'index.js')],
+                        unresolvedImportCount: 1,
+                        parseFailureCount: 0,
+                        dynamicFileCount: 1,
+                    }],
+                    virtualModules: [{ importPath: 'virtual:generated' }],
+                    resolverDiagnostics: [{
+                        configName: 'tsconfig.json',
+                        searchDirectory: projectRoot,
+                        message: 'diagnostic fixture',
                     }],
                 },
             },
@@ -101,6 +133,27 @@ describe('scanReport', () => {
             actionableDependencyFindings: 1,
         }));
         expect(report.unsafeFiles).toEqual(['src/dynamic.js']);
+        expect(report.graphAnalysis).toEqual(expect.objectContaining({
+            status: 'partial',
+            complete: false,
+            unresolvedImportCount: 1,
+            dynamicFileCount: 1,
+            componentCount: 1,
+            partialComponentCount: 1,
+            virtualModuleCount: 1,
+            resolverDiagnosticCount: 1,
+        }));
+        expect(report.graphAnalysis.components[0].files).toEqual(['src/index.js']);
+        expect(report.unresolvedImports[0]).toEqual(expect.objectContaining({
+            reasonCode: 'RESOLVE_NOT_FOUND',
+            configPath: 'tsconfig.json',
+        }));
+        expect(report.unresolvedImports[0].attempts[0]).toEqual(expect.objectContaining({
+            request: './missing.ts',
+            strategy: 'enhanced-resolve:ts-extension-substitution',
+        }));
+        expect(report.summary.graphStatus).toBe('partial');
+        expect(report.summary.graphComplete).toBe(false);
         expect(report.summary.analysisTimeMs).toBe(12.345);
     });
 
@@ -109,13 +162,30 @@ describe('scanReport', () => {
             file: path.join(projectRoot, 'test', 'x.test.js'),
             ruleEngine: ruleEngineFixture(),
             protectedFile: true,
-            deadNodes: [{ name: 'unused', type: 'Variable', line: 1, status: 'safe' }],
+            deadNodes: [{
+                name: 'unused',
+                type: 'Variable',
+                line: 1,
+                status: 'safe',
+                positional: true,
+                exported: true,
+                uncertainty: 'module-graph-incomplete',
+                originalStatus: 'safe',
+                proof: { crossFileRequired: true, moduleResolutionComplete: false },
+            }],
             analysisTimeMs: 1,
         });
 
         expect(report.summary.protected).toBe(1);
         expect(report.summary.safe).toBe(0);
         expect(report.summary.actionableFindings).toBe(0);
+        expect(report.deadCode[0].positional).toBe(true);
+        expect(report.deadCode[0]).toEqual(expect.objectContaining({
+            exported: true,
+            uncertainty: 'module-graph-incomplete',
+            originalStatus: 'safe',
+            proof: { crossFileRequired: true, moduleResolutionComplete: false },
+        }));
         expect(report.config).toEqual(expect.objectContaining({
             effectiveRules: { mode: 'vanilla', preserveExports: true },
             rulesScope: { type: 'file', file: 'test/x.test.js' },

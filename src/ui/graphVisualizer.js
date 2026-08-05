@@ -873,7 +873,7 @@ function _renderTableRows(nodes, statusLabel, forcedStatus = null) {
 
 /**
  * Membangun section HTML laporan Dead Code untuk dashboard.
- * @param {object|null} reportData - { safeNodes, reviewNodes, riskyNodes, protectedNodes, deadFiles, unsafeFiles }
+ * @param {object|null} reportData - { safeNodes, reviewNodes, riskyNodes, protectedNodes, deadFiles, unsafeFiles, graphAnalysis }
  * @returns {string} HTML string
  */
 function _buildReportSection(reportData) {
@@ -886,10 +886,12 @@ function _buildReportSection(reportData) {
         protectedNodes = [],
         deadFiles = [],
         unsafeFiles = [],
+        graphAnalysis = null,
     } = reportData;
     const totalIssues = safeNodes.length + reviewNodes.length + riskyNodes.length + protectedNodes.length;
+    const graphIncomplete = graphAnalysis && graphAnalysis.complete === false;
 
-    if (totalIssues === 0 && deadFiles.length === 0 && unsafeFiles.length === 0) {
+    if (totalIssues === 0 && deadFiles.length === 0 && unsafeFiles.length === 0 && !graphIncomplete) {
         return `
     <div class="report-section">
         <div class="section-title">\u2620\uFE0F <span data-i18n="reportTitle">Dead Code Report</span></div>
@@ -933,6 +935,18 @@ function _buildReportSection(reportData) {
                 <div class="lbl" data-i18n="deadFilesTitle">Dead Files</div>
             </div>
         </div>`;
+
+    if (graphIncomplete) {
+        const reasons = Array.isArray(graphAnalysis.reasons) ? graphAnalysis.reasons : [];
+        html += `
+        <div class="card" style="margin-bottom:1.25rem; border-left:4px solid #D97706">
+            <div class="card-header">
+                <h2 style="color:#D97706">Module Graph: ${_escapeHtml(String(graphAnalysis.status || 'unknown').toUpperCase())}</h2>
+            </div>
+            <p style="padding:0 1rem; color:var(--text-2); font-size:0.82rem;">Fail-closed aktif: temuan yang memerlukan bukti lintas file tidak diklasifikasikan SAFE dan file tak terjangkau tidak boleh dihapus otomatis.</p>
+            ${reasons.length > 0 ? `<ul class="report-file-list">${reasons.map(reason => `<li>${_escapeHtml(reason)}</li>`).join('')}</ul>` : ''}
+        </div>`;
+    }
 
     if (safeNodes.length > 0) {
         html += `

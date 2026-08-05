@@ -12,6 +12,7 @@ const DEFAULTS = {
     mode: 'vanilla',
     framework: 'vanilla',
     ignorePrefixedVariables: '^_',
+    reportPositionalParameters: true,
     preserveExports: true,
     preserveUnsafeFiles: true,
     detectDeadStores: true,
@@ -84,6 +85,29 @@ describe('configValidator', () => {
                     level: 'error',
                     code: 'CONFIG_UNKNOWN_KEY',
                     path: 'preserveFile',
+                }),
+            ]),
+        }));
+    });
+
+    it('memvalidasi pengaturan laporan positional parameter di level proyek dan override', () => {
+        const result = validateAndNormalizeConfig({
+            reportPositionalParameters: false,
+            overrides: [{
+                files: ['src/callbacks/**'],
+                reportPositionalParameters: true,
+            }],
+        }, DEFAULTS);
+
+        expect(result.config.reportPositionalParameters).toBe(false);
+        expect(result.config.overrides[0].reportPositionalParameters).toBe(true);
+        expect(() => validateAndNormalizeConfig({
+            reportPositionalParameters: 'yes',
+        }, DEFAULTS)).toThrowError(expect.objectContaining({
+            diagnostics: expect.arrayContaining([
+                expect.objectContaining({
+                    code: 'CONFIG_EXPECTED_BOOLEAN',
+                    path: 'reportPositionalParameters',
                 }),
             ]),
         }));

@@ -1,17 +1,3 @@
-/**
- * Sistem Klasifikasi Kepercayaan (Confidence Scoring)
- * 
- * Setiap temuan dead code diberi label:
- *   - confidence: 'high' | 'medium' | 'low'
- *   - status:     'safe' | 'review' | 'risky'
- * 
- * Aturan Penentuan:
- *   HIGH  + SAFE   → Unused local variable, unused import (99% aman dihapus)
- *   HIGH  + SAFE   → Unreachable code setelah return/throw (100% aman)
- *   MEDIUM + REVIEW → Unused function, write-only variable (perlu cek side-effect)
- *   MEDIUM + REVIEW → Duplicate condition (logika mungkin sengaja)
- *   LOW   + RISKY  → Class method, parameter (risiko rusak API/callback)
- */
 export function classifyConfidence(type, info = {}) {
     switch (type) {
         // === HIGH CONFIDENCE (Aman dihapus) ===
@@ -103,8 +89,26 @@ export function classifyConfidence(type, info = {}) {
             }
             return { confidence: 'low', status: 'risky', reason: 'Metode publik atau berpotensi diwarisi tidak terdeteksi dipanggil secara eksplisit (risiko dipanggil via eksternal/framework callback).' };
 
-        case 'Parameter':
-            return { confidence: 'low', status: 'risky', reason: 'Parameter fungsi tidak digunakan dalam tubuh fungsi (risiko mengubah tanda tangan/API fungsi jika dihapus).' };
+        case 'Parameter': {
+            const parameterName = typeof info.name === 'string' ? info.name : '';
+            const suggestedName = parameterName
+                ? (parameterName.startsWith('_') ? parameterName : `_${parameterName}`)
+                : '_parameter';
+
+            if (info.isPositional) {
+                return {
+                    confidence: 'high',
+                    status: 'risky',
+                    reason: `Parameter '${parameterName || 'ini'}' tidak digunakan, tetapi posisinya wajib dipertahankan karena parameter setelahnya masih digunakan. Jangan hapus; gunakan nama '${suggestedName}' bila ingin menandainya sebagai sengaja tidak digunakan.`
+                };
+            }
+
+            return {
+                confidence: 'low',
+                status: 'risky',
+                reason: `Parameter tidak digunakan. Rekomendasi: gunakan prefix '_' (misal: ${suggestedName}) jika ingin dipertahankan.`
+            };
+        }
 
         case 'UndeclaredVariable':
             // Bug: variabel digunakan tapi tidak pernah dideklarasikan (no-undef)

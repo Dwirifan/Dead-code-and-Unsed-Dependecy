@@ -1,25 +1,443 @@
 # DeadKiller CLI
 
-DeadKiller is an advanced Command Line Interface (CLI) tool designed to perform deep static analysis on JavaScript and TypeScript source code. Developed as a final year thesis project, it leverages Graph-Based Reachability Analysis to accurately map project structures, detecting unreachable files, dead code (unused variables, functions, etc.), and unused direct dependencies.
+[![npm version](https://img.shields.io/npm/v/deadkiller-cli?color=cb3837&logo=npm)](https://www.npmjs.com/package/deadkiller-cli)
+[![npm downloads](https://img.shields.io/npm/dm/deadkiller-cli?color=blue)](https://www.npmjs.com/package/deadkiller-cli)
+[![Node.js](https://img.shields.io/node/v/deadkiller-cli?logo=node.js)](https://www.npmjs.com/package/deadkiller-cli)
+[![License: MIT](https://img.shields.io/github/license/Dwirifan/Dead-code-and-Unsed-Dependecy)](./LICENSE)
 
-It features a Confidence Scoring System and Safety Classification to ensure that all findings are accurately categorized, along with an HTML Dashboard and Git-style diff viewing for a secure and professional developer experience.
+**Safety-first dead-code and unused-dependency analysis for JavaScript and TypeScript projects.**
 
-## Core Features
+DeadKiller builds a project dependency graph, analyzes source-code usage, classifies findings by confidence and risk, and provides guarded remediation with diff previews, checkpoints, and restore support.
 
-- **Graph-Based Reachability**: Constructs a dependency graph from entry points using Breadth-First Search (BFS) to distinguish between live and dead files.
-- **Intra-procedural Dead Code Detection**: Detects unused variables, functions, parameters, and unreachable statements within their respective scopes.
-- **Unused Direct Dependency Detection**: Reports direct packages declared in the target project's root `package.json` that are not detected in source code, scripts, or supported configuration files. Transitive dependency trees are outside the analysis scope.
-- **Confidence & Safety System**: Automatically labels source-code findings with confidence levels (High/Medium/Low) and safety statuses (Safe/Review/Risky). Dependency findings remain review candidates.
-- **Interactive Diff Preview**: Provides a Git-style before-and-after preview prior to any code deletion.
-- **HTML Dashboard Visualization**: Generates an interactive graph using Cytoscape.js and Dagre layout for deep architectural inspection.
-- **Safe Mode Execution**: Protected exports, automatic backups, and interactive confirmation. Only source-code items marked as `safe` are eligible for automatic remediation. Runtime dependency candidates are unselected by default and require explicit review, selection, and final confirmation; development dependency findings are report-only.
-- **Framework-Aware**: Supports native detection for `vanilla`, `react`, and `next` frameworks, automatically protecting critical framework directories.
+It can be used interactively during development or as structured JSON analysis in CI.
+
+> [!IMPORTANT]
+> DeadKiller is a static-analysis tool. Dynamic imports, reflection, framework conventions, callbacks, generated code, and runtime dependency loading can limit what any static analyzer can prove. Review findings, inspect the diff, run your test suite, and keep source control enabled before applying changes.
+
+## Highlights
+
+- **Project-wide reachability analysis** — builds a graph from detected or configured entry points to identify live and unconnected files.
+- **JavaScript and TypeScript analysis** — supports `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, and `.cts`.
+- **Dead-code detection** — reports unused bindings, functions, imports, types, classes, dead stores, unreachable statements, and selected structural issues.
+- **Direct dependency audit** — analyzes runtime and development dependencies declared in the project-root `package.json`.
+- **Confidence and safety classification** — separates `SAFE`, `REVIEW`, `RISKY`, and protected findings.
+- **Guarded remediation** — previews changes, requires confirmation, creates checkpoints, validates transformed syntax, and supports restore.
+- **Framework-aware defaults** — detects project type, module system, JSX runtime, and common framework conventions.
+- **CI-friendly output** — emits versioned JSON and supports category-based exit policies.
+- **Interactive visualization** — generates an HTML dashboard for dependency and dead-code exploration.
+
+## Requirements
+
+- Node.js **20 or newer**
+- A JavaScript or TypeScript project
+- A supported package manager when removing dependencies: npm, Yarn, pnpm, or Bun
 
 ## Installation
 
-Requires Node.js 20 or newer.
+Install DeadKiller globally:
 
-Clone this repository and install dependencies:
+```bash
+npm install --global deadkiller-cli
+```
+
+Or install it as a development dependency:
+
+```bash
+npm install --save-dev deadkiller-cli
+```
+
+When installed locally, run the binary through `npx`:
+
+```bash
+npx deadkiller scan .
+```
+
+Verify the installation:
+
+```bash
+deadkiller --version
+deadkiller --help
+```
+
+## Quick start
+
+Start with a read-only scan:
+
+```bash
+deadkiller scan .
+```
+
+Show advanced `REVIEW` and `RISKY` findings:
+
+```bash
+deadkiller scan . --advanced
+```
+
+Preview remediation without writing files or creating a checkpoint:
+
+```bash
+deadkiller fix . --level 0
+```
+
+Apply reviewed changes interactively:
+
+```bash
+deadkiller fix .
+```
+
+Restore the latest checkpoint if necessary:
+
+```bash
+deadkiller undo . --latest
+```
+
+Running `deadkiller` without a command opens the interactive wizard.
+
+## Commands
+
+| Command | Purpose |
+| --- | --- |
+| `deadkiller` | Open the interactive wizard. |
+| `deadkiller init [path]` | Detect the project profile and create a validated configuration. |
+| `deadkiller scan <path>` | Analyze a file or directory without modifying it. |
+| `deadkiller fix <path>` | Preview and apply guarded source, file, and selected dependency changes. |
+| `deadkiller show-deps <path>` | Report direct runtime and development dependency status. |
+| `deadkiller visualize <path>` | Generate and optionally open the HTML dashboard. |
+| `deadkiller report <path>` | Alias for `visualize`. |
+| `deadkiller trace <file>` | Show reverse imports for a file. |
+| `deadkiller watch <path>` | Re-run source analysis when supported files change. |
+| `deadkiller history <path>` | Inspect, restore, or delete stored checkpoints. |
+| `deadkiller undo [path]` | Restore a checkpoint; alias: `restore`. |
+
+Use `deadkiller <command> --help` for the complete option list.
+
+### Initialize configuration
+
+DeadKiller works without a configuration file. Use `init` when you need persistent entry points or customized safety rules.
+
+```bash
+deadkiller init
+deadkiller init ./packages/api --yes --format json
+deadkiller init --yes --entry src/worker.ts scripts/migrate.mts
+deadkiller init --dry-run --yes
+```
+
+Common options:
+
+| Option | Description |
+| --- | --- |
+| `-y, --yes` | Accept detected recommendations without prompts. |
+| `-f, --force` | Replace an existing config after creating a backup. |
+| `--format <mjs\|json>` | Choose `deadkiller.config.mjs` or `.deadkillerrc.json`. |
+| `--mode <mode>` | Select `vanilla`, `react`, `next`, or `vue`. |
+| `--project-type <type>` | Select `application`, `library`, `cli`, or `monorepo`. |
+| `-e, --entry <paths...>` | Add one or more entry paths or globs. |
+| `--no-entry-review` | Accept every detected entry point. |
+| `--dry-run` | Print the generated config without writing it. |
+
+### Scan
+
+`scan` is read-only and is the recommended first step.
+
+```bash
+deadkiller scan .
+deadkiller scan src/index.ts
+deadkiller scan . --advanced
+deadkiller scan . --json
+deadkiller scan . --json --no-config
+deadkiller scan . --json --fail-on safe,dependency
+```
+
+| Option | Description |
+| --- | --- |
+| `--json` | Write one structured JSON document to standard output. |
+| `--no-config` | Ignore target-project config and use the in-memory automatic profile. |
+| `-a, --advanced` | Display `REVIEW`, `RISKY`, and advanced AST findings. |
+| `--fail-on <categories>` | Exit with code `2` when selected categories are found. |
+
+Valid `--fail-on` categories are `safe`, `review`, `risky`, `dependency`, `dead-file`, and `any`.
+
+### Fix
+
+`fix` analyzes the target, displays proposed changes, and creates a checkpoint before writing. Runtime dependencies are never preselected: they require explicit selection and final confirmation. Development dependencies remain report-only.
+
+```bash
+deadkiller fix . --level 0
+deadkiller fix . --level 2
+deadkiller fix src/example.ts
+```
+
+| Option | Description |
+| --- | --- |
+| `-l, --level <number>` | Select elimination level `0` through `3`. Default: `3`. |
+| `-y, --yes` | Skip confirmation for eligible source changes; dependency `REVIEW` items remain unselected. |
+
+Elimination levels control the source transformation strategy:
+
+| Level | Profile | Behavior |
+| ---: | --- | --- |
+| `0` | Preview | Generate the proposed diff without writing files or creating a checkpoint. |
+| `1` | Safe Skip | Use the most conservative transformation profile. |
+| `2` | Safe Refactor | Apply safe structural refactoring while preserving sensitive signatures. |
+| `3` | Aggressive Delete | Use the broadest transformation profile for eligible findings. |
+
+The elimination level does **not** promote `REVIEW` or `RISKY` source findings to automatic fixes. Only eligible `SAFE` findings are processed automatically; protected files and dynamic-code safeguards still take precedence.
+
+### Dependency report
+
+```bash
+deadkiller show-deps .
+```
+
+The report distinguishes:
+
+- `USED` — a reference was found;
+- `REVIEW` — no supported reference was found, but manual review is required;
+- `UNKNOWN` — analysis was incomplete or a dynamic/unsupported pattern prevented a reliable conclusion;
+- `PROTECTED` — the dependency is excluded by configuration.
+
+Only direct dependencies from the target project's root manifest are analyzed. Transitive dependency trees are outside the current scope.
+
+### Dashboard and tracing
+
+```bash
+deadkiller visualize .
+deadkiller visualize . --no-open
+deadkiller report . --no-open
+deadkiller trace src/services/userService.ts
+```
+
+`visualize` and `report` generate an HTML dashboard. `trace` reports files that import the selected target and the imports made by that target.
+
+### Watch mode
+
+```bash
+deadkiller watch .
+```
+
+Watch mode performs an initial scan and re-analyzes supported source files after changes. It is intended for development feedback and does not modify files.
+
+### Checkpoints and restore
+
+Every non-dry-run fix requires a successful checkpoint before source changes are written.
+
+```bash
+deadkiller history .
+deadkiller undo .
+deadkiller undo . --latest
+deadkiller restore . --latest --yes
+```
+
+Checkpoints are stored under `.deadkiller_backup`. `history` provides interactive management, while `undo`/`restore` performs recovery. A successfully restored checkpoint is removed after restoration.
+
+## Safety model
+
+DeadKiller separates confidence from actionability.
+
+### Confidence
+
+| Confidence | Meaning |
+| --- | --- |
+| `high` | Strong static evidence that the item is unused or unreachable. |
+| `medium` | Likely unused, but side effects or incomplete context require review. |
+| `low` | Runtime, framework, callback, inheritance, or API behavior may be involved. |
+
+### Status
+
+| Status | Automatic action |
+| --- | --- |
+| `SAFE` | Eligible for guarded remediation. |
+| `REVIEW` | Reported for explicit developer review; not automatically fixed. |
+| `RISKY` | Reported as high risk; not automatically fixed. |
+| `PROTECTED` | Analyzed for evidence but blocked from remediation. |
+
+Additional safeguards include:
+
+- entry-point and cross-file reachability analysis;
+- explicit module-graph completeness (`complete`, `partial`, or `unknown`) with fail-closed classification;
+- positional-parameter anomaly reporting when an unused parameter must remain to preserve a later argument position;
+- public export preservation based on project profile;
+- conservative fallback for dynamic code;
+- protected and ignored file policies;
+- diff preview and final confirmation;
+- AST syntax validation after transformation;
+- checkpoint creation and rollback support;
+- explicit dependency selection.
+
+## Configuration
+
+DeadKiller accepts one active configuration file in the project root:
+
+- `deadkiller.config.mjs` — recommended dynamic ESM configuration;
+- `deadkiller.config.js` — legacy JavaScript configuration;
+- `.deadkillerrc.json` — static JSON configuration.
+
+If more than one is present, validation stops with a conflict error. JavaScript configuration files execute as Node.js modules; use `.deadkillerrc.json` or `scan --no-config` when analyzing an untrusted repository.
+
+Example:
+
+```javascript
+// deadkiller.config.mjs
+export default {
+    mode: 'react',
+    framework: 'react',
+    entryPoints: ['src/main.tsx'],
+    reactRuntime: 'automatic',
+    ignorePrefixedVariables: '^_',
+    reportPositionalParameters: true,
+    preserveExports: true,
+    preserveUnsafeFiles: true,
+    detectDeadStores: true,
+    preserveFiles: ['examples/**', '**/fixtures/**'],
+    ignoreFiles: [
+        '**/node_modules/**',
+        '**/dist/**',
+        '**/build/**',
+        '**/coverage/**',
+        '**/.deadkiller_backup/**'
+    ],
+    ignoreDependencies: [],
+    globals: [],
+    eliminator: {
+        autoRenameUnusedParameters: false,
+        autoRemoveEmptyBlocks: false,
+        maxBackups: 20
+    },
+    overrides: [
+        {
+            files: ['**/*.{test,spec}.{js,jsx,ts,tsx}'],
+            preserveExports: true
+        }
+    ]
+};
+```
+
+### Core options
+
+| Option | Purpose |
+| --- | --- |
+| `mode` | Analyzer mode: `vanilla`, `react`, `next`, or `vue`. |
+| `framework` | Framework preset used for convention-aware protection. |
+| `entryPoints` | Runtime roots or globs used to build the dependency graph. |
+| `reactRuntime` | JSX runtime: `classic` or `automatic`. |
+| `ignorePrefixedVariables` | Regex for intentionally unused names; set `false` or `null` to disable. |
+| `reportPositionalParameters` | Report unused positional placeholders as `RISKY`; set `false` to suppress them. |
+| `preserveExports` | Preserve public exports with `true`; use `false` or `strict` for cross-file checking. |
+| `preserveUnsafeFiles` | Protect files affected by dynamic-analysis uncertainty. |
+| `detectDeadStores` | Enable dead-store detection. |
+| `preserveFiles` | Analyze files and use them as dependency evidence, but block remediation. |
+| `ignoreFiles` | Exclude files entirely from analysis and dependency evidence. |
+| `ignoreDependencies` | Exclude named packages from unused-dependency reporting. |
+| `globals` | Declare project-specific global identifiers. |
+| `eliminator` | Configure parameter renaming, empty-block handling, and checkpoint retention. |
+| `overrides` | Apply ordered per-file rule overrides using glob patterns. |
+
+`reportPositionalParameters` is enabled in zero-config mode and takes precedence over
+`ignorePrefixedVariables` for positional placeholders. For example, `_` in
+`(_, p1, p2) => p1 + p2` is still reported because removing it would shift both
+capture-group arguments. The finding remains `RISKY`, appears in `--advanced` and
+JSON output, and is not automatically deleted. Disable the report globally or in a
+file override only when that convention is intentional.
+
+Configuration precedence is:
+
+```text
+built-in defaults
+  -> automatic project profile
+  -> user configuration
+  -> ordered per-file overrides
+  -> command-line policy
+```
+
+Invalid types, regular expressions, globs, unknown keys, conflicting config files, and unsupported override fields stop analysis instead of silently falling back to unsafe defaults.
+
+### Entry points, preserved files, and ignored files
+
+```text
+entryPoints   -> graph roots; files are analyzed as executable entry paths
+preserveFiles -> files remain analysis evidence but cannot be remediated
+ignoreFiles   -> files are excluded from analysis and dependency evidence
+```
+
+Use `preserveFiles` for examples, fixtures, and externally invoked source that should still contribute imports. Reserve `ignoreFiles` for generated output such as `dist`, `build`, and `coverage`.
+
+## CI integration
+
+Generate a stable, versioned JSON report:
+
+```bash
+deadkiller scan . --json > deadkiller-report.json
+```
+
+Enforce selected categories:
+
+```bash
+deadkiller scan . --json --fail-on safe,dependency
+```
+
+The JSON document includes `schemaVersion`, normalized portable paths, `summary`, configuration diagnostics, dependency-analysis completeness, dead files, source findings, import-resolution issues, cycles, and the applied CI policy.
+
+Directory reports also expose `graphAnalysis`. If an import cannot be resolved, a
+reachable file cannot be parsed, or dynamic code makes traversal incomplete, the
+graph becomes `partial`. Findings that require cross-file proof are downgraded from
+`SAFE` to `REVIEW`, and unreachable-file deletion is blocked. Local findings whose
+proof is entirely intra-file may remain `SAFE`.
+
+Module resolution is importer-aware. DeadKiller searches for the nearest
+`tsconfig.json` or `jsconfig.json`, follows `extends` and project references, and
+uses TypeScript-compatible `baseUrl`/`paths` matching. This supports wildcard
+patterns with prefixes and suffixes, ordered fallback targets, implicit TypeScript
+extensions, and output-to-source substitutions such as `.js` to `.ts` or `.tsx`.
+Resolver instances are cached per effective configuration rather than globally per
+project, which allows packages in a monorepo to use different aliases.
+
+Each resolved graph edge records its module specifier, resolution strategy,
+configuration source, and proof confidence. Unresolved imports contain stable
+reason codes such as `RESOLVE_NOT_FOUND`, `PATHS_TARGET_NOT_FOUND`,
+`CONFIG_INVALID`, and `OUTSIDE_PROJECT_ROOT`, together with attempted targets.
+Framework virtual modules and Node built-ins are treated as explicit boundaries,
+not broken local links.
+
+Graph completeness is also calculated per weakly connected entry-point component.
+A concrete missing target can therefore remain local to its component. Ambiguous
+global hazards—including parse failures, dynamic resolution, and invalid resolver
+configuration—still contaminate every component. File deletion remains governed
+by project-wide completeness because an unreachable file may be hidden behind a
+missing edge.
+
+DeadKiller intentionally uses AST, lexical scope, and module-graph evidence rather
+than the TypeScript Compiler API. Common TypeScript syntax, aliases, type-only
+references, and JavaScript-to-TypeScript extension substitution are supported, but
+semantic features such as declaration merging or exported enum-member references
+remain conservative and are reported for review when proof is incomplete.
+
+Exit codes:
+
+| Code | Meaning |
+| ---: | --- |
+| `0` | Analysis completed and the fail policy did not match. |
+| `1` | Invalid input, configuration, or analysis failure. |
+| `2` | At least one `--fail-on` category matched. |
+
+Example GitHub Actions step:
+
+```yaml
+- name: Audit dead code
+  run: npx deadkiller scan . --json --fail-on safe,dependency
+```
+
+## Supported scope and known limitations
+
+- Full AST analysis is available for `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, and `.cts`.
+- Vue, Nuxt, and Svelte single-file components may be discovered as framework entries, but their component contents are not yet parsed as full JavaScript/TypeScript ASTs.
+- Dynamic `require`, computed access, `eval`, reflection, dependency injection, generated modules, and runtime plugin discovery can reduce certainty. DeadKiller reports uncertainty conservatively.
+- Dependency analysis covers direct `dependencies` and `devDependencies` from the target project's root `package.json`; transitive packages are not classified.
+- Runtime dependency candidates require explicit review and selection. Development dependencies are report-only.
+- A successful static result does not replace application tests, type checking, linting, or runtime verification.
+
+## Development
+
+Clone the repository and install dependencies:
 
 ```bash
 git clone https://github.com/Dwirifan/Dead-code-and-Unsed-Dependecy.git
@@ -27,209 +445,23 @@ cd Dead-code-and-Unsed-Dependecy
 npm install
 ```
 
-To install the CLI globally on your system:
-```bash
-npm install -g deadkiller-cli
-```
-*Note: If installed locally, you can use `npm link` to make the `deadkiller` command available globally.*
-
-## Usage
-
-DeadKiller provides both an Interactive Wizard and direct CLI commands.
-
-### Interactive Wizard (Recommended)
-Launch the interactive menu to be guided through all available features:
-```bash
-deadkiller
-```
-
-### Direct CLI Commands
-
-**1. Scan (Dry Run)**
-Audits the project and outputs dead code plus findings for direct runtime and development dependencies without modifying any files. Development dependency findings are report-only.
-```bash
-deadkiller scan <path>
-# Output in JSON format for CI/CD integration:
-deadkiller scan <path> --json
-# Abaikan config target dan gunakan profil otomatis murni:
-deadkiller scan <path> --json --no-config
-# Jadikan temuan tertentu sebagai kegagalan CI (exit code 2):
-deadkiller scan <path> --json --fail-on safe,dependency
-```
-
-Output JSON memakai schema version, path relatif dengan separator `/`, waktu
-numerik dalam `summary.analysisTimeMs`, jumlah per status, aturan dasar pada
-`config.baseRules`, aturan efektif file tunggal pada `config.effectiveRules`,
-konteksnya pada `config.rulesScope`, kebijakan pemuatan pada `config.policy`, dan
-kebijakan CI pada field `ci`. Kategori `--fail-on` yang tersedia adalah `safe`, `review`, `risky`,
-`dependency`, `dead-file`, dan `any`.
-
-**2. Fix (Interactive Deletion)**
-Detects dead code, displays a diff preview, and requests confirmation before deletion. Only `safe` source-code items are processed automatically. A direct runtime dependency is never preselected for removal: it must be reviewed, explicitly selected, and approved in the final confirmation. Development dependencies are not removed by this command.
-```bash
-deadkiller fix <path>
-```
-
-**3. Show Dependencies**
-Analyzes direct runtime and development dependencies declared in the target project's root `package.json`, including `USED`, `REVIEW`, and `UNKNOWN` states. `devDependencies` are report-only and are never offered for removal; transitive dependencies are not analyzed.
-```bash
-deadkiller show-deps <path>
-```
-
-**4. Visualize / Report**
-Generates an interactive HTML dashboard containing the dependency graph and the complete dead code report.
-```bash
-deadkiller visualize <path>
-# Generate saja, tanpa membuka browser:
-deadkiller visualize <path> --no-open
-# or
-deadkiller report <path>
-```
-
-**5. Trace (Reverse Import)**
-Traces module imports to answer which files depend on a specific target file.
-```bash
-deadkiller trace <file_path>
-```
-
-**6. Watch Mode**
-Monitors the directory for file changes and automatically triggers a scan upon saving.
-```bash
-deadkiller watch <path>
-```
-
-**7. History**
-Displays backup history created by the `fix` command and allows restoration of previous states.
-```bash
-deadkiller history <path>
-```
-
-## Setup & Configuration
-
-Konfigurasi bersifat opsional. Jika tidak ada file konfigurasi, DeadKiller
-mendeteksi bahasa, framework, module system, runtime JSX, dan jenis proyek lalu
-menerapkan profil aman hanya di memori. Zero-config tidak menulis file. Library,
-CLI, monorepo, dan proyek tanpa `package.json` mempertahankan public exports;
-aplikasi tetap memeriksa export internal. Jalankan `deadkiller init` hanya bila
-aturan tersebut perlu disesuaikan. Perintah `scan` tidak menyimpan entry point
-hasil prompt; gunakan `init` bila keputusan tersebut ingin dipersistenkan.
-
-Jika config tersedia, aturan pengguna ditumpuk di atas profil otomatis dengan
-precedence: built-in defaults, auto-profile, user config, ordered file override,
-kemudian opsi CLI. Karena itu config parsial tidak mematikan deteksi framework.
-Gunakan `scan --no-config` untuk eksperimen zero-config murni atau ketika memindai
-repo asing tanpa mengeksekusi config JavaScript milik target.
-
-The easiest way to set up DeadKiller in your project is by using the interactive initialization command. It will scan your project and generate the appropriate configuration file.
+Run project checks:
 
 ```bash
-deadkiller init
+npm test
+npm run lint
+npm run check
 ```
 
-`init` mendeteksi bahasa (JavaScript/TypeScript/campuran), module system
-(ESM/CommonJS/campuran), framework, jenis proyek, package manager, workspace,
-serta entry runtime/test/config. Tekan Enter sekali untuk memakai rekomendasi.
-
-Untuk setup otomatis tanpa prompt (cocok untuk CI, template, dan monorepo):
+To test the CLI globally from the repository:
 
 ```bash
-deadkiller init --yes
-deadkiller init ./packages/api --yes --format json
-deadkiller init --yes --entry src/worker.ts scripts/migrate.mts
-deadkiller init --dry-run --yes
+npm link
+deadkiller --help
 ```
 
-Gunakan `--force` untuk mengganti konfigurasi lama. DeadKiller membuat backup di
-`.deadkiller_backup/config-init/` dan memastikan hanya satu format konfigurasi
-yang aktif agar tidak terjadi konflik precedence.
-
-This command allows you to choose between two configuration formats:
-- **JavaScript Dinamis (`deadkiller.config.mjs`)** - Mendukung konfigurasi dinamis pada proyek yang dipercaya. Node.js mengeksekusi file ini ketika dimuat.
-- **JSON Statis (`.deadkillerrc.json`)** - Pilihan paling aman dan mudah direproduksi untuk CI atau repo eksternal.
-
-### Configuration Options
-
-Berikut adalah contoh konfigurasi penuh yang dihasilkan:
-
-```javascript
-// deadkiller.config.mjs
-export default {
-    mode: "react",
-    framework: "react",
-    entryPoints: [], // Disarankan: runtime, test runner, dan config dideteksi otomatis
-    ignorePrefixedVariables: "^_",
-    preserveExports: true,
-    preserveUnsafeFiles: true,
-    detectDeadStores: true,
-    preserveFiles: ["test/**", "tests/**", "__tests__/**", "**/*.test.*", "**/*.spec.*"],
-    ignoreFiles: ["**/dist/**", "**/build/**", "**/coverage/**"],
-    ignoreDependencies: [],
-    globals: [],
-    eliminator: { maxBackups: 20 },
-    overrides: [
-        {
-            files: ["**/*.test.js", "tests/**/*.js"],
-            preserveExports: true
-        }
-    ]
-};
-```
-
-- **mode**: Framework mode (`vanilla`, `react`, `next`, `vue`).
-- **framework**: Preset spesifik seperti `react`, `next`, `remix`, atau `vue`. Aturan export framework hanya aktif pada preset dan lokasi file yang sesuai.
-- **entryPoints**: Root untuk membangun graph. **Secara default, DeadKiller mendeteksi entry point secara otomatis** dari `package.json` (`main`, `module`, `exports`, `bin`, `workspaces`), struktur framework, file konfigurasi, dan pola test ketika test runner seperti Mocha, Vitest, atau Jest terdeteksi. Isi manual hanya untuk root khusus yang tidak mengikuti konvensi.
-- **ignorePrefixedVariables**: Regex untuk mengabaikan variabel tak terpakai spesifik (contoh: `^_` mengabaikan `_unusedVar`).
-- **preserveExports**: `true` mempertahankan seluruh public export. Nilai `false` atau `"strict"` memeriksa penggunaan lintas file; `"strict"` dipertahankan sebagai nama kebijakan eksplisit untuk config lama.
-- **preserveFiles**: File tetap dibaca untuk graph dan bukti dependency, tetapi dilindungi dari penghapusan. Gunakan ini untuk test dan example.
-- **ignoreFiles**: File tidak dibaca sama sekali, termasuk import dependency di dalamnya. Gunakan hanya untuk output generator seperti `dist`, `build`, dan `coverage`; jangan menaruh folder test di sini.
-- **overrides**: Aturan efektif per file. Mendukung glob berurutan dan negasi, misalnya `["src/**", "!src/vendor/**"]`. Opsi tingkat proyek seperti `entryPoints` dan `ignoreDependencies` ditolak di dalam override.
-
-DeadKiller memvalidasi konfigurasi sebelum analisis. Tipe, regex, mode, glob,
-opsi tak dikenal, konflik beberapa file config, atau override yang invalid akan
-menghentikan `scan`/`fix` dengan error yang jelas;
-DeadKiller tidak diam-diam kembali ke default karena itu dapat menonaktifkan aturan
-perlindungan. Warning normalisasi tersedia pada output manusia dan pada field
-`config.diagnostics` di output `scan --json`.
-
-Ekstensi script yang dianalisis secara konsisten adalah `.js`, `.jsx`, `.mjs`,
-`.cjs`, `.ts`, `.tsx`, `.mts`, dan `.cts`.
-
-### Entry Point, Preserve, dan Ignore
-
-```text
-entryPoints    -> membuat file menjadi root graph dan membaca dependency
-preserveFiles  -> tetap dianalisis, tetapi tidak boleh dieliminasi
-ignoreFiles    -> dikeluarkan sepenuhnya dari analisis
-```
-
-Contoh: test Mocha tidak diimpor oleh aplikasi, tetapi merupakan root eksekusi
-tersendiri. Ketika `mocha` terdeteksi dari dependency atau script `test`,
-DeadKiller otomatis memasukkan `test/**/*` ke graph. Dengan demikian package
-seperti `chai-http` yang hanya digunakan oleh test tidak salah dilaporkan mati.
-
-Entry point eksplisit harus berada di dalam root proyek. Path file yang tidak ada
-menjadi error, sedangkan direktori entry diekspansi ke ekstensi JavaScript dan
-TypeScript yang didukung. Setidaknya satu runtime entry wajib ditemukan; file
-config, test, atau example saja tidak dianggap sebagai root aplikasi.
-
-Vue/Nuxt/Svelte single-file components dapat ditemukan sebagai entry framework,
-tetapi isi `.vue`/`.svelte` belum diparse sebagai AST penuh. Hasil dependency pada
-proyek tersebut diperlakukan konservatif dan dapat berstatus `UNKNOWN`.
-
-## Confidence and Safety Classification
-
-To ensure code stability, DeadKiller categorizes all findings into two dimensions:
-
-**Confidence Level:**
-- **High**: >99% certainty of being unused (e.g., unused local variables, unreachable statements).
-- **Medium**: High probability of being unused, but may have side effects.
-- **Low**: Potential false positives (e.g., unused class methods, parameters).
-
-**Safety Status:**
-- **Safe**: Completely safe to remove. Eligible for auto-fix.
-- **Review**: Requires manual developer review. Will not be auto-fixed.
-- **Risky**: High risk of breaking changes (e.g., callbacks, polymorphic methods). Will not be auto-fixed.
+Issues and reproducible bug reports are welcome in the [GitHub issue tracker](https://github.com/Dwirifan/Dead-code-and-Unsed-Dependecy/issues).
 
 ## License
 
-MIT License
+Released under the [MIT License](./LICENSE).

@@ -215,13 +215,31 @@ describe('[TC-A27 – TC-A31] Confidence & Status Scoring', () => {
         assert.strictEqual(found.status, 'review');
     });
 
-    it('TC-A29: Unused parameter → confidence LOW, status RISKY', async () => {
+    it('TC-A29: Positional placeholder dan trailing parameter sama-sama dilaporkan RISKY', async () => {
         const kode = `function handler(req, res, next) { res.send("ok"); }`;
         const hasil = await analisis(kode);
         const reqResult = cariByName(hasil, 'req');
-        assert.ok(reqResult);
-        assert.strictEqual(reqResult.confidence, 'low');
+        assert.ok(reqResult, 'req harus dilaporkan sebagai anomali positional');
+        assert.strictEqual(reqResult.confidence, 'high');
         assert.strictEqual(reqResult.status, 'risky');
+        assert.strictEqual(reqResult.positional, true);
+        assert.match(reqResult.reason, /posisinya wajib dipertahankan/);
+
+        const nextResult = cariByName(hasil, 'next');
+        assert.ok(nextResult);
+        assert.strictEqual(nextResult.confidence, 'low');
+        assert.strictEqual(nextResult.status, 'risky');
+        assert.strictEqual(nextResult.positional, false);
+        assert.match(nextResult.reason, /misal: _next/);
+    });
+
+    it('rekomendasi unused parameter menggunakan nama temuan konkret', async () => {
+        const hasil = await analisis(`function onError(err) { return "fallback"; }`);
+        const errResult = cariByName(hasil, 'err');
+
+        assert.ok(errResult);
+        assert.match(errResult.reason, /misal: _err/);
+        assert.doesNotMatch(errResult.reason, /misal: _req/);
     });
 
     it('TC-A30: Impure Write-only variable -> confidence MEDIUM, status REVIEW', async () => {
@@ -251,6 +269,118 @@ describe('[TC-A27 – TC-A31] Confidence & Status Scoring', () => {
         assert.ok(dead);
         assert.strictEqual(dead.confidence, 'high');
         assert.strictEqual(dead.status, 'safe');
+    });
+});
+
+describe('Positional parameter anomaly reporting', () => {
+    it('melaporkan placeholder callback meskipun namanya tidak diawali underscore', async () => {
+        const ruleEngine = new RuleEngine();
+        ruleEngine.rules.ignorePrefixedVariables = null;
+        const hasil = await analisis(`
+            export function camelcase(input: string): string {
+                return input.replaceAll(/([a-z])-([a-z])/g, (match, p1, p2) => {
+                    return p1 + p2.toUpperCase();
+                });
+            }
+        `, ruleEngine);
+
+        const matchResult = cariByName(hasil, 'match');
+        assert.ok(matchResult, 'Placeholder sebelum capture group harus dilaporkan sebagai anomali');
+        assert.strictEqual(matchResult.type, 'Parameter');
+        assert.strictEqual(matchResult.status, 'risky');
+        assert.strictEqual(matchResult.positional, true);
+        assert.match(matchResult.reason, /posisinya wajib dipertahankan/);
+    });
+
+    it('melaporkan parameter awal fungsi biasa ketika parameter berikutnya digunakan', async () => {
+        const ruleEngine = new RuleEngine();
+        ruleEngine.rules.ignorePrefixedVariables = null;
+        const hasil = await analisis(`
+            function select(unused, value) {
+                return value;
+            }
+            console.log(select('placeholder', 'result'));
+        `, ruleEngine);
+
+        const unusedResult = cariByName(hasil, 'unused');
+        assert.ok(unusedResult, 'Parameter awal harus dilaporkan karena menghapusnya akan menggeser argumen');
+        assert.strictEqual(unusedResult.positional, true);
+        assert.strictEqual(unusedResult.status, 'risky');
+    });
+
+    it('zero-config tetap melaporkan placeholder underscore positional', async () => {
+        const ruleEngine = new RuleEngine();
+        const hasil = await analisis(`
+            export function camelcase(input: string): string {
+                return input.replaceAll(/([a-z])-([a-z])/g, (_, p1, p2) => {
+                    return p1 + p2.toUpperCase();
+                });
+            }
+        `, ruleEngine);
+
+        const placeholder = cariByName(hasil, '_');
+        assert.ok(placeholder, 'Aturan prefix umum tidak boleh menyembunyikan anomali positional');
+        assert.strictEqual(placeholder.positional, true);
+        assert.strictEqual(placeholder.status, 'risky');
+    });
+
+    it('prefix ignore tetap berlaku untuk parameter underscore yang bukan positional', async () => {
+        const ruleEngine = new RuleEngine();
+        const hasil = await analisis(`
+            function select(value, _unused) {
+                return value;
+            }
+            console.log(select('result', 'ignored'));
+        `, ruleEngine);
+
+        assert.ok(!adaHasil(hasil, '_unused'), 'Parameter trailing underscore tetap mengikuti ignorePrefixedVariables');
+    });
+
+    it('dapat menonaktifkan laporan positional melalui konfigurasi khusus', async () => {
+        const ruleEngine = new RuleEngine();
+        ruleEngine.rules.ignorePrefixedVariables = null;
+        ruleEngine.rules.reportPositionalParameters = false;
+        const hasil = await analisis(`
+            function select(unused, value) {
+                return value;
+            }
+            console.log(select('placeholder', 'result'));
+        `, ruleEngine);
+
+        assert.ok(!adaHasil(hasil, 'unused'), 'Konfigurasi khusus harus dapat menyembunyikan laporan positional');
+    });
+
+    it('tetap melaporkan parameter trailing yang tidak digunakan', async () => {
+        const ruleEngine = new RuleEngine();
+        ruleEngine.rules.ignorePrefixedVariables = null;
+        const hasil = await analisis(`
+            function select(value, unused) {
+                return value;
+            }
+            console.log(select('result', 'unused'));
+        `, ruleEngine);
+
+        const unusedResult = cariByName(hasil, 'unused');
+        assert.ok(unusedResult, 'Parameter trailing harus tetap dianalisis');
+        assert.strictEqual(unusedResult.type, 'Parameter');
+        assert.strictEqual(unusedResult.status, 'risky');
+        assert.strictEqual(unusedResult.positional, false);
+    });
+
+    it('tidak menyembunyikan binding destructuring yang sebagian tidak digunakan', async () => {
+        const ruleEngine = new RuleEngine();
+        ruleEngine.rules.ignorePrefixedVariables = null;
+        const hasil = await analisis(`
+            function format({ keep, discard }, suffix) {
+                return keep + suffix;
+            }
+            console.log(format({ keep: 'a', discard: 'b' }, '!'));
+        `, ruleEngine);
+
+        const discardResult = cariByName(hasil, 'discard');
+        assert.ok(discardResult, 'Binding destructuring bukan positional placeholder utuh');
+        assert.strictEqual(discardResult.type, 'Parameter');
+        assert.strictEqual(discardResult.positional, false);
     });
 });
 

@@ -1,4 +1,5 @@
 import fs from 'fs-extra';
+import glob from 'fast-glob';
 import path from 'path';
 import { builtinModules } from 'module';
 import { runConfigParsersDetailed } from './configParsers/configParserRunner.js';
@@ -72,10 +73,101 @@ const COMMON_BIN_ALIASES = new Map([
     ['webpack-cli', ['webpack']],
 ]);
 
-function isHeuristicallyExcluded(packageName) {
-    return ALWAYS_EXCLUDED_DEV_EXACT.has(packageName) ||
-        ALWAYS_EXCLUDED_DEV_PATTERNS.some(pattern => pattern.test(packageName));
+async function validateHeuristicExclusion(dependency, projectRoot, allDeclared, effectiveUsedPackages) {
+    const isExcluded = ALWAYS_EXCLUDED_DEV_EXACT.has(dependency) || ALWAYS_EXCLUDED_DEV_PATTERNS.some(pattern => pattern.test(dependency));
+    if (!isExcluded) return false;
+
+    // 1. Ambient Types (@types/*) — Heuristik 3 Lapis
+    if (dependency.startsWith('@types/')) {
+        const base = dependency.slice(7); // e.g. "@types/express" -> "express"
+
+        // Aturan 1 (Coupled Types): @types/X berguna jika paket X ada di dependencies/imports
+        if (base === 'node') return true; // @types/node selalu berguna jika ada TypeScript
+        if (allDeclared.has(base) || effectiveUsedPackages.has(base)) return true;
+
+        // Aturan 2 (Global Ambient): Deteksi penggunaan berdasarkan pola dalam kode sumber
+        const globalAmbientSignals = {
+            'jest': ['describe(', 'it(', 'test(', 'expect(', 'beforeEach(', 'afterEach('],
+            'mocha': ['describe(', 'it(', 'before(', 'after('],
+            'jasmine': ['describe(', 'it(', 'expect(', 'jasmine.'],
+            'node': ['require(', 'process.', '__dirname', '__filename', 'module.exports'],
+            'express': ['express()', 'Router()', 'req.body', 'res.json('],
+        };
+        const signals = globalAmbientSignals[base];
+        if (signals) {
+            try {
+                const srcFiles = await glob(['src/**/*.{ts,tsx,js}', 'lib/**/*.{ts,tsx,js}'], {
+                    cwd: projectRoot,
+                    ignore: ['**/node_modules/**'],
+                    limit: 50,
+                });
+                for (const file of srcFiles) {
+                    const content = fs.readFileSync(path.join(projectRoot, file), 'utf8');
+                    if (signals.some(signal => content.includes(signal))) return true;
+                }
+            } catch (_e) {}
+        }
+
+        // Aturan 3 (TSConfig Types): Jika tercantum dalam field "types" atau "typeRoots" di tsconfig
+        try {
+            for (const cfgName of ['tsconfig.json', 'tsconfig.app.json', 'tsconfig.base.json']) {
+                const cfgPath = path.join(projectRoot, cfgName);
+                if (fs.existsSync(cfgPath)) {
+                    const cfg = fs.readJsonSync(cfgPath);
+                    const types = cfg?.compilerOptions?.types || [];
+                    if (types.includes(base)) return true;
+                }
+            }
+        } catch (_e) {}
+
+        // Fallback: jika TypeScript ada dan @types ini mungkin dibutuhkan oleh compiler
+        if (effectiveUsedPackages.has('typescript')) return true;
+
+        return false;
+    }
+
+    // 2. Test Frameworks
+    const isTestTool = ['jest', 'vitest', 'mocha', 'chai', 'cypress', 'playwright', '@playwright/test'].includes(dependency) 
+        || dependency.startsWith('@vitest/') || dependency.startsWith('jest-') || dependency.startsWith('@testing-library/');
+    if (isTestTool) {
+        const testFiles = await glob(['**/*.test.*', '**/*.spec.*', '**/__tests__/**', '**/test/**'], { 
+            cwd: projectRoot, 
+            ignore: ['**/node_modules/**'] 
+        });
+        return testFiles.length > 0;
+    }
+
+    // 3. TypeScript
+    if (['typescript', 'ts-node', 'tsx'].includes(dependency)) {
+        const tsFiles = await glob(['**/*.ts', '**/*.tsx', 'tsconfig*.json'], { 
+            cwd: projectRoot, 
+            ignore: ['**/node_modules/**'] 
+        });
+        return tsFiles.length > 0;
+    }
+
+    // 4. Build tools & config based
+    const buildToolConfigs = {
+        'vite': 'vite.config.*',
+        'webpack': 'webpack.config.*',
+        'rollup': 'rollup.config.*',
+        'parcel': '.parcelrc'
+    };
+    if (buildToolConfigs[dependency]) {
+        const configs = await glob([buildToolConfigs[dependency]], { cwd: projectRoot, ignore: ['**/node_modules/**']});
+        return configs.length > 0;
+    }
+
+    // Plugins/Loaders usually tied to build tools
+    if (dependency.includes('plugin') || dependency.includes('loader')) {
+        return false;
+    }
+
+    // For any remaining tooling (linters etc) that reached this point:
+    // They are not in code, not in scripts, and have no detected configs.
+    return false;
 }
+
 
 function isWorkspaceDependency(pkg, depName) {
     if (!depName) return false;
@@ -508,13 +600,12 @@ export async function findUnusedDependencies(projectRoot, usedPackages, ruleEngi
             ));
             continue;
         }
-        if (isHeuristicallyExcluded(dependency)) {
-            uncertainRuntime.push(dependency);
+        if (await validateHeuristicExclusion(dependency, projectRoot, allDeclared, effectiveUsedPackages)) {
             findings.push(finding(
                 dependency,
                 'dependencies',
-                'unknown',
-                'Dependency dilindungi heuristic exclusion; tidak ada bukti penggunaan langsung.',
+                'ignored',
+                'Dependency dilindungi secara otomatis oleh classifier (tipe bawaan/tooling).',
                 ['heuristic-exclusion'],
             ));
             continue;
@@ -552,6 +643,7 @@ export async function findUnusedDependencies(projectRoot, usedPackages, ruleEngi
     }
 
     const missing = [];
+    const phantomDeps = [];
     const selfReferences = new Set();
     if (workspaceAnalysisComplete) {
         for (const dependency of effectiveUsedPackages) {
@@ -565,7 +657,14 @@ export async function findUnusedDependencies(projectRoot, usedPackages, ruleEngi
                 continue;
             }
             if (allDeclared.has(dependency)) continue;
-            missing.push(dependency);
+            
+            // Check if it's a phantom dependency (installed in node_modules but not declared)
+            const depNodeModulesPath = path.join(projectRoot, 'node_modules', dependency);
+            if (fs.existsSync(depNodeModulesPath)) {
+                phantomDeps.push(dependency);
+            } else {
+                missing.push(dependency);
+            }
         }
     }
 
@@ -603,13 +702,12 @@ export async function findUnusedDependencies(projectRoot, usedPackages, ruleEngi
             ));
             continue;
         }
-        if (isHeuristicallyExcluded(dependency)) {
-            uncertainDevDeps.push(dependency);
+        if (await validateHeuristicExclusion(dependency, projectRoot, allDeclared, effectiveUsedPackages)) {
             findings.push(finding(
                 dependency,
                 'devDependencies',
-                'unknown',
-                'Dev dependency dilindungi heuristic exclusion.',
+                'ignored',
+                'Dev dependency dilindungi secara otomatis oleh classifier (tipe bawaan/tooling).',
                 ['heuristic-exclusion'],
             ));
             continue;
@@ -650,6 +748,7 @@ export async function findUnusedDependencies(projectRoot, usedPackages, ruleEngi
         // Kontrak lama
         unused: unusedRuntime,
         missing,
+        phantomDeps,
         selfReferences,
         missingBinaries: scriptReport.missingBinaries,
         deadDevDeps,

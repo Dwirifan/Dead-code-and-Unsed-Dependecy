@@ -26,6 +26,8 @@ export function getDependencySafetyContext(graph) {
         : graph?.unsafeFiles;
     const unsafeFiles = [...(dependencyUnsafeFiles || [])];
     const unresolvedImports = [...(graph?.globalRegistry?.unresolvedImports || [])];
+    const parseFailures = [...(graph?.globalRegistry?.parseFailures || [])];
+    const resolverDiagnostics = [...(graph?.globalRegistry?.resolverDiagnostics || [])];
     const unsupportedFiles = [...(graph?.liveFiles || [])]
         .filter(file => UNSUPPORTED_COMPONENT_EXTENSIONS.has(path.extname(file).toLowerCase()));
     const reasons = [];
@@ -39,8 +41,21 @@ export function getDependencySafetyContext(graph) {
     if (unresolvedImports.length > 0) {
         reasons.push(`${unresolvedImports.length} import belum terselesaikan`);
     }
+    if (parseFailures.length > 0) {
+        reasons.push(`${parseFailures.length} file reachable gagal dianalisis`);
+    }
+    if (resolverDiagnostics.length > 0) {
+        reasons.push(`${resolverDiagnostics.length} konfigurasi resolver tidak valid`);
+    }
 
-    return { unsafeFiles, unresolvedImports, unsupportedFiles, reasons };
+    return {
+        unsafeFiles,
+        unresolvedImports,
+        parseFailures,
+        resolverDiagnostics,
+        unsupportedFiles,
+        reasons,
+    };
 }
 
 /**

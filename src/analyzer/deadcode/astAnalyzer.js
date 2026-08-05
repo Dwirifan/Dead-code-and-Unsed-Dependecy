@@ -140,6 +140,8 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
     const ownerStack = []; 
     const declarationByBindingNode = new WeakMap();
     const nodeParents = new WeakMap();
+    const parameterGroupByBindingNode = new WeakMap();
+    const parameterGroupsByFunction = new WeakMap();
 
     let tsScopeManager = null;
     let scopeManagerError = null;
@@ -164,7 +166,6 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
             console.warn(`[DeadKiller] Scope manager gagal untuk ${fileName || '<memory>'}; memakai legacy fallback: ${error.message}`);
         }
     }
-
     const registerDeclaration = (scope, name, type, line, node, parentNode = null, metadata = {}) => {
         const info = scope.addDeclaration(name, type, line, node, parentNode, metadata);
         if (info?.bindingNode) declarationByBindingNode.set(info.bindingNode, info);
@@ -188,6 +189,16 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     (node.type === 'CallExpression' && node.callee.name === 'require' && node.arguments.length > 0 && node.arguments[0].type !== 'Literal' && node.arguments[0].type !== 'TemplateLiteral') ||
                     (node.type === 'ImportExpression' && node.source && node.source.type !== 'Literal' && (node.source.type !== 'TemplateLiteral' || node.source.expressions.length > 0))) {
                     globalRegistry.unsafeFiles.add(fileName);
+                }
+            }
+
+            // Fuzzy Member Tracing: Kumpulkan semua nama properti non-computed yang pernah
+            // diakses di seluruh proyek. Set ini digunakan di Phase 4 untuk mendeteksi
+            // metode/properti kelas yang tidak pernah dipanggil di mana pun.
+            if (node.type === 'MemberExpression' && !node.computed && node.property?.type === 'Identifier') {
+                if (globalRegistry) {
+                    if (!globalRegistry.allProjectMemberNames) globalRegistry.allProjectMemberNames = new Set();
+                    globalRegistry.allProjectMemberNames.add(node.property.name);
                 }
             }
 
@@ -262,13 +273,26 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
 
             // Evaluasi Parameter Fungsi
             if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)) {
-                node.params.forEach(param => {
+                const parameterGroups = node.params.map((param, index) => ({
+                    functionNode: node,
+                    index,
+                    parameterNode: param,
+                    declarations: [],
+                }));
+                parameterGroupsByFunction.set(node, parameterGroups);
+
+                node.params.forEach((param, index) => {
+                    const parameterGroup = parameterGroups[index];
                     const identifiers = extractIdentifiers(param);
                     identifiers.forEach(({ name, node: removalNode, bindingNode }) => {
-                        registerDeclaration(currentScope, name, 'Parameter', param.loc.start.line, removalNode, null, {
+                        const declaration = registerDeclaration(currentScope, name, 'Parameter', param.loc.start.line, removalNode, null, {
                             bindingNode: bindingNode || removalNode,
                             namespace: 'value'
                         });
+                        if (declaration?.bindingNode) {
+                            parameterGroup.declarations.push(declaration);
+                            parameterGroupByBindingNode.set(declaration.bindingNode, parameterGroup);
+                        }
                     });
                 });
             }
@@ -330,13 +354,18 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     bindingNode: node.id,
                     namespace: 'both'
                 });
-                if (node.members) {
-                    node.members.forEach(member => {
+                const enumMembers = Array.isArray(node.body?.members)
+                    ? node.body.members
+                    : (Reflect.get(node, 'members') || []);
+                if (enumMembers.length > 0) {
+                    enumMembers.forEach(member => {
                         if (member.id && member.id.type === 'Identifier') {
                             const memberKey = `${node.id.name}.${member.id.name}`;
                             registerDeclaration(currentScope, memberKey, 'UnusedEnumMember', member.loc.start.line, member, null, {
                                 bindingNode: member.id,
-                                namespace: 'both'
+                                namespace: 'both',
+                                ownerSymbol: node.id.name,
+                                requiresSemanticProof: true,
                             });
                         }
                     });
@@ -515,6 +544,56 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
         allScopes.forEach(s => s.resolve());
     }
 
+    /**
+     * Parameter yang tidak dibaca tetap wajib dipertahankan bila parameter pada
+     * posisi sesudahnya digunakan. Menghapusnya akan menggeser argumen posisi,
+     * misalnya `(match, p1, p2)` pada callback String.replace/replaceAll.
+     *
+     * Pemeriksaan dilakukan pada grup parameter, bukan sekadar nama binding,
+     * agar destructuring yang sebagian masih digunakan tidak salah dilindungi.
+     */
+    const isRequiredPositionalParameter = info => {
+        if (info?.type !== 'Parameter' || !info.bindingNode) return false;
+
+        const parameterGroup = parameterGroupByBindingNode.get(info.bindingNode);
+        if (!parameterGroup) return false;
+
+        const currentGroupIsUnused = parameterGroup.declarations.every(declaration => (
+            declaration.readCount === 0
+        ));
+        if (!currentGroupIsUnused) return false;
+
+        const parameterGroups = parameterGroupsByFunction.get(parameterGroup.functionNode) || [];
+        return parameterGroups.slice(parameterGroup.index + 1).some(laterGroup => (
+            laterGroup.declarations.some(declaration => declaration.readCount > 0)
+        ));
+    };
+
+    /**
+     * Positional parameter memakai kebijakan laporan khusus. Secara default
+     * anomali ini tetap dilaporkan meskipun namanya cocok dengan pola ignore
+     * seperti `_`, karena prefix tidak menghilangkan risiko pergeseran argumen.
+     */
+    const shouldSuppressUnusedDeclaration = info => {
+        if (isRequiredPositionalParameter(info)) {
+            return effectiveRules.reportPositionalParameters === false;
+        }
+
+        const isIgnored = ruleEngine && ruleEngine.isIgnoredVariable(info.name, fileName);
+        return Boolean(isIgnored && !is100PercentDeadIgnoredVariable(info));
+    };
+
+    const exportedLocals = globalRegistry?.fileExportedLocals?.get(fileName) || null;
+    const projectGraphCompleteness = globalRegistry?.graphCompleteness || null;
+    const graphCompleteness = globalRegistry?.fileGraphCompleteness?.get(fileName) ||
+        projectGraphCompleteness;
+    const isExportedDeclaration = info => Boolean(
+        exportedLocals && (
+            exportedLocals.has(info.name) ||
+            (info.ownerSymbol && exportedLocals.has(info.ownerSymbol))
+        )
+    );
+
     // Phase 3.5: Fixed-Point Iterative Elimination (Cascading Dead Code Detection)
     // Melakukan konvergensi loop dalam memori untuk mendeteksi dead code berantai dalam 1 scan.
     const deadDeclarations = new Set();
@@ -522,13 +601,13 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
 
     allScopes.forEach(scope => {
         scope.declarations.forEach(info => {
-            const name = info.name;
-            if (info.readCount === 0 && info.type !== 'CatchParameter') {
-                const isIgnored = ruleEngine && ruleEngine.isIgnoredVariable(name, fileName);
-                if (!isIgnored || is100PercentDeadIgnoredVariable(info)) {
-                    deadDeclarations.add(info);
-                    newlyDead.push(info);
-                }
+            if (
+                info.readCount === 0 &&
+                info.type !== 'CatchParameter' &&
+                !shouldSuppressUnusedDeclaration(info)
+            ) {
+                deadDeclarations.add(info);
+                newlyDead.push(info);
             }
         });
     });
@@ -546,12 +625,13 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     ref.targetDecl.readCount--;
                     if (ref.targetDecl.readCount === 0) {
                         ref.targetDecl.used = false;
-                        if (ref.targetDecl.type !== 'CatchParameter' && !deadDeclarations.has(ref.targetDecl)) {
-                            const isIgnored = ruleEngine && ruleEngine.isIgnoredVariable(ref.targetDecl.name, fileName);
-                            if (!isIgnored || is100PercentDeadIgnoredVariable(ref.targetDecl)) {
-                                deadDeclarations.add(ref.targetDecl);
-                                nextDead.push(ref.targetDecl);
-                            }
+                        if (
+                            ref.targetDecl.type !== 'CatchParameter' &&
+                            !shouldSuppressUnusedDeclaration(ref.targetDecl) &&
+                            !deadDeclarations.has(ref.targetDecl)
+                        ) {
+                            deadDeclarations.add(ref.targetDecl);
+                            nextDead.push(ref.targetDecl);
                         }
                     }
                 }
@@ -578,12 +658,12 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
 
     allScopes.forEach(scope => {
         scope.declarations.forEach(info => {
-            const name = info.name;
-            if (!info.used && info.type !== 'CatchParameter') {
-                const isIgnored = ruleEngine && ruleEngine.isIgnoredVariable(name, fileName);
-                if (!isIgnored || is100PercentDeadIgnoredVariable(info)) {
-                    deadBindingNodes.add(info.bindingNode);
-                }
+            if (
+                !info.used &&
+                info.type !== 'CatchParameter' &&
+                !shouldSuppressUnusedDeclaration(info)
+            ) {
+                deadBindingNodes.add(info.bindingNode);
             }
         });
     });
@@ -593,8 +673,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
            const name = info.name;
            if (!info.used) {
                if (info.type === 'CatchParameter') return; // JANGAN laporkan parameter catch karena menghapusnya bisa merusak sintaks (catch ())
-               const isIgnored = ruleEngine && ruleEngine.isIgnoredVariable(name, fileName);
-               if (isIgnored && !is100PercentDeadIgnoredVariable(info)) return;
+               if (shouldSuppressUnusedDeclaration(info)) return;
 
                let targetNode = info.node;
 
@@ -659,17 +738,59 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     }
                 }
 
+                const positional = isRequiredPositionalParameter(info);
+                const exported = isExportedDeclaration(info);
+                const exportedEnumMemberWithoutSemanticProof = Boolean(
+                    exported && info.type === 'UnusedEnumMember' && info.requiresSemanticProof
+                );
                 let { confidence, status, reason } = classifyConfidence(effectiveType, {
+                    name,
                     isImport,
                     isImpureInitializer,
                     isImpureWrite,
+                    isPositional: positional,
                 });
 
+                let originalStatus = null;
+                let uncertainty = null;
+
                 if (scopeManagerError && status === 'safe') {
+                    originalStatus = status;
                     confidence = 'medium';
                     status = 'review';
+                    uncertainty = 'local-scope-incomplete';
                     reason = `${reason} Scope manager tidak tersedia untuk file ini; hasil legacy fallback wajib ditinjau.`;
                 }
+
+                if (exported && graphCompleteness?.complete === false && status === 'safe') {
+                    originalStatus ||= status;
+                    confidence = 'medium';
+                    status = 'review';
+                    uncertainty = 'module-graph-incomplete';
+                    reason = `${reason} Export tidak boleh dihapus otomatis karena graph modul berstatus ${graphCompleteness.status}; ${graphCompleteness.reasons.join('; ')}.`;
+                }
+
+                if (exportedEnumMemberWithoutSemanticProof && status === 'safe') {
+                    originalStatus ||= status;
+                    confidence = 'medium';
+                    status = 'review';
+                    uncertainty = 'cross-file-enum-member-unproven';
+                    reason = `${reason} Enum diekspor dan penggunaan member lintas file belum dapat dibuktikan lengkap tanpa analisis simbol semantik.`;
+                }
+
+                const proof = {
+                    localUsageComplete: !scopeManagerError,
+                    crossFileRequired: exported,
+                    moduleGraphStatus: graphCompleteness?.status || 'not-applicable',
+                    moduleGraphComponentId: graphCompleteness?.id ?? null,
+                    projectGraphStatus: projectGraphCompleteness?.status || 'not-applicable',
+                    moduleResolutionComplete: exported
+                        ? (graphCompleteness?.complete ?? null)
+                        : null,
+                    semanticReferenceComplete: exportedEnumMemberWithoutSemanticProof
+                        ? false
+                        : null,
+                };
 
                 deadCode.push({
                     name,
@@ -680,6 +801,11 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     confidence,
                     status,
                     reason,
+                    positional,
+                    exported,
+                    proof,
+                    ...(originalStatus ? { originalStatus } : {}),
+                    ...(uncertainty ? { uncertainty } : {}),
                     analysisBackend: tsScopeManager ? 'scope-manager' : 'legacy-fallback'
                 });
            }

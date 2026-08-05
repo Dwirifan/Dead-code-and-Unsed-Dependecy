@@ -93,7 +93,15 @@ async function _fixSingleFile(absolutePath, startTime, inquirer, level = 3, auto
     const protectedFile = ruleEngine.isPreservedFile(absolutePath, projectRoot);
 
     const ast = await parseCode(code, absolutePath);
-    const dummyRegistry = { usedExports: new Map(), unsafeFiles: new Set() };
+    const dummyRegistry = {
+        usedExports: new Map(),
+        unsafeFiles: new Set(),
+        graphCompleteness: {
+            status: 'unknown',
+            complete: false,
+            reasons: ['fix satu file tidak membangun graph proyek'],
+        },
+    };
     const deadNodes = findDeadCode(ast, absolutePath, dummyRegistry, ruleEngine);
 
     if (dummyRegistry.unsafeFiles.has(absolutePath)) {
@@ -262,6 +270,8 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
         .filter(f => !graph.liveFiles.has(f))
         .filter(f => !ruleEngine.isIgnoredFile(f, absolutePath))
         .filter(f => !ruleEngine.isPreservedFile(f, absolutePath));
+    const graphComplete = graph.completeness?.complete !== false;
+    const removableDeadFiles = graphComplete ? deadFiles : [];
 
     // Dead code di dalam live files (global, otomatis)
     const deadCodeReport = [];
@@ -360,6 +370,7 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
     const hasAnything = unusedDeps.length > 0 ||
         uncertainDeps.length > 0 ||
         dependencyDiagnostics.length > 0 ||
+        graph.completeness?.complete === false ||
         deadFiles.length > 0 ||
         deadCodeReport.length > 0 ||
         skippedReport.length > 0;
@@ -370,6 +381,14 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
     }
 
     console.log(chalk.cyan('\n====== LAPORAN ANALISIS ======'));
+
+    if (graph.completeness?.complete === false) {
+        console.log(chalk.yellow(`\n[!] MODULE GRAPH ${graph.completeness.status.toUpperCase()} — mode fail-closed aktif.`));
+        graph.completeness.reasons.forEach(reason => (
+            console.log(chalk.gray(`   - ${reason}`))
+        ));
+        console.log(chalk.gray('   Export tidak pasti dan file tak terjangkau tidak akan dihapus otomatis.'));
+    }
 
     // Tampilkan unsafe files warning (Conservative Safety Fallback)
     if (graph.unsafeFiles && graph.unsafeFiles.size > 0) {
@@ -422,6 +441,12 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
     if (deadFiles.length > 0) {
         console.log(chalk.yellow(`\n[~] File mati/tak terjangkau (${deadFiles.length}):`));
         deadFiles.forEach(f => console.log(`   - ${path.relative(absolutePath, f)}`));
+        if (!graphComplete) {
+            console.log(chalk.yellow('   [PROTECTED] Penghapusan file diblokir karena graph modul tidak lengkap.'));
+            (graph.completeness?.reasons || []).forEach(reason => (
+                console.log(chalk.gray(`     alasan: ${reason}`))
+            ));
+        }
     }
     if (unusedDeps.length > 0) {
         console.log(chalk.yellow(`\n[+] Kandidat dependensi tidak terpakai — perlu review (${unusedDeps.length}):`));
@@ -463,7 +488,7 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
     // 2. Satu konfirmasi akhir
     const parts = [
         deadCodeReport.length > 0 && `bersihkan dead code di ${deadCodeReport.length} file`,
-        deadFiles.length > 0 && `hapus ${deadFiles.length} file mati`,
+        removableDeadFiles.length > 0 && `hapus ${removableDeadFiles.length} file mati`,
         selectedDepsToRemove.length > 0 && `hapus ${selectedDepsToRemove.length} dependensi`,
     ].filter(Boolean);
 
@@ -482,7 +507,7 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
     // ---- Eksekusi ----
     console.log(chalk.cyan('\n[>>] Menerapkan...'));
 
-    const filesToBackup = [...deadFiles, ...deadCodeReport.map(r => r.file)];
+    const filesToBackup = [...removableDeadFiles, ...deadCodeReport.map(r => r.file)];
     let backupDir;
     try {
         filesToBackup.forEach(file => (
@@ -502,7 +527,7 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
     try {
         // Package manager selalu menjadi langkah terakhir sehingga tidak ada
         // mutasi source lain yang dapat gagal setelah uninstall berhasil.
-        for (const f of deadFiles) {
+        for (const f of removableDeadFiles) {
             assertExistingPathInsideRoot(absolutePath, f, 'menghapus');
             await fs.remove(f);
             console.log(chalk.green(`   [ok] Dihapus: ${path.relative(absolutePath, f)}`));

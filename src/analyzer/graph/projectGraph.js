@@ -6,7 +6,7 @@ import glob from 'fast-glob';
 import { isReference } from '../deadcode/core/isReference.js';
 import { visitorKeys as tsVisitorKeys } from '@typescript-eslint/visitor-keys';
 import { resolveBarrelExports } from '../deadcode/core/barrelResolver.js';
-import { resolvePath } from './pathResolver.js';
+import { RESOLUTION_REASON, resolvePathDetailed } from './pathResolver.js';
 import { findEntryPoints } from './entryPointFinder.js';
 import { SCRIPT_EXTENSION_SET } from '../../parser/supportedExtensions.js';
 import { matchesOrderedPatterns } from '../globMatcher.js';
@@ -30,7 +30,7 @@ function isIgnoredGraphFile(filePath, projectRoot, ruleEngine) {
 /**
  * Membangun sebuah graf struktural yang komprehensif merayapi titik masuk (entry point) menggunakan BFS.
  * @param {string} projectRoot - Direktori proyek
- * @returns {Promise<{ liveFiles: Set<string>, usedPackages: Set<string>, edges: Array, unsafeFiles: Set<string>, globalRegistry: Object }>}
+ * @returns {Promise<{ liveFiles: Set<string>, usedPackages: Set<string>, edges: Array, unsafeFiles: Set<string>, completeness: Object, globalRegistry: Object }>}
  */
 export async function buildProjectGraph(projectRoot, ruleEngine = null) {
     // 1. Dapatkan file entry points yang tervalidasi menggunakan finder module
@@ -46,6 +46,7 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
     // Status Pencatatan Keamanan (Bailout Heuristics) & Memori Analisis
     const unsafeFiles = new Set();
     const dynamicDependencyFiles = new Set();
+    const parseFailures = [];
     const globalRegistry = {
         usedExports: new Map(), // file -> Set of used exported names
         exports: new Map(), // Exported/Declared Names -> { isUnused, file } (legacy)
@@ -53,6 +54,10 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
         classMethodCalls: new Map(), // className -> Set<methodName> (cross-file tracking)
         calledMethods: new Set(), // methodName (all called method names across project)
         unresolvedImports: [], // { file, importPath } (Fitur 5: Broken Links)
+        resolutionIssues: [], // structured resolution diagnostics
+        resolverDiagnostics: [], // invalid/unreadable module configuration
+        virtualModules: [], // runtime/framework-provided module boundaries
+        parseFailures,
         projectExports: new Map(), // exportName -> Set<filePath> (Fitur 8: Duplicate Exports)
         reExportLinks: [] // { fromFile, fromExport, toFile, toExport }
     };
@@ -325,10 +330,17 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
 
             // Eksekusi Pembangunan Edge (Garis Silsilah) untuk Impor Lokal
             for (const imp of importsToResolve) {
-                // enhanced-resolve menangani semua (relatif, absolut, maupun alias)
-                const absolute = await resolvePath(projectRoot, fileDir, imp.path);
+                const resolution = await resolvePathDetailed(projectRoot, fileDir, imp.path);
+                const absolute = resolution.path;
+                for (const diagnostic of resolution.configErrors || []) {
+                    const alreadyRecorded = globalRegistry.resolverDiagnostics.some(item => (
+                        item.configName === diagnostic.configName &&
+                        item.message === diagnostic.message
+                    ));
+                    if (!alreadyRecorded) globalRegistry.resolverDiagnostics.push(diagnostic);
+                }
 
-                if (absolute) {
+                if (resolution.status === 'resolved' && absolute) {
                     const containedInProject = isExistingPathInsideRoot(projectRoot, absolute);
                     if (
                         absolute.includes('node_modules') ||
@@ -344,10 +356,24 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
                                 file: currentFile,
                                 importPath: imp.path,
                                 reason: 'outside-project-root',
+                                reasonCode: RESOLUTION_REASON.OUTSIDE_PROJECT_ROOT,
+                                resolution,
                             });
+                            globalRegistry.resolutionIssues.push(
+                                globalRegistry.unresolvedImports.at(-1),
+                            );
                             continue;
                         }
-                        edges.push({ from: currentFile, to: absolute, names: imp.names, isTypeOnly: Boolean(imp.isTypeOnly) });
+                        edges.push({
+                            from: currentFile,
+                            to: absolute,
+                            names: imp.names,
+                            isTypeOnly: Boolean(imp.isTypeOnly),
+                            confidence: 'proven',
+                            resolutionStrategy: resolution.strategy,
+                            configPath: resolution.configPath,
+                            specifier: imp.path,
+                        });
 
                         if (!globalRegistry.usedExports.has(absolute)) {
                             globalRegistry.usedExports.set(absolute, new Set());
@@ -382,23 +408,43 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
                             }
                         }
                     }
-                } else {
-                    // Jika gagal diselesaikan secara lokal, dan awalnya dicurigai NPM package, pastikan dicatat
+                } else if (resolution.status === 'external') {
                     if (imp.pkgName) {
                         usedPackages.add(imp.pkgName);
-                    } else {
-                        // FITUR 5: Broken Links (Unresolved Imports)
-                        globalRegistry.unresolvedImports.push({
-                            file: currentFile,
-                            importPath: imp.path
-                        });
                     }
+                } else if (resolution.status === 'virtual') {
+                    globalRegistry.virtualModules.push({
+                        file: currentFile,
+                        importPath: imp.path,
+                        reasonCode: resolution.reasonCode,
+                        strategy: resolution.strategy,
+                    });
+                } else {
+                    const issue = {
+                        file: currentFile,
+                        importPath: imp.path,
+                        reason: 'not-found',
+                        reasonCode: resolution.reasonCode,
+                        strategy: resolution.strategy,
+                        configPath: resolution.configPath,
+                        attempts: resolution.attempts,
+                        ...(resolution.configErrors
+                            ? { configErrors: resolution.configErrors }
+                            : {}),
+                    };
+                    globalRegistry.unresolvedImports.push(issue);
+                    globalRegistry.resolutionIssues.push(issue);
                 }
             }
 
         } catch (err) {
             // File gagal di-parse (syntax error, encoding, dll) → skip tapi beri warning
             const relPath = path.relative(projectRoot, currentFile);
+            parseFailures.push({
+                file: currentFile,
+                reason: err.name === 'ParseError' ? 'parse-error' : 'analysis-error',
+                message: err.message?.split('\n')[0] || String(err),
+            });
             if (err.name === 'ParseError' && process.env.DEBUG) {
                 console.warn(`[!] Skip parse error: ${relPath} (line ${err.line || '?'}): ${err.message.split('\n')[0]}`);
             }
@@ -458,13 +504,149 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
     globalRegistry.unsafeFiles = new Set(graphUnsafeFiles);
     globalRegistry.dynamicDependencyFiles = dynamicDependencyFiles;
 
+    // Kontrak keselamatan: `complete` hanya berarti traversal tidak kehilangan
+    // bukti yang diketahui. Ini bukan klaim bahwa seluruh perilaku runtime telah
+    // dipahami oleh analisis statis.
+    const completenessReasons = [];
+    if (globalRegistry.unresolvedImports.length > 0) {
+        completenessReasons.push(`${globalRegistry.unresolvedImports.length} import belum terselesaikan`);
+    }
+    if (parseFailures.length > 0) {
+        completenessReasons.push(`${parseFailures.length} file gagal dianalisis`);
+    }
+    if (graphUnsafeFiles.size > 0) {
+        completenessReasons.push(`${graphUnsafeFiles.size} file mengandung pola dinamis`);
+    }
+    if (globalRegistry.resolverDiagnostics.length > 0) {
+        completenessReasons.push(`${globalRegistry.resolverDiagnostics.length} konfigurasi resolver tidak valid`);
+    }
+
+    const completeness = Object.freeze({
+        status: completenessReasons.length === 0 ? 'complete' : 'partial',
+        complete: completenessReasons.length === 0,
+        reasons: Object.freeze(completenessReasons),
+        entryPointCount: entryFiles.length,
+        unresolvedImportCount: globalRegistry.unresolvedImports.length,
+        parseFailureCount: parseFailures.length,
+        dynamicFileCount: graphUnsafeFiles.size,
+        resolverDiagnosticCount: globalRegistry.resolverDiagnostics.length,
+    });
+    globalRegistry.graphCompleteness = completeness;
+
+    const componentAnalysis = buildGraphComponents({
+        liveFiles,
+        edges,
+        unresolvedImports: globalRegistry.unresolvedImports,
+        parseFailures,
+        dynamicFiles: graphUnsafeFiles,
+        resolverDiagnostics: globalRegistry.resolverDiagnostics,
+    });
+    globalRegistry.fileGraphCompleteness = componentAnalysis.byFile;
+    globalRegistry.graphComponents = componentAnalysis.components;
+
     return {
         liveFiles,
         usedPackages,
         edges,
         unsafeFiles: graphUnsafeFiles,
         dynamicDependencyFiles,
+        completeness,
         globalRegistry,
+    };
+}
+
+function buildGraphComponents({
+    liveFiles,
+    edges,
+    unresolvedImports,
+    parseFailures,
+    dynamicFiles,
+    resolverDiagnostics,
+}) {
+    const globallyAmbiguousResolutionCount = resolverDiagnostics.length;
+    const adjacency = new Map([...liveFiles].map(file => [file, new Set()]));
+    for (const edge of edges) {
+        if (!adjacency.has(edge.from)) adjacency.set(edge.from, new Set());
+        if (!adjacency.has(edge.to)) adjacency.set(edge.to, new Set());
+        adjacency.get(edge.from).add(edge.to);
+        adjacency.get(edge.to).add(edge.from);
+    }
+
+    const unresolvedByFile = new Map();
+    for (const issue of unresolvedImports) {
+        if (!unresolvedByFile.has(issue.file)) unresolvedByFile.set(issue.file, []);
+        unresolvedByFile.get(issue.file).push(issue);
+    }
+
+    const parseFailuresByFile = new Map();
+    for (const failure of parseFailures) {
+        if (!parseFailuresByFile.has(failure.file)) parseFailuresByFile.set(failure.file, []);
+        parseFailuresByFile.get(failure.file).push(failure);
+    }
+
+    const visited = new Set();
+    const components = [];
+    const byFile = new Map();
+
+    for (const startFile of adjacency.keys()) {
+        if (visited.has(startFile)) continue;
+
+        const queue = [startFile];
+        const files = [];
+        visited.add(startFile);
+        while (queue.length > 0) {
+            const file = queue.shift();
+            files.push(file);
+            for (const neighbor of adjacency.get(file) || []) {
+                if (visited.has(neighbor)) continue;
+                visited.add(neighbor);
+                queue.push(neighbor);
+            }
+        }
+
+        const unresolvedCount = files.reduce(
+            (count, file) => count + (unresolvedByFile.get(file)?.length || 0),
+            0,
+        );
+        const parseFailureCount = files.reduce(
+            (count, file) => count + (parseFailuresByFile.get(file)?.length || 0),
+            0,
+        );
+        const dynamicFileCount = files.reduce(
+            (count, file) => count + (dynamicFiles.has(file) ? 1 : 0),
+            0,
+        );
+        const reasons = [];
+        if (unresolvedCount > 0) reasons.push(`${unresolvedCount} import belum terselesaikan`);
+        if (parseFailureCount > 0) reasons.push(`${parseFailureCount} file gagal dianalisis`);
+        if (dynamicFileCount > 0) reasons.push(`${dynamicFileCount} file mengandung pola dinamis`);
+        if (parseFailures.length > parseFailureCount) {
+            reasons.push('parse failure di komponen lain dapat menyembunyikan edge lintas komponen');
+        }
+        if (dynamicFiles.size > dynamicFileCount) {
+            reasons.push('resolusi dinamis di komponen lain dapat menargetkan komponen ini');
+        }
+        if (globallyAmbiguousResolutionCount > 0) {
+            reasons.push(`${globallyAmbiguousResolutionCount} kegagalan konfigurasi resolver bersifat global`);
+        }
+
+        const component = Object.freeze({
+            id: components.length,
+            status: reasons.length === 0 ? 'complete' : 'partial',
+            complete: reasons.length === 0,
+            reasons: Object.freeze(reasons),
+            files: Object.freeze(files),
+            unresolvedImportCount: unresolvedCount,
+            parseFailureCount,
+            dynamicFileCount,
+        });
+        components.push(component);
+        for (const file of files) byFile.set(file, component);
+    }
+
+    return {
+        components: Object.freeze(components),
+        byFile,
     };
 }
 

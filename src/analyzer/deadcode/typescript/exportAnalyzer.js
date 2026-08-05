@@ -173,9 +173,20 @@ export function markUsedExports(ast, globalScope, fileName, globalRegistry, rule
     estraverse.traverse(ast, {
         fallback: 'iteration',
         enter: function(node) {
-             const recordExport = (name) => {
-                 if (!globalRegistry || !globalRegistry.projectExports) return;
-                 if (name === 'default') return; // Abaikan default exports karena namanya bebas (bisa bentrok tapi sah)
+             const recordExport = (name, localName = name) => {
+                 if (!globalRegistry) return;
+
+                 if (!globalRegistry.fileExportedLocals) {
+                     globalRegistry.fileExportedLocals = new Map();
+                 }
+                 if (!globalRegistry.fileExportedLocals.has(fileName)) {
+                     globalRegistry.fileExportedLocals.set(fileName, new Set());
+                 }
+                 if (localName) {
+                     globalRegistry.fileExportedLocals.get(fileName).add(localName);
+                 }
+
+                 if (!globalRegistry.projectExports || name === 'default') return;
                  if (!globalRegistry.projectExports.has(name)) {
                      globalRegistry.projectExports.set(name, new Set());
                  }
@@ -266,7 +277,12 @@ export function markUsedExports(ast, globalScope, fileName, globalRegistry, rule
                      node.specifiers.forEach(spec => {
                          if (spec.exported && spec.exported.type === 'Identifier') {
                              const exportName = spec.exported.name;
-                             recordExport(exportName);
+                             recordExport(
+                                 exportName,
+                                 spec.local && spec.local.type === 'Identifier'
+                                     ? spec.local.name
+                                     : exportName,
+                             );
                              if (checkUsage(exportName, null)) {
                                  globalScope.markUsed(exportName);
                                  if (spec.local && spec.local.type === 'Identifier') {
@@ -278,7 +294,10 @@ export function markUsedExports(ast, globalScope, fileName, globalRegistry, rule
                  }
              }
              if (node.type === 'ExportDefaultDeclaration') {
-                 recordExport('default');
+                 const defaultLocalName = node.declaration.type === 'Identifier'
+                     ? node.declaration.name
+                     : node.declaration.id?.name;
+                 recordExport('default', defaultLocalName || null);
                  const preserveDefault = hasFrameworkDefaultExport(context);
                  if (node.declaration.type === 'Identifier') {
                      if (preserveDefault || checkUsage(node.declaration.name, node.declaration)) {

@@ -33,6 +33,8 @@ export class Scope {
             parentNode,
             bindingNode,
             namespace: metadata.namespace || 'value',
+            ownerSymbol: metadata.ownerSymbol || null,
+            requiresSemanticProof: metadata.requiresSemanticProof === true,
             used: false,
             readCount: 0,
             writeCount: 0,

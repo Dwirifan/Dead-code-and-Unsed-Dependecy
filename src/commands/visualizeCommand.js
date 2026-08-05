@@ -122,6 +122,11 @@ export function registerVisualizeCommand(program) {
                     protectedNodes: allDeadNodes.filter(n => n.protected),
                     deadFiles,
                     unsafeFiles: graph.unsafeFiles ? [...graph.unsafeFiles].map(f => path.relative(absolutePath, f)) : [],
+                    graphAnalysis: graph.completeness || {
+                        status: 'unknown',
+                        complete: false,
+                        reasons: ['dashboard tidak menerima metadata kelengkapan graph'],
+                    },
                     dependencyReport
                 };
 

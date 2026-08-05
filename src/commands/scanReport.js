@@ -22,6 +22,11 @@ function normalizeDeadCode(projectRoot, nodes = []) {
             confidence: node.confidence || 'medium',
             status: node.status || 'review',
             protected: Boolean(node.protected),
+            positional: Boolean(node.positional),
+            exported: Boolean(node.exported),
+            uncertainty: node.uncertainty || null,
+            originalStatus: node.originalStatus || null,
+            proof: node.proof || null,
             reason: node.reason || '',
         }))
         .sort((left, right) => (
@@ -38,6 +43,19 @@ function normalizeUnresolvedImports(projectRoot, values = []) {
             file: toPortablePath(projectRoot, item.file),
             importPath: item.importPath,
             reason: item.reason || 'not-found',
+            reasonCode: item.reasonCode || null,
+            strategy: item.strategy || null,
+            configPath: item.configPath
+                ? toPortablePath(projectRoot, item.configPath)
+                : null,
+            attempts: (item.attempts || []).map(attempt => ({
+                request: toPortablePath(projectRoot, attempt.request),
+                strategy: attempt.strategy || null,
+                configPath: attempt.configPath
+                    ? toPortablePath(projectRoot, attempt.configPath)
+                    : null,
+                errorCode: attempt.errorCode || null,
+            })),
         }))
         .sort((left, right) => (
             left.file.localeCompare(right.file) ||
@@ -72,6 +90,61 @@ function statusCounts(deadCode) {
         }
     }
     return counts;
+}
+
+function graphAnalysisData(projectRoot, graph) {
+    const unresolvedCount = graph?.globalRegistry?.unresolvedImports?.length || 0;
+    const parseFailures = (graph?.globalRegistry?.parseFailures || [])
+        .map(item => ({
+            file: toPortablePath(projectRoot, item.file),
+            reason: item.reason || 'parse-error',
+            message: item.message || '',
+        }))
+        .sort((left, right) => String(left.file).localeCompare(String(right.file)));
+    const dynamicFileCount = graph?.unsafeFiles?.size || 0;
+    const rawResolverDiagnostics = graph?.globalRegistry?.resolverDiagnostics || [];
+    const declared = graph?.completeness || graph?.globalRegistry?.graphCompleteness;
+    const inferredPartial = unresolvedCount > 0 || parseFailures.length > 0 ||
+        dynamicFileCount > 0 || rawResolverDiagnostics.length > 0;
+    const components = (graph?.globalRegistry?.graphComponents || [])
+        .map(component => ({
+            id: component.id,
+            status: component.status,
+            complete: Boolean(component.complete),
+            reasons: sortedStrings(component.reasons || []),
+            files: sortedStrings(
+                (component.files || []).map(file => toPortablePath(projectRoot, file)),
+            ),
+            unresolvedImportCount: component.unresolvedImportCount || 0,
+            parseFailureCount: component.parseFailureCount || 0,
+            dynamicFileCount: component.dynamicFileCount || 0,
+        }))
+        .sort((left, right) => left.id - right.id);
+    const resolverDiagnostics = rawResolverDiagnostics
+        .map(item => ({
+            configName: item.configName || null,
+            searchDirectory: item.searchDirectory
+                ? toPortablePath(projectRoot, item.searchDirectory)
+                : null,
+            message: item.message || '',
+        }));
+
+    return {
+        status: declared?.status || (inferredPartial ? 'partial' : 'unknown'),
+        complete: declared ? Boolean(declared.complete) : false,
+        reasons: sortedStrings(declared?.reasons || []),
+        entryPointCount: declared?.entryPointCount ?? null,
+        unresolvedImportCount: declared?.unresolvedImportCount ?? unresolvedCount,
+        parseFailureCount: declared?.parseFailureCount ?? parseFailures.length,
+        dynamicFileCount: declared?.dynamicFileCount ?? dynamicFileCount,
+        componentCount: components.length,
+        partialComponentCount: components.filter(component => !component.complete).length,
+        virtualModuleCount: graph?.globalRegistry?.virtualModules?.length || 0,
+        resolverDiagnosticCount: declared?.resolverDiagnosticCount ?? resolverDiagnostics.length,
+        resolverDiagnostics,
+        components,
+        parseFailures,
+    };
 }
 
 function configData(ruleEngine, file = null) {
@@ -143,6 +216,7 @@ export function createDirectoryScanReport({
         [...(graph.unsafeFiles || [])].map(file => toPortablePath(projectRoot, file)),
     );
     const dependencies = dependencyData(dependencyReport, dependencyAnalysisError);
+    const graphAnalysis = graphAnalysisData(projectRoot, graph);
     const counts = statusCounts(deadCode);
 
     const codeFindings = deadCode.length + normalizedDeadFiles.length + unresolvedImports.length +
@@ -165,6 +239,8 @@ export function createDirectoryScanReport({
         config: configData(ruleEngine),
         summary: {
             liveFiles: graph.liveFiles.size,
+            graphStatus: graphAnalysis.status,
+            graphComplete: graphAnalysis.complete,
             totalIssues: totalFindings,
             totalFindings,
             codeFindings,
@@ -190,6 +266,7 @@ export function createDirectoryScanReport({
             analysisTime: `${analysisTimeMs.toFixed(2)} ms`,
         },
         unsafeFiles,
+        graphAnalysis,
         ...dependencies,
         deadFiles: normalizedDeadFiles,
         unresolvedImports,
@@ -216,6 +293,11 @@ export function createSingleFileScanReport({
             confidence: node.confidence || 'medium',
             status: node.status || 'review',
             protected: Boolean(protectedFile),
+            positional: Boolean(node.positional),
+            exported: Boolean(node.exported),
+            uncertainty: node.uncertainty || null,
+            originalStatus: node.originalStatus || null,
+            proof: node.proof || null,
             reason: node.reason || '',
         }))
         .sort((left, right) => (

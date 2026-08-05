@@ -10,6 +10,7 @@ const DEFAULT_RULES = {
     mode: 'vanilla',
     framework: 'vanilla',
     ignorePrefixedVariables: '^_',
+    reportPositionalParameters: true,
     preserveExports: true,
     preserveUnsafeFiles: true,
     detectDeadStores: true,
