@@ -132,12 +132,12 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
     const allScopes = [];
     const globalScope = new Scope();
     allScopes.push(globalScope);
-    
+
     let currentScope = globalScope;
     let scopeStack = [globalScope];
-    let scopeTypeStack = ['global']; 
-    const parentStack = []; 
-    const ownerStack = []; 
+    let scopeTypeStack = ['global'];
+    const parentStack = [];
+    const ownerStack = [];
     const declarationByBindingNode = new WeakMap();
     const nodeParents = new WeakMap();
     const parameterGroupByBindingNode = new WeakMap();
@@ -214,7 +214,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                 if (node.type === 'FunctionDeclaration' && node.id) {
                     newScope.selfName = node.id.name;
                 } else if (parent && parent.type === 'VariableDeclarator'
-                           && parent.id && parent.id.type === 'Identifier') {
+                    && parent.id && parent.id.type === 'Identifier') {
                     newScope.selfName = parent.id.name;
                 }
             } else if (node.type === 'ClassDeclaration' || node.type === 'ClassExpression') {
@@ -241,7 +241,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                 const targetScope = (declarationKind === 'var')
                     ? findFunctionScope(scopeStack, scopeTypeStack)
                     : currentScope;
-                
+
                 identifiers.forEach(({ name, node: removalNode, bindingNode }) => {
                     const idNode = bindingNode || removalNode;
                     const targetDeletionNode = (node.id.type === 'Identifier') ? node : removalNode;
@@ -269,6 +269,26 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                         namespace: 'both'
                     });
                 }
+            }
+
+            // Fuzzy Member Tracing - Pendataan Metode & Properti Kelas:
+            // Daftarkan setiap MethodDefinition dan PropertyDefinition sehingga
+            // dapat dibandingkan dengan globalRegistry.allProjectMemberNames nanti.
+            if ((node.type === 'MethodDefinition' || node.type === 'PropertyDefinition') &&
+                node.key?.type === 'Identifier' &&
+                node.kind !== 'constructor') {
+                const ownerClass = parentStack.slice().reverse().find(n =>
+                    n.type === 'ClassDeclaration' || n.type === 'ClassExpression'
+                );
+                const ownerName = ownerClass?.id?.name || '<anonymous>';
+                const memberKey = `${ownerName}#${node.key.name}`;
+                registerDeclaration(currentScope, memberKey, 'UnusedClassMember', node.loc.start.line, node, null, {
+                    bindingNode: node.key,
+                    namespace: 'value',
+                    memberName: node.key.name,
+                    isStatic: node.static || false,
+                    ownerClass: ownerName,
+                });
             }
 
             // Evaluasi Parameter Fungsi
@@ -314,7 +334,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     return; // Side-effect import
                 }
                 const isTypeImport = node.importKind === 'type';
-                
+
                 node.specifiers.forEach(spec => {
                     if (spec.local && spec.local.type === 'Identifier') {
                         const isSpecifierTypeImport = spec.importKind === 'type' || isTypeImport;
@@ -430,7 +450,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                         currentScope.addWriteReference(node.name, node, currentOwners);
                     } else {
                         currentScope.addReadReference(node.name, node, currentOwners);
-                        
+
                         // FITUR 6 & 7: Deteksi properti pada Namespace / Enum
                         if (parent.type === 'MemberExpression' && parent.object === node && !parent.computed && parent.property.type === 'Identifier') {
                             const memberKey = `${node.name}.${parent.property.name}`;
@@ -614,7 +634,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
 
     while (newlyDead.length > 0) {
         const nextDead = [];
-        
+
         allScopes.forEach(scope => {
             // Evaluasi Read References
             scope.readReferences.forEach(ref => {
@@ -669,34 +689,34 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
     });
 
     allScopes.forEach(scope => {
-       scope.declarations.forEach(info => {
-           const name = info.name;
-           if (!info.used) {
-               if (info.type === 'CatchParameter') return; // JANGAN laporkan parameter catch karena menghapusnya bisa merusak sintaks (catch ())
-               if (shouldSuppressUnusedDeclaration(info)) return;
+        scope.declarations.forEach(info => {
+            const name = info.name;
+            if (!info.used) {
+                if (info.type === 'CatchParameter') return; // JANGAN laporkan parameter catch karena menghapusnya bisa merusak sintaks (catch ())
+                if (shouldSuppressUnusedDeclaration(info)) return;
 
-               let targetNode = info.node;
+                let targetNode = info.node;
 
-               if (info.type === 'Variable' && info.parentNode && info.parentNode.type === 'VariableDeclaration') {
-                   const parentDecl = info.parentNode;
+                if (info.type === 'Variable' && info.parentNode && info.parentNode.type === 'VariableDeclaration') {
+                    const parentDecl = info.parentNode;
 
-                   if (processedParents.has(parentDecl)) return;
+                    if (processedParents.has(parentDecl)) return;
 
-                   const allDeclaratorsDead = parentDecl.declarations.every(declarator => {
-                       if (declarator.id && declarator.id.type === 'Identifier') {
+                    const allDeclaratorsDead = parentDecl.declarations.every(declarator => {
+                        if (declarator.id && declarator.id.type === 'Identifier') {
                             return deadBindingNodes.has(declarator.id);
-                       }
-                       const ids = extractIdentifiers(declarator.id);
-                       return ids.every(({ node: removalNode, bindingNode }) => deadBindingNodes.has(bindingNode || removalNode));
-                   });
+                        }
+                        const ids = extractIdentifiers(declarator.id);
+                        return ids.every(({ node: removalNode, bindingNode }) => deadBindingNodes.has(bindingNode || removalNode));
+                    });
 
-                   if (allDeclaratorsDead) {
-                       targetNode = parentDecl;
-                       processedParents.add(parentDecl);
-                   } else {
-                       targetNode = info.node;
-                   }
-               }
+                    if (allDeclaratorsDead) {
+                        targetNode = parentDecl;
+                        processedParents.add(parentDecl);
+                    } else {
+                        targetNode = info.node;
+                    }
+                }
 
                 const effectiveType = (info.writeCount > 0 && info.readCount === 0) ? 'WriteOnly' : info.type;
                 const isImport = info.node && (
@@ -840,9 +860,9 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     } : {}),
                     analysisBackend: tsScopeManager ? 'scope-manager' : 'legacy-fallback'
                 });
-           }
+            }
 
-       });
+        });
     });
 
     // Phase 7: Duplicate Import Detection
