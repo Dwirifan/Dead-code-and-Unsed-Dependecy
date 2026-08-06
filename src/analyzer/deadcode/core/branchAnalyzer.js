@@ -443,12 +443,16 @@ export function findUnreachableBranches(ast, ruleEngine = null, fileName = null)
                 const body = node.body;
                 if (body && body.type === 'BlockStatement' && body.body.length === 0) {
                     const fnName = (node.id && node.id.name) || '(anonymous)';
+                    const isAnonymous = !node.id;
+                    const isCallback = node.type === 'ArrowFunctionExpression' || node.type === 'FunctionExpression';
+                    
                     if (!(ruleEngine && ruleEngine.isIgnoredVariable(fnName, fileName))) {
                         unreachableNodes.push({
                             name: `Empty Function '${fnName}'`,
                             type: 'EmptyBlock',
                             line: node.loc ? node.loc.start.line : 0,
-                            node: node
+                            node: node,
+                            ...(isAnonymous && isCallback ? { info: { isAnonymousCallback: true } } : {})
                         });
                     }
                 }

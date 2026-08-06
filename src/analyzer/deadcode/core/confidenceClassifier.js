@@ -58,6 +58,9 @@ export function classifyConfidence(type, info = {}) {
             return { confidence: 'medium', status: 'review', reason: 'Kondisi percabangan identik dengan kondisi pada cabang sebelumnya.' };
 
         case 'EmptyBlock':
+            if (info && info.isAnonymousCallback) {
+                return { confidence: 'low', status: 'risky', reason: 'Fungsi berbadan kosong yang dilempar sebagai pelengkap parameter (callback/stub). Fungsi ini terdeteksi sebagai statis murni dead, namun dilarang dihapus karena berpotensi merusak interface contract argumen.' };
+            }
             return { confidence: 'medium', status: 'review', reason: 'Blok kode kosong tanpa instruksi atau eksekusi logika.' };
 
         case 'DuplicateImport':
