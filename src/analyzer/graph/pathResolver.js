@@ -7,7 +7,7 @@ import { createPathsMatcher, getTsconfig } from 'get-tsconfig';
 const { create } = resolvePkg;
 
 const NODE_EXTENSIONS = Object.freeze([
-    '.js', '.mjs', '.cjs', '.json', '.node',
+    '.js', '.jsx', '.mjs', '.cjs', '.json', '.node',
 ]);
 
 const ALL_ASSETS = Object.freeze([

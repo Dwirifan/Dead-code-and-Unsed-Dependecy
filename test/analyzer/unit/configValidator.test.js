@@ -336,7 +336,7 @@ describe('RuleEngine config lifecycle', () => {
             preserveExports: false,
             preserveUnsafeFiles: true,
         }));
-        expect(engine.rules.preserveFiles).toContain('**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}');
+        expect(engine.rules.overrides[0].files).toContain('**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}');
         expect(engine.rules.ignoreFiles).toContain('**/coverage/**');
         expect(await fs.pathExists(path.join(projectRoot, 'deadkiller.config.mjs'))).toBe(false);
         expect(await fs.pathExists(path.join(projectRoot, '.deadkillerrc.json'))).toBe(false);
