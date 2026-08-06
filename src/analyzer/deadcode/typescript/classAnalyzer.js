@@ -128,6 +128,7 @@ export function findUnusedClassMethods(ast, globalRegistry = null) {
 
     // Phase 2: Lacak instansiasi & pemanggilan method (termasuk inheritance)
     const insideClassStack = [];
+    const thisAliases = new Set(); // Lacak 'const self = this;'
 
     function markMethodUsedInHierarchy(className, methodName) {
         let curr = className;
@@ -150,7 +151,6 @@ export function findUnusedClassMethods(ast, globalRegistry = null) {
         fallback: 'iteration',
         keys: visitorKeys,
         enter(node, parent) {
-            // Track saat kita masuk ke body class (untuk mendeteksi this.method())
             if ((node.type === 'ClassDeclaration' || node.type === 'ClassExpression')) {
                 if (node.id) {
                     insideClassStack.push(node.id.name);
@@ -161,42 +161,92 @@ export function findUnusedClassMethods(ast, globalRegistry = null) {
                 }
             }
 
-            // --- Deteksi Instansiasi: const x = new ClassName() ---
+            // --- Deteksi Aliasing 'this' (contoh: const self = this) ---
+            if (node.type === 'VariableDeclarator' && node.init && node.init.type === 'ThisExpression' && node.id && node.id.type === 'Identifier') {
+                thisAliases.add(node.id.name);
+            }
+            if (node.type === 'AssignmentExpression' && node.operator === '=' && node.right && node.right.type === 'ThisExpression' && node.left && node.left.type === 'Identifier') {
+                thisAliases.add(node.left.name);
+            }
+
+            // --- Deteksi Instansiasi: const x = new ClassName() atau x = new ClassName() ---
             if (node.type === 'VariableDeclarator' && node.init &&
                 node.init.type === 'NewExpression' && node.init.callee &&
-                node.init.callee.type === 'Identifier' && node.id && node.id.type === 'Identifier') {
-                const varName = node.id.name;
+                node.init.callee.type === 'Identifier') {
+                
                 const className = node.init.callee.name;
+                if (classMap.has(className)) {
+                    if (node.id && node.id.type === 'Identifier') {
+                        instanceMap.set(node.id.name, className);
+                    } else if (node.id && node.id.type === 'ObjectPattern') {
+                        // Destructuring: const { myMethod } = new ClassName()
+                        for (const prop of node.id.properties) {
+                            if (prop.key && prop.key.type === 'Identifier') {
+                                markMethodUsedInHierarchy(className, prop.key.name);
+                            }
+                        }
+                    }
+                }
+            }
+            if (node.type === 'AssignmentExpression' && node.operator === '=' &&
+                node.right && node.right.type === 'NewExpression' && node.right.callee &&
+                node.right.callee.type === 'Identifier' && node.left && node.left.type === 'Identifier') {
+                const varName = node.left.name;
+                const className = node.right.callee.name;
                 if (classMap.has(className)) {
                     instanceMap.set(varName, className);
                 }
             }
 
-            // --- Deteksi Pemanggilan Method: x.methodName() atau x.methodName ---
-            const staticMemberName = getStaticMemberName(node);
-            if (node.type === 'MemberExpression' && staticMemberName &&
-                node.object && node.object.type === 'Identifier' &&
-                node.property) {
-
-                const objName = node.object.name;
-                const methodName = staticMemberName;
-
-                // Pemanggilan via instance: svc.fetchData()
-                if (instanceMap.has(objName)) {
-                    const className = instanceMap.get(objName);
-                    markMethodUsedInHierarchy(className, methodName);
+            // --- Deteksi Destructuring dari 'this' atau instance ---
+            if (node.type === 'VariableDeclarator' && node.id && node.id.type === 'ObjectPattern' && node.init) {
+                let targetClass = null;
+                const insideClassName = insideClassStack[insideClassStack.length - 1] || null;
+                
+                if (node.init.type === 'ThisExpression' || (node.init.type === 'Identifier' && thisAliases.has(node.init.name))) {
+                    targetClass = insideClassName;
+                } else if (node.init.type === 'Identifier' && instanceMap.has(node.init.name)) {
+                    targetClass = instanceMap.get(node.init.name);
                 }
 
-                // Pemanggilan via static: ClassName.staticMethod()
-                if (classMap.has(objName)) {
-                    markMethodUsedInHierarchy(objName, methodName);
+                if (targetClass && classMap.has(targetClass)) {
+                    for (const prop of node.id.properties) {
+                        if (prop.key && prop.key.type === 'Identifier') {
+                            markMethodUsedInHierarchy(targetClass, prop.key.name);
+                        }
+                    }
                 }
             }
 
-            // --- Deteksi this.methodName() atau super.methodName() di dalam class body ---
+            // --- Deteksi Pemanggilan Method: x.methodName() atau (new ClassName()).methodName() ---
+            const staticMemberName = getStaticMemberName(node);
+            if (node.type === 'MemberExpression' && staticMemberName && node.object) {
+                const methodName = staticMemberName;
+
+                // 1. Pemanggilan via instance identifier (x.method)
+                if (node.object.type === 'Identifier') {
+                    const objName = node.object.name;
+                    if (instanceMap.has(objName)) {
+                        markMethodUsedInHierarchy(instanceMap.get(objName), methodName);
+                    } else if (classMap.has(objName)) {
+                        // Pemanggilan via static: ClassName.staticMethod()
+                        markMethodUsedInHierarchy(objName, methodName);
+                    }
+                } 
+                // 2. Pemanggilan via Direct Instantiation: (new ClassName()).method()
+                else if (node.object.type === 'NewExpression' && node.object.callee && node.object.callee.type === 'Identifier') {
+                    const className = node.object.callee.name;
+                    if (classMap.has(className)) {
+                        markMethodUsedInHierarchy(className, methodName);
+                    }
+                }
+            }
+
+            // --- Deteksi this.methodName(), super.methodName(), atau self.methodName() ---
             const insideClassName = insideClassStack[insideClassStack.length - 1] || null;
-            if (node.type === 'MemberExpression' && staticMemberName &&
-                node.object && (node.object.type === 'ThisExpression' || node.object.type === 'Super') &&
+            if (node.type === 'MemberExpression' && staticMemberName && node.object &&
+                (node.object.type === 'ThisExpression' || node.object.type === 'Super' || 
+                (node.object.type === 'Identifier' && thisAliases.has(node.object.name))) &&
                 node.property) {
 
                 const methodName = staticMemberName;
@@ -207,7 +257,8 @@ export function findUnusedClassMethods(ast, globalRegistry = null) {
 
             // Nama computed yang tidak dapat ditentukan hanya memengaruhi kelas receiver.
             if (node.type === 'MemberExpression' && node.computed && !staticMemberName &&
-                node.object && (node.object.type === 'ThisExpression' || node.object.type === 'Super') &&
+                node.object && (node.object.type === 'ThisExpression' || node.object.type === 'Super' || 
+                (node.object.type === 'Identifier' && thisAliases.has(node.object.name))) &&
                 insideClassName && classMap.has(insideClassName)) {
                 classMap.get(insideClassName).dynamicAccesses.push({
                     line: node.loc ? node.loc.start.line : 0,

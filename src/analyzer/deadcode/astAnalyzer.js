@@ -822,20 +822,14 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                             status = 'safe';
                             reason = `Metode/properti '${memberName}' tidak ditemukan di seluruh basis kode proyek (Fuzzy Member Tracing).`;
                         } else {
-                            // Nama ada di proyek, tapi bisa dari kelas lain -> tidak bisa memastikan
-                            originalStatus = status;
-                            confidence = 'low';
-                            status = 'review';
-                            uncertainty = 'cross-file-class-member-ambiguous';
-                            reason = `Metode/properti '${memberName}' ditemukan di proyek namun tidak dapat diverifikasi milik kelas ini tanpa Type Checker.`;
+                            // Nama ada di proyek, tapi bisa dari kelas lain -> tidak bisa memastikan.
+                            // Prinsip Fail-Closed: Daripada memunculkan False Positive yang masif,
+                            // kita asumsikan metode ini terpakai dan tidak kita laporkan.
+                            return;
                         }
                     } else {
-                        // Tidak ada registry atau globalMemberNames belum siap
-                        originalStatus = status;
-                        confidence = 'low';
-                        status = 'review';
-                        uncertainty = 'cross-file-class-member-unproven';
-                        reason = `Metode/properti kelas tidak dapat diverifikasi secara lintas file; wajib ditinjau manual.`;
+                        // Tidak ada registry atau globalMemberNames belum siap -> Fallback Fail-Closed
+                        return;
                     }
                 }
 
