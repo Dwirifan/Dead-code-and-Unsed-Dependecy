@@ -11,6 +11,8 @@ import { classifyConfidence } from './core/confidenceClassifier.js';
 import { BUILTIN_GLOBALS } from './core/globals.js';
 import { evaluateCatchParameter } from './safeguards/catchParameterGuard.js';
 import { evaluateTypeDefinitionVariable } from './safeguards/typeDefinitionGuard.js';
+import { evaluateArrayDestructuring } from './safeguards/arrayDestructuringGuard.js';
+import { evaluateClassContract } from './safeguards/interfaceImplementationGuard.js';
 
 // Gabungkan Visitor Keys ESTree standar dengan ekstrasi TypeScript/JSX
 const visitorKeys = { ...estraverse.VisitorKeys, ...tsVisitorKeys };
@@ -324,6 +326,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     memberName: node.key.name,
                     isStatic: node.static || false,
                     ownerClass: ownerName,
+                    classNode: ownerClass,
                     isDeclare
                 });
             }
@@ -453,9 +456,32 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
             // Melacak owner untuk Fixed-Point Iterative Elimination
             if (node.type === 'VariableDeclarator') {
                 const identifiers = extractIdentifiers(node.id);
+                
+                const arrayPatternGroups = new Map();
+
                 const declInfos = identifiers
-                    .map(({ node: removalNode, bindingNode }) => declarationByBindingNode.get(bindingNode || removalNode))
+                    .map(({ node: removalNode, bindingNode, isArrayDestructuring, arrayIndex, arrayLength, arrayPattern }) => {
+                        const declInfo = declarationByBindingNode.get(bindingNode || removalNode);
+                        if (declInfo && isArrayDestructuring) {
+                             declInfo.isArrayDestructuring = true;
+                             declInfo.arrayIndex = arrayIndex;
+                             declInfo.arrayLength = arrayLength;
+                             
+                             if (!arrayPatternGroups.has(arrayPattern)) {
+                                 arrayPatternGroups.set(arrayPattern, []);
+                             }
+                             arrayPatternGroups.get(arrayPattern).push(declInfo);
+                        }
+                        return declInfo;
+                    })
                     .filter(Boolean);
+
+                for (const siblings of arrayPatternGroups.values()) {
+                    siblings.forEach(sibling => {
+                        sibling.arraySiblings = siblings;
+                    });
+                }
+
                 ownerStack.push(declInfos.length > 0 ? declInfos : null);
             }
 
@@ -653,6 +679,10 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                 if (isVariable) {
                     const typeGuard = evaluateTypeDefinitionVariable(info, fileName);
                     if (typeGuard.shouldBeRisky) isRiskyType = true;
+                    else {
+                        const arrayGuard = evaluateArrayDestructuring(info);
+                        if (arrayGuard.shouldBeRisky) isRiskyType = true;
+                    }
                 }
                 
                 if (!isRiskyType) {
@@ -687,6 +717,10 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                             if (isVariable) {
                                 const typeGuard = evaluateTypeDefinitionVariable(ref.targetDecl, fileName);
                                 if (typeGuard.shouldBeRisky) isRiskyType = true;
+                                else {
+                                    const arrayGuard = evaluateArrayDestructuring(ref.targetDecl);
+                                    if (arrayGuard.shouldBeRisky) isRiskyType = true;
+                                }
                             }
                             
                             if (!isRiskyType) {
@@ -863,8 +897,16 @@ deadCode.push({
                     if (typeGuard.shouldBeRisky) {
                         originalStatus = status;
                         status = 'risky';
-                        confidence = 'high';
-                        reason = typeGuard.riskyMessage;
+                        confidence = 90;
+                        reason = typeGuard.reason || 'Variabel memiliki anotasi tipe pada pengujian/deklarasi TypeScript. Menghapusnya berisiko merusak mekanisme test compiler.';
+                    } else {
+                        const arrayGuard = evaluateArrayDestructuring(info);
+                        if (arrayGuard.shouldBeRisky) {
+                            originalStatus = status;
+                            status = 'risky';
+                            confidence = 90;
+                            reason = arrayGuard.reason;
+                        }
                     }
                 }
 
@@ -917,6 +959,14 @@ deadCode.push({
                             confidence = 'high';
                             status = 'safe';
                             reason = `Metode/properti '${memberName}' tidak ditemukan di seluruh basis kode proyek (Fuzzy Member Tracing).`;
+
+                            const contractGuard = evaluateClassContract(info.node, info.classNode);
+                            if (contractGuard.shouldBeRisky) {
+                                originalStatus = status;
+                                status = 'risky';
+                                confidence = 90;
+                                reason = contractGuard.reason;
+                            }
                         } else {
                             // Nama ada di proyek, tapi bisa dari kelas lain -> tidak bisa memastikan.
                             // Prinsip Fail-Closed: Daripada memunculkan False Positive yang masif,

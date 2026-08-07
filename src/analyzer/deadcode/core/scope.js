@@ -37,6 +37,7 @@ export class Scope {
             requiresSemanticProof: metadata.requiresSemanticProof === true,
             isDeclare: metadata.isDeclare === true,
             isFakeThisContext: metadata.isFakeThisContext === true,
+            classNode: metadata.classNode || null,
             used: false,
             readCount: 0,
             writeCount: 0,

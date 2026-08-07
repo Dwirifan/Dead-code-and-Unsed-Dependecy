@@ -35,9 +35,17 @@ export function extractIdentifiers(pattern) {
 
         case 'ArrayPattern':
             // Pola Array destructuring: const [a, b] = arr;
-            for (const element of pattern.elements) {
+            for (let i = 0; i < pattern.elements.length; i++) {
+                const element = pattern.elements[i];
                 if (element) {
-                    identifiers.push(...extractIdentifiers(element));
+                    const extracted = extractIdentifiers(element);
+                    extracted.forEach(item => {
+                        item.isArrayDestructuring = true;
+                        item.arrayIndex = i;
+                        item.arrayLength = pattern.elements.length;
+                        item.arrayPattern = pattern;
+                    });
+                    identifiers.push(...extracted);
                 }
             }
             break;
