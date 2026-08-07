@@ -647,8 +647,18 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                 info.type !== 'CatchParameter' &&
                 !shouldSuppressUnusedDeclaration(info)
             ) {
-                deadDeclarations.add(info);
-                newlyDead.push(info);
+                // Safeguard Interception: Jika RISKY, jangan picu efek domino (kematian berantai).
+                const isVariable = info.type === 'Variable' || info.type === 'WriteOnly';
+                let isRiskyType = false;
+                if (isVariable) {
+                    const typeGuard = evaluateTypeDefinitionVariable(info, fileName);
+                    if (typeGuard.shouldBeRisky) isRiskyType = true;
+                }
+                
+                if (!isRiskyType) {
+                    deadDeclarations.add(info);
+                    newlyDead.push(info);
+                }
             }
         });
     });
@@ -671,8 +681,18 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                             !shouldSuppressUnusedDeclaration(ref.targetDecl) &&
                             !deadDeclarations.has(ref.targetDecl)
                         ) {
-                            deadDeclarations.add(ref.targetDecl);
-                            nextDead.push(ref.targetDecl);
+                            // Safeguard Interception di fase reaksi berantai
+                            const isVariable = ref.targetDecl.type === 'Variable' || ref.targetDecl.type === 'WriteOnly';
+                            let isRiskyType = false;
+                            if (isVariable) {
+                                const typeGuard = evaluateTypeDefinitionVariable(ref.targetDecl, fileName);
+                                if (typeGuard.shouldBeRisky) isRiskyType = true;
+                            }
+                            
+                            if (!isRiskyType) {
+                                deadDeclarations.add(ref.targetDecl);
+                                nextDead.push(ref.targetDecl);
+                            }
                         }
                     }
                 }
