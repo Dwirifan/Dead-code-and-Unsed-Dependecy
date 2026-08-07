@@ -10,7 +10,7 @@ const environmentSupportCache = new Map();
  */
 function supportsES2019Catch(projectRoot) {
     if (!projectRoot) return false;
-    
+
     if (environmentSupportCache.has(projectRoot)) {
         return environmentSupportCache.get(projectRoot);
     }
@@ -32,7 +32,7 @@ function supportsES2019Catch(projectRoot) {
     } catch (err) {
         // Abaikan error pembacaan
     }
-    
+
     // Default fallback: Anggap false (tidak aman menghapus kurung catch) jika ragu
     environmentSupportCache.set(projectRoot, false);
     return false;
@@ -47,14 +47,14 @@ function supportsES2019Catch(projectRoot) {
  * @returns {Object} Hasil evaluasi (action, status, dll)
  */
 export function evaluateCatchParameter(info, globalRegistry, ruleEngine) {
-    const isBlockEmpty = info.bindingNode && 
-                         info.bindingNode.body && 
-                         info.bindingNode.body.type === 'BlockStatement' &&
-                         info.bindingNode.body.body && 
-                         info.bindingNode.body.body.length === 0;
+    const isBlockEmpty = info.bindingNode &&
+        info.bindingNode.body &&
+        info.bindingNode.body.type === 'BlockStatement' &&
+        info.bindingNode.body.body &&
+        info.bindingNode.body.body.length === 0;
 
     const projectRoot = globalRegistry ? globalRegistry.projectRoot : process.cwd();
-    
+
     const isES2019Supported = supportsES2019Catch(projectRoot);
 
     const isSuppressed = info.name.startsWith('_'); // Deteksi konvensi ignore
@@ -73,22 +73,21 @@ export function evaluateCatchParameter(info, globalRegistry, ruleEngine) {
         result.isCodeSmell = true;
         result.codeSmellType = 'EmptyCatchBlock';
         result.codeSmellMessage = 'Code Smell: Error ditelan diam-diam (Swallowed Error). Harap tangani eksepsi atau tambahkan komentar.';
-        
-    return result;
+
+        return result;
+    }
+
+    if (isSuppressed) {
+        result.isValidLegacy = true;
+        return result;
     }
 
     if (isES2019Supported) {
-        // Lingkungan modern (>= Node 12), aman dihapus kurungnya
         result.canBeDeleted = true;
     } else {
-        if (isSuppressed) {
-            // Sudah pakai '_', ini adalah BEST PRACTICE untuk Node < 12. Silently ignore.
-            result.isValidLegacy = true;
-        } else {
-            // Lingkungan usang, tidak aman dihapus dan belum di-suppress.
-            result.shouldBeRisky = true;
-            result.riskyMessage = `Parameter catch '${info.name}' tidak dipakai. Penghapusan (Auto-Fix) menyebabkan SyntaxError di Node < 12. Rekomendasi: ubah nama menjadi '_' jika sengaja diabaikan.`;
-        }
+        // Lingkungan usang, tidak aman dihapus dan belum di-suppress.
+        result.shouldBeRisky = true;
+        result.riskyMessage = `Parameter catch '${info.name}' tidak dipakai. Penghapusan (Auto-Fix) menyebabkan SyntaxError di Node < 12. Rekomendasi: ubah nama menjadi '_' jika sengaja diabaikan.`;
     }
 
     return result;
