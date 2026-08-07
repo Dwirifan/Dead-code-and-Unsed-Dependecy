@@ -258,7 +258,7 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
     // Dead files — normalisasi path glob ke format OS lokal
     const allFiles = (await glob([SCRIPT_GLOB], {
         cwd: absolutePath,
-        ignore: ['**/node_modules/**', '**/dist/**', '**/coverage/**', '*.config.*', '.*.js', '.*.mjs', '.*.ts'],
+        ignore: ['**/node_modules/**', '**/dist/**', '**/build/**', '**/out/**', '**/docs/**', '**/coverage/**', '*.config.*', '.*.js', '.*.mjs', '.*.ts'],
         absolute: true,
         followSymbolicLinks: false,
     }))

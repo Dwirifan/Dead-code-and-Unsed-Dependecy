@@ -420,7 +420,7 @@ export function registerScanCommand(program) {
                     // File dinamis (unsafeFiles): fixCommand hanya memblokir tipe non-struktural.
                     // Tipe struktural (Import, Variable, dll) tetap bisa dieliminasi oleh fix.
                     const isUnsafeFile = unsafeFileKeys.has(normalizeFileKey(file));
-                    const STRUCTURAL_SAFE_TYPES = new Set(['Import', 'Variable', 'WriteOnly', 'DeadBranch', 'DeadCode', 'UnusedType', 'UnusedClass', 'Parameter', 'EmptyBlock']);
+                    const STRUCTURAL_SAFE_TYPES = new Set(['Import', 'Variable', 'WriteOnly', 'DeadBranch', 'DeadCode', 'UnusedType', 'UnusedClass', 'Parameter', 'EmptyBlock', 'CatchParameter', 'EmptyCatchBlock']);
                     deadNodes.forEach(n => {
                         if (isUnsafeFile && n.status === 'safe' && !STRUCTURAL_SAFE_TYPES.has(n.type)) {
                             // Tipe ini tidak akan diproses fix (ClassMethod, Function, dll) — downgrade ke REVIEW
@@ -459,7 +459,9 @@ export function registerScanCommand(program) {
                 'DuplicateCondition': { label: '[Duplicate Conditions]', color: chalk.magenta },
                 'ClassMethod': { label: '[Unused Class Methods]', color: chalk.yellow },
                 'Parameter': { label: '[Unused Parameters]', color: chalk.yellow },
+                'CatchParameter': { label: '[Unused Catch Parameters]', color: chalk.yellow },
                 'EmptyBlock': { label: '[Code Smell: Empty Block]', color: chalk.yellow },
+                'EmptyCatchBlock': { label: '[Code Smell: Empty Catch Block]', color: chalk.yellow },
             };
 
             // Kelompokkan berdasarkan status (safe/review/risky)

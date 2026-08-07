@@ -11,6 +11,7 @@ const ENTRY_GLOB_IGNORE = [
     '**/node_modules/**',
     '**/dist/**',
     '**/build/**',
+    '**/docs/**',
     '**/coverage/**',
     '**/.deadkiller_backup/**',
     '**/.git/**',
@@ -328,13 +329,69 @@ function frameworkEntryGlobs(pkg) {
     return [];
 }
 
-function addConventionalSourceEntry(entrySet, packageRoot) {
-    const candidates = ['index', 'main', 'src/index', 'src/main', 'app', 'server']
-        .flatMap(base => ['js', 'jsx', 'mjs', 'cjs', 'ts', 'tsx', 'mts', 'cts'].map(extension => `${base}.${extension}`));
-    const candidate = candidates
+function addConventionalSourceEntry(entrySet, packageRoot, pkg = {}) {
+    const sourceExtensions = ['js', 'jsx', 'mjs', 'cjs', 'ts', 'tsx', 'mts', 'cts'];
+    const candidates = new Set();
+    
+    // 1. Dynamic Inference dari manifest (pkg)
+    const manifestValues = [];
+    if (pkg.main) manifestValues.push(pkg.main);
+    if (pkg.module) manifestValues.push(pkg.module);
+    if (pkg.bin) {
+        if (typeof pkg.bin === 'string') manifestValues.push(pkg.bin);
+        else manifestValues.push(...Object.values(pkg.bin));
+    }
+    
+    // Pattern untuk nama direktori kompilasi yang sering dipakai
+    const buildDirs = ['dist', 'build', 'out', 'lib-cov'];
+    const sourceDirs = ['src', 'lib', 'source', '']; // '' mewakili root direktori
+    
+    for (const val of manifestValues) {
+        if (typeof val !== 'string') continue;
+        
+        let rawPath = val.replace(/\\/g, '/').replace(/^\.\//, ''); 
+        const ext = path.extname(rawPath);
+        if (ext) {
+            rawPath = rawPath.slice(0, -ext.length);
+        }
+
+        const parts = rawPath.split('/');
+        if (parts.length > 1 && buildDirs.includes(parts[0])) {
+            const restPath = parts.slice(1).join('/');
+            for (const sDir of sourceDirs) {
+                const inferredPath = sDir ? `${sDir}/${restPath}` : restPath;
+                candidates.add(inferredPath);
+            }
+        } else {
+            const baseName = parts[parts.length - 1];
+            for (const sDir of sourceDirs) {
+                const inferredPath = sDir ? `${sDir}/${baseName}` : baseName;
+                candidates.add(inferredPath);
+            }
+        }
+    }
+    
+    // 2. Static Fallback (klasik)
+    const staticBases = ['index', 'main', 'src/index', 'src/main', 'app', 'server'];
+    for (const base of staticBases) {
+        candidates.add(base);
+    }
+    
+    // 3. Resolusi ke file fisik
+    const candidateArray = Array.from(candidates).flatMap(base => 
+        sourceExtensions.map(extension => `${base}.${extension}`)
+    );
+    
+    const validCandidate = candidateArray
         .map(relativePath => path.resolve(packageRoot, relativePath))
         .find(filePath => fs.existsSync(filePath));
-    if (candidate) entrySet.add(candidate);
+        
+    if (validCandidate) {
+        entrySet.add(validCandidate);
+        if (process.env.DEBUG) {
+            console.log(`[DEBUG] addConventionalSourceEntry menemukan source: ${validCandidate}`);
+        }
+    }
 }
 
 async function findWorkspacePatterns(projectRoot, pkg) {
@@ -437,7 +494,7 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
                     collectPackageManifestEntries(entrySet, wsPkg, wsDir);
                     if (hasTestRunner(wsPkg)) addMatchedEntries(entrySet, TEST_FILE_GLOBS, wsDir);
                     addMatchedEntries(entrySet, frameworkEntryGlobs(wsPkg), wsDir);
-                    addConventionalSourceEntry(entrySet, wsDir);
+                    addConventionalSourceEntry(entrySet, wsDir, wsPkg);
                 }
             } catch (e) {
                 if (process.env.DEBUG) {
@@ -550,7 +607,7 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
     let hasValidSource = hasValidRuntimeEntry(entrySet, projectRoot, ruleEngine);
     
     if (!hasValidSource) {
-        addConventionalSourceEntry(entrySet, projectRoot);
+        addConventionalSourceEntry(entrySet, projectRoot, pkg);
     }
 
     // HTML Fallback

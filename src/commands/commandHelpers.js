@@ -36,18 +36,10 @@ export function printConfigDiagnostics(ruleEngine, { silent = false } = {}) {
     if (silent) return;
 
     if (ruleEngine.configSource === 'auto' && ruleEngine.autoProfile) {
-        const profile = ruleEngine.autoProfile;
-        const exportPolicy = profile.preserveExports
-            ? 'export publik dipertahankan'
-            : 'export internal ikut diperiksa';
         const ignoredConfig = ruleEngine.configPolicy === 'none' && ruleEngine.ignoredConfigPaths?.length > 0;
         console.log(chalk.cyan(ignoredConfig
             ? '\n[i] Konfigurasi target diabaikan oleh --no-config; DeadKiller memakai profil otomatis.'
             : '\n[i] Tidak ada konfigurasi; DeadKiller memakai profil otomatis (tanpa menulis file).'));
-        console.log(chalk.gray(
-            `    ${profile.frameworkLabel} · ${profile.language} · ${profile.projectType} · ${exportPolicy}`,
-        ));
-        console.log(chalk.gray('    Jalankan `deadkiller init` hanya jika Anda ingin menyesuaikan aturan.'));
     }
 
     const warnings = (ruleEngine.configDiagnostics || [])

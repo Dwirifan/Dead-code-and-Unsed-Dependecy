@@ -1,5 +1,6 @@
 import estraverse from 'estraverse';
 import { visitorKeys as tsVisitorKeys } from '@typescript-eslint/visitor-keys';
+import { shouldSkipTsNode } from './tsVisitor.js';
 
 const visitorKeys = { ...estraverse.VisitorKeys, ...tsVisitorKeys };
 
@@ -41,7 +42,7 @@ function getStaticMemberName(member) {
  * @param {object} ast - AST dari file yang sedang dianalisis
  * @returns {Array} Daftar dead class methods { name, type, line, node, info }
  */
-export function findUnusedClassMethods(ast, globalRegistry = null) {
+export function findUnusedClassMethods(ast, globalRegistry = null, publicApiClasses = new Set(), fileName = null, ruleEngine = null) {
     // Phase 1: Kumpulkan semua deklarasi kelas dan method-nya
     const classMap = new Map(); // className → { methods: Map, node, superClassName, isLeafClass }
     const instanceMap = new Map(); // variableName → className
@@ -51,6 +52,10 @@ export function findUnusedClassMethods(ast, globalRegistry = null) {
         fallback: 'iteration',
         keys: visitorKeys,
         enter(node, parent) {
+            if (shouldSkipTsNode(node)) {
+                return estraverse.VisitorOption.Skip;
+            }
+
             // --- Deteksi Deklarasi Kelas ---
             if (node.type === 'ClassDeclaration' && node.id) {
                 const currentClassName = node.id.name;
@@ -75,7 +80,9 @@ export function findUnusedClassMethods(ast, globalRegistry = null) {
 
             // --- Deteksi Method di dalam Class Body ---
             const currentClassName = classStack[classStack.length - 1] || null;
-            if (node.type === 'MethodDefinition' && currentClassName && classMap.has(currentClassName)) {
+            if ((node.type === 'MethodDefinition' || node.type === 'TSAbstractMethodDefinition' || node.type === 'TSDeclareMethod') && currentClassName && classMap.has(currentClassName)) {
+                const isDeclare = node.type === 'TSAbstractMethodDefinition' || node.type === 'TSDeclareMethod' || node.value?.type === 'TSEmptyBodyFunctionExpression';
+
                 const rawName = node.key ? (node.key.type === 'Identifier' ? node.key.name : (node.key.type === 'PrivateIdentifier' ? `#${node.key.name}` : null)) : null;
                 if (rawName && rawName !== 'constructor') {
                     const isPrivate = node.accessibility === 'private' || (node.key && node.key.type === 'PrivateIdentifier') || rawName.startsWith('#');
@@ -91,16 +98,19 @@ export function findUnusedClassMethods(ast, globalRegistry = null) {
                         accessibility,
                         isPrivate,
                         isProtected,
-                        hasDecorator
+                        hasDecorator,
+                        isDeclare
                     });
                 }
             }
 
             // Dukungan PropertyDefinition (class field / arrow method / private field)
             if (node.type === 'PropertyDefinition' && currentClassName && classMap.has(currentClassName)) {
+                const isDeclare = !!node.declare;
+                
                 const rawName = node.key ? (node.key.type === 'Identifier' ? node.key.name : (node.key.type === 'PrivateIdentifier' ? `#${node.key.name}` : null)) : null;
-                if (rawName && node.value &&
-                    (node.value.type === 'ArrowFunctionExpression' || node.value.type === 'FunctionExpression')) {
+                if (rawName && (isDeclare || (node.value &&
+                    (node.value.type === 'ArrowFunctionExpression' || node.value.type === 'FunctionExpression')))) {
                     const isPrivate = node.accessibility === 'private' || (node.key && node.key.type === 'PrivateIdentifier') || rawName.startsWith('#');
                     const isProtected = node.accessibility === 'protected';
                     const accessibility = isPrivate ? 'private' : (isProtected ? 'protected' : 'public');
@@ -114,7 +124,8 @@ export function findUnusedClassMethods(ast, globalRegistry = null) {
                         accessibility,
                         isPrivate,
                         isProtected,
-                        hasDecorator
+                        hasDecorator,
+                        isDeclare
                     });
                 }
             }
@@ -151,6 +162,10 @@ export function findUnusedClassMethods(ast, globalRegistry = null) {
         fallback: 'iteration',
         keys: visitorKeys,
         enter(node, parent) {
+            if (shouldSkipTsNode(node)) {
+                return estraverse.VisitorOption.Skip;
+            }
+
             if ((node.type === 'ClassDeclaration' || node.type === 'ClassExpression')) {
                 if (node.id) {
                     insideClassStack.push(node.id.name);
@@ -292,7 +307,20 @@ export function findUnusedClassMethods(ast, globalRegistry = null) {
                 (methodName.startsWith('#') && globalRegistry.calledMethods.has(methodName.slice(1)))
             );
 
-            if (!methodInfo.used && !isUsedGlobally) {
+            // Cek Public API: Jika class di-export / reachable dan project ini me-preserve export
+            const isPublicApi = publicApiClasses.has(className) && !methodInfo.isPrivate;
+            let shouldPreserve = false;
+            
+            if (isPublicApi && ruleEngine && fileName) {
+                const effectiveRules = (typeof ruleEngine.effectiveRulesFor === 'function' ? ruleEngine.effectiveRulesFor(fileName) : 
+                                      (typeof ruleEngine._resolveConfigForFile === 'function' ? ruleEngine._resolveConfigForFile(fileName) : 
+                                      (ruleEngine.rules || {})));
+                if (effectiveRules && effectiveRules.preserveExports === true) {
+                    shouldPreserve = true;
+                }
+            }
+
+            if (!methodInfo.used && !isUsedGlobally && !shouldPreserve) {
                 deadMethods.push({
                     name: `${className}.${methodName}`,
                     type: 'ClassMethod',

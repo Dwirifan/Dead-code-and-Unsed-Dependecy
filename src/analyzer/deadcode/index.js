@@ -6,6 +6,7 @@ import { findUnusedClassMethods } from './typescript/classAnalyzer.js';
 import { findRedundantCode } from './core/redundancyAnalyzer.js';
 import { buildCFG, analyzePathSensitive, buildCallGraph, analyzeDeadStores } from './core/flowAnalyzer.js';
 import { analyzeReactSmells } from './react/reactAnalyzer.js';
+import { analyzePublicApiClasses } from './core/publicApiAnalyzer.js';
 
 export function findDeadCode(ast, fileName = null, globalRegistry = null, ruleEngine = null) {
     // 1. Eksekusi Analisis AST (Scope, Variables, Imports, Types, Enum)
@@ -31,8 +32,11 @@ export function findDeadCode(ast, fileName = null, globalRegistry = null, ruleEn
     });
     deadCode.push(...duplicateConditions);
 
+    // 3.5 Public API Reachability Analyzer
+    const publicApiClasses = analyzePublicApiClasses(ast);
+
     // 4. Unused Class Methods
-    const unusedMethods = findUnusedClassMethods(ast, globalRegistry);
+    const unusedMethods = findUnusedClassMethods(ast, globalRegistry, publicApiClasses, fileName, ruleEngine);
     unusedMethods.forEach(node => {
         const { confidence, status, reason } = classifyConfidence(node.type, node.info);
         node.confidence = confidence;

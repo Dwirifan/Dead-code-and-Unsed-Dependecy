@@ -48,6 +48,7 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
     const dynamicDependencyFiles = new Set();
     const parseFailures = [];
     const globalRegistry = {
+        projectRoot: projectRoot,
         usedExports: new Map(), // file -> Set of used exported names
         exports: new Map(), // Exported/Declared Names -> { isUnused, file } (legacy)
         usages: new Set(),   // Used/Called Names (legacy)

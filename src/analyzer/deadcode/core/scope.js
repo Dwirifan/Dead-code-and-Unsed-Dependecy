@@ -35,6 +35,8 @@ export class Scope {
             namespace: metadata.namespace || 'value',
             ownerSymbol: metadata.ownerSymbol || null,
             requiresSemanticProof: metadata.requiresSemanticProof === true,
+            isDeclare: metadata.isDeclare === true,
+            isFakeThisContext: metadata.isFakeThisContext === true,
             used: false,
             readCount: 0,
             writeCount: 0,

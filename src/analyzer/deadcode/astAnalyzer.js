@@ -1,6 +1,7 @@
 import estraverse from 'estraverse';
 import { visitorKeys as tsVisitorKeys } from '@typescript-eslint/visitor-keys';
 import { analyze } from '@typescript-eslint/scope-manager';
+import { shouldSkipTsNode } from './typescript/tsVisitor.js';
 import { Scope } from './core/scope.js';
 import { isReference } from './core/isReference.js';
 import { extractIdentifiers } from './core/destructuringExtractor.js';
@@ -8,6 +9,8 @@ import { findFunctionScope } from './core/scopeHelpers.js';
 import { markUsedExports } from './typescript/exportAnalyzer.js';
 import { classifyConfidence } from './core/confidenceClassifier.js';
 import { BUILTIN_GLOBALS } from './core/globals.js';
+import { evaluateCatchParameter } from './safeguards/catchParameterGuard.js';
+import { evaluateTypeDefinitionVariable } from './safeguards/typeDefinitionGuard.js';
 
 // Gabungkan Visitor Keys ESTree standar dengan ekstrasi TypeScript/JSX
 const visitorKeys = { ...estraverse.VisitorKeys, ...tsVisitorKeys };
@@ -173,6 +176,30 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
     };
 
     // Phase 1: Murni memetakan Variable Scope & Referensi Variabel
+
+    function handleLeave(node, parent) {
+        parentStack.pop();
+        if (node.type === 'VariableDeclarator') {
+            ownerStack.pop();
+        }
+        if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)) {
+            scopeStack.pop();
+            scopeTypeStack.pop();
+            currentScope = scopeStack[scopeStack.length - 1];
+        } else if (node.type === 'ClassDeclaration' || node.type === 'ClassExpression') {
+            scopeStack.pop();
+            scopeTypeStack.pop();
+            currentScope = scopeStack[scopeStack.length - 1];
+        } else if (node.type === 'BlockStatement') {
+            const isFunctionBody = parent && ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(parent.type);
+            if (!isFunctionBody) {
+                scopeStack.pop();
+                scopeTypeStack.pop();
+                currentScope = scopeStack[scopeStack.length - 1];
+            }
+        }
+    }
+
     estraverse.traverse(ast, {
         fallback: 'iteration',
         keys: visitorKeys,
@@ -242,21 +269,25 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     ? findFunctionScope(scopeStack, scopeTypeStack)
                     : currentScope;
 
+                const isDeclare = !!(parent && parent.declare);
                 identifiers.forEach(({ name, node: removalNode, bindingNode }) => {
                     const idNode = bindingNode || removalNode;
                     const targetDeletionNode = (node.id.type === 'Identifier') ? node : removalNode;
                     registerDeclaration(targetScope, name, 'Variable', node.loc.start.line, targetDeletionNode, parent, {
                         bindingNode: idNode,
-                        namespace: 'value'
+                        namespace: 'value',
+                        isDeclare
                     });
                 });
             }
 
-            if (node.type === 'FunctionDeclaration' && node.id) {
+            if ((node.type === 'FunctionDeclaration' || node.type === 'TSDeclareFunction') && node.id) {
                 if (currentScope.parent) {
+                    const isDeclare = node.type === 'TSDeclareFunction' || !!node.declare;
                     registerDeclaration(currentScope.parent, node.id.name, 'Function', node.loc.start.line, node, null, {
                         bindingNode: node.id,
-                        namespace: 'value'
+                        namespace: 'value',
+                        isDeclare
                     });
                 }
             }
@@ -264,9 +295,11 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
             // Pendataan Deklarasi Class
             if (node.type === 'ClassDeclaration' && node.id) {
                 if (currentScope.parent) {
+                    const isDeclare = !!node.declare;
                     registerDeclaration(currentScope.parent, node.id.name, 'UnusedClass', node.loc.start.line, node, null, {
                         bindingNode: node.id,
-                        namespace: 'both'
+                        namespace: 'both',
+                        isDeclare
                     });
                 }
             }
@@ -274,7 +307,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
             // Fuzzy Member Tracing - Pendataan Metode & Properti Kelas:
             // Daftarkan setiap MethodDefinition dan PropertyDefinition sehingga
             // dapat dibandingkan dengan globalRegistry.allProjectMemberNames nanti.
-            if ((node.type === 'MethodDefinition' || node.type === 'PropertyDefinition') &&
+            if ((node.type === 'MethodDefinition' || node.type === 'PropertyDefinition' || node.type === 'TSPropertySignature' || node.type === 'TSDeclareMethod' || node.type === 'TSAbstractMethodDefinition') &&
                 node.key?.type === 'Identifier' &&
                 node.kind !== 'constructor') {
                 const ownerClass = parentStack.slice().reverse().find(n =>
@@ -282,12 +315,16 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                 );
                 const ownerName = ownerClass?.id?.name || '<anonymous>';
                 const memberKey = `${ownerName}#${node.key.name}`;
+
+                const isDeclare = !!node.declare || node.type === 'TSPropertySignature' || node.type === 'TSDeclareMethod' || node.type === 'TSAbstractMethodDefinition';
+
                 registerDeclaration(currentScope, memberKey, 'UnusedClassMember', node.loc.start.line, node, null, {
                     bindingNode: node.key,
                     namespace: 'value',
                     memberName: node.key.name,
                     isStatic: node.static || false,
                     ownerClass: ownerName,
+                    isDeclare
                 });
             }
 
@@ -302,12 +339,15 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                 parameterGroupsByFunction.set(node, parameterGroups);
 
                 node.params.forEach((param, index) => {
+                    const isFakeThisContext = index === 0 && param.type === 'Identifier' && param.name === 'this';
+
                     const parameterGroup = parameterGroups[index];
                     const identifiers = extractIdentifiers(param);
                     identifiers.forEach(({ name, node: removalNode, bindingNode }) => {
                         const declaration = registerDeclaration(currentScope, name, 'Parameter', param.loc.start.line, removalNode, null, {
                             bindingNode: bindingNode || removalNode,
-                            namespace: 'value'
+                            namespace: 'value',
+                            isFakeThisContext
                         });
                         if (declaration?.bindingNode) {
                             parameterGroup.declarations.push(declaration);
@@ -450,8 +490,6 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                         currentScope.addWriteReference(node.name, node, currentOwners);
                     } else {
                         currentScope.addReadReference(node.name, node, currentOwners);
-
-                        // FITUR 6 & 7: Deteksi properti pada Namespace / Enum
                         if (parent.type === 'MemberExpression' && parent.object === node && !parent.computed && parent.property.type === 'Identifier') {
                             const memberKey = `${node.name}.${parent.property.name}`;
                             currentScope.addReadReference(memberKey, parent.property, currentOwners);
@@ -461,29 +499,12 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
             }
 
 
+            if (shouldSkipTsNode(node)) {
+                handleLeave(node, parent);
+                return estraverse.VisitorOption.Skip;
+            }
         },
-        leave: function (node, parent) {
-            parentStack.pop();
-            if (node.type === 'VariableDeclarator') {
-                ownerStack.pop();
-            }
-            if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)) {
-                scopeStack.pop();
-                scopeTypeStack.pop();
-                currentScope = scopeStack[scopeStack.length - 1];
-            } else if (node.type === 'ClassDeclaration' || node.type === 'ClassExpression') {
-                scopeStack.pop();
-                scopeTypeStack.pop();
-                currentScope = scopeStack[scopeStack.length - 1];
-            } else if (node.type === 'BlockStatement') {
-                const isFunctionBody = parent && ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(parent.type);
-                if (!isFunctionBody) {
-                    scopeStack.pop();
-                    scopeTypeStack.pop();
-                    currentScope = scopeStack[scopeStack.length - 1];
-                }
-            }
-        }
+        leave: handleLeave
     });
 
     // Phase 2: Hubungkan Expor / Lintas Modul
@@ -692,8 +713,50 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
         scope.declarations.forEach(info => {
             const name = info.name;
             if (!info.used) {
-                if (info.type === 'CatchParameter') return; // JANGAN laporkan parameter catch karena menghapusnya bisa merusak sintaks (catch ())
-                if (shouldSuppressUnusedDeclaration(info)) return;
+                if (info.type === 'CatchParameter') {
+                    const guardResult = evaluateCatchParameter(info, globalRegistry, ruleEngine);
+                    if (guardResult.isCodeSmell) {
+                        
+deadCode.push({
+                            name: info.name,
+                            type: guardResult.codeSmellType,
+                            line: info.line,
+                            node: info.bindingNode || info.node,
+                            confidence: 100,
+                            status: 'review',
+                            reason: guardResult.codeSmellMessage
+                        });
+                    }
+
+                    if (guardResult.isValidLegacy) {
+                        return; // Konvensi `_` terpenuhi pada Node < 12. Silently ignore.
+                    }
+
+                    if (guardResult.canBeDeleted) {
+                        // Buka proteksi agar bisa dihapus (Auto-Fix)
+                        // Lanjut ke bawah sebagai SAFE
+                    } else if (guardResult.shouldBeRisky) {
+                        // Jika tidak aman dihapus, laporkan sebagai RISKY
+                        let targetNode = info.node;
+                        let endLine = targetNode.loc ? targetNode.loc.end.line : info.line;
+                        deadCode.push({
+                            name: info.name,
+                            type: 'CatchParameter',
+                            line: info.line,
+                            endLine: endLine,
+                            node: targetNode,
+                            confidence: 50,
+                            status: 'risky',
+                            reason: guardResult.riskyMessage
+                        });
+                        return; // Selesai untuk CatchParameter yang berisiko dihapus
+                    } else {
+                        return;
+                    }
+                }
+
+                if (info.isDeclare || info.isFakeThisContext) return; // Abaikan sepenuhnya elemen khusus TypeScript agar output CLI lebih bersih
+                if (info.type !== 'CatchParameter' && shouldSuppressUnusedDeclaration(info)) return;
 
                 let targetNode = info.node;
 
@@ -769,9 +832,22 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                     isImpureInitializer,
                     isImpureWrite,
                     isPositional: positional,
+                    isDeclare: info.isDeclare,
+                    isFakeThisContext: info.isFakeThisContext
                 });
 
                 let originalStatus = null;
+
+                if (effectiveType === 'Variable' || effectiveType === 'WriteOnly') {
+                    const typeGuard = evaluateTypeDefinitionVariable(info, fileName);
+                    if (typeGuard.shouldBeRisky) {
+                        originalStatus = status;
+                        status = 'risky';
+                        confidence = 'high';
+                        reason = typeGuard.riskyMessage;
+                    }
+                }
+
                 let uncertainty = null;
 
                 if (scopeManagerError && status === 'safe') {
@@ -827,7 +903,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                             // kita asumsikan metode ini terpakai dan tidak kita laporkan.
                             return;
                         }
-                    } else {
+                    } else if (info.type !== 'CatchParameter') {
                         // Tidak ada registry atau globalMemberNames belum siap -> Fallback Fail-Closed
                         return;
                     }

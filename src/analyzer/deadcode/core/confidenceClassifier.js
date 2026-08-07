@@ -1,4 +1,12 @@
 export function classifyConfidence(type, info = {}) {
+    // === ABSOLUTE PROTECTION (TypeScript Type Annotations) ===
+    if (info.isDeclare) {
+        return { confidence: 'protected', status: 'protected', reason: 'Deklarasi ini adalah murni Type Annotation (TypeScript declare/abstract) dan dilindungi dari penghapusan.' };
+    }
+    if (info.isFakeThisContext) {
+        return { confidence: 'protected', status: 'protected', reason: 'Parameter ini adalah konteks binding `this` semu milik TypeScript dan dilindungi dari penghapusan.' };
+    }
+
     switch (type) {
         // === HIGH CONFIDENCE (Aman dihapus) ===
         case 'Variable':
@@ -112,6 +120,13 @@ export function classifyConfidence(type, info = {}) {
                 reason: `Parameter tidak digunakan. Rekomendasi: gunakan prefix '_' (misal: ${suggestedName}) jika ingin dipertahankan.`
             };
         }
+
+        case 'CatchParameter':
+            return {
+                confidence: 'high',
+                status: 'safe',
+                reason: 'Parameter catch tidak pernah digunakan. Karena Node.js >= 12 mendukung Optional Catch Binding, parameter ini aman untuk dihapus (auto-fix).'
+            };
 
         case 'UndeclaredVariable':
             // Bug: variabel digunakan tapi tidak pernah dideklarasikan (no-undef)

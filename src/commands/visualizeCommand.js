@@ -82,7 +82,7 @@ export function registerVisualizeCommand(program) {
                 const allDeadNodes = [];
                 const allFiles = (await glob([SCRIPT_GLOB], {
                     cwd: absolutePath,
-                    ignore: ['**/node_modules/**', '**/dist/**', '**/coverage/**', '*.config.*', '.*.js', '.*.mjs', '.*.ts'],
+                    ignore: ['**/node_modules/**', '**/dist/**', '**/build/**', '**/out/**', '**/docs/**', '**/coverage/**', '*.config.*', '.*.js', '.*.mjs', '.*.ts'],
                     absolute: true
                 })).map(f => path.resolve(f));
                 const preservedFiles = allFiles.filter(f => ruleEngine.isPreservedFile(f, absolutePath));

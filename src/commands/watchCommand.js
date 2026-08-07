@@ -44,7 +44,7 @@ export function registerWatchCommand(program) {
             let debounceTimer = null;
             let isScanning = false;
 
-            const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.deadkiller_backup', 'coverage']);
+            const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'out', 'docs', '.deadkiller_backup', 'coverage']);
 
             // Fungsi utama: jalankan scan
             const runScan = async (changedFile) => {
