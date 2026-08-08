@@ -342,6 +342,35 @@ function firstNonFlag(tokens, startIndex) {
     return null;
 }
 
+const CLI_INJECTION_FLAGS = new Set([
+    '-r', '--require', '--import', '--loader', '--plugin',
+    '--preset', '--extends', '--template', '--parser', '--compiler'
+]);
+
+function extractCliFlagDependencies(tokens, scriptName, commands) {
+    for (let i = 0; i < tokens.length; i++) {
+        let token = tokens[i];
+        let dep = null;
+
+        if (token.includes('=')) {
+            const [flag, value] = token.split('=', 2);
+            if (CLI_INJECTION_FLAGS.has(flag) && value) {
+                dep = value;
+            }
+        } else if (CLI_INJECTION_FLAGS.has(token)) {
+            dep = tokens[i + 1];
+            if (dep && dep.startsWith('-')) dep = null;
+        }
+
+        if (dep) {
+            // Filter local paths
+            if (!dep.startsWith('.') && !dep.startsWith('/') && !dep.includes('\\')) {
+                commands.push({ command: dep, scriptName, isCliFlag: true });
+            }
+        }
+    }
+}
+
 function extractScriptCommands(pkg) {
     const commands = [];
     if (!pkg.scripts || typeof pkg.scripts !== 'object') return commands;
@@ -352,6 +381,10 @@ function extractScriptCommands(pkg) {
 
         for (const segment of segments) {
             const tokens = tokenizeCommand(segment);
+            
+            // Ekstraksi flag injeksi dependensi
+            extractCliFlagDependencies(tokens, scriptName, commands);
+            
             while (tokens.length > 0 && isEnvironmentAssignment(tokens[0])) tokens.shift();
             if (tokens.length === 0) continue;
 
@@ -504,6 +537,46 @@ function evidenceFor(dependency, sourceUsed, usedViaCli, configUsed, implicitPro
     return evidence;
 }
 
+async function analyzeShellScripts(projectRoot) {
+    const usedPackages = new Set();
+    const diagnostics = [];
+    
+    try {
+        const shellFiles = await glob(['**/*.sh', '**/*.bash'], {
+            cwd: projectRoot,
+            ignore: ['**/node_modules/**'],
+            absolute: true
+        });
+
+        const regex = /(?:^|\s)(?:-r|--require|--import|--loader|--plugin|--preset|--extends|--template|--parser|--compiler)(?:=|\s+)(['"]?)([a-zA-Z0-9_.-@/]+)\1/g;
+
+        for (const file of shellFiles) {
+            try {
+                const content = await fs.readFile(file, 'utf-8');
+                let match;
+                while ((match = regex.exec(content)) !== null) {
+                    const dep = match[2];
+                    if (dep && !dep.startsWith('.') && !dep.startsWith('/') && !dep.includes('\\')) {
+                        usedPackages.add(dep);
+                    }
+                }
+            } catch (err) {
+                // Ignore read errors for individual shell scripts
+            }
+        }
+    } catch (err) {
+        diagnostics.push({
+            source: 'shell-scripts',
+            code: 'SHELL_SCRIPT_ANALYSIS_FAILED',
+            severity: 'warning',
+            message: `Gagal memindai skrip shell: ${err.message}`,
+            affectsDependencyClassification: false,
+        });
+    }
+
+    return { usedPackages, diagnostics };
+}
+
 /**
  * Menganalisis anomali dependency tanpa memodifikasi Set `usedPackages` milik caller.
  *
@@ -549,6 +622,10 @@ export async function findUnusedDependencies(projectRoot, usedPackages, ruleEngi
     configUsedPackages.forEach(dependency => effectiveUsedPackages.add(dependency));
     diagnostics.push(...configReport.diagnostics);
 
+    const shellScriptReport = await analyzeShellScripts(projectRoot);
+    shellScriptReport.usedPackages.forEach(dependency => effectiveUsedPackages.add(dependency));
+    diagnostics.push(...shellScriptReport.diagnostics);
+
     // A framework relationship protects declared packages from false positives, but
     // is not direct usage evidence and must never manufacture a missing dependency.
     const implicitProtected = new Set();
@@ -567,12 +644,14 @@ export async function findUnusedDependencies(projectRoot, usedPackages, ruleEngi
     const findings = [];
     const unusedRuntime = [];
     const uncertainRuntime = [];
+    
+    const combinedScriptUsed = new Set([...scriptReport.usedPackages, ...shellScriptReport.usedPackages]);
 
     for (const dependency of runtimeDeps) {
         const evidence = evidenceFor(
             dependency,
             sourceUsedPackages,
-            scriptReport.usedPackages,
+            combinedScriptUsed,
             configUsedPackages,
             implicitProtected,
         );
@@ -674,7 +753,7 @@ export async function findUnusedDependencies(projectRoot, usedPackages, ruleEngi
         const evidence = evidenceFor(
             dependency,
             sourceUsedPackages,
-            scriptReport.usedPackages,
+            combinedScriptUsed,
             configUsedPackages,
             implicitProtected,
         );

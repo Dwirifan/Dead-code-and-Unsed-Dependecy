@@ -20,7 +20,7 @@ const visitorKeys = { ...estraverse.VisitorKeys, ...tsVisitorKeys };
 /**
  * Mengecek apakah sebuah AST expression bersifat statis/pure (tidak memiliki side-effect saat dievaluasi).
  */
-function isPureExpression(node) {
+function isPureExpression(node, fileName = null) {
     if (!node) return true; // Tidak ada inisialisasi (let x;) adalah pure
 
     switch (node.type) {
@@ -34,25 +34,25 @@ function isPureExpression(node) {
         case 'MetaProperty': // import.meta
             return true;
         case 'TemplateLiteral':
-            return node.expressions.every(isPureExpression);
+            return node.expressions.every(expr => isPureExpression(expr, fileName));
         case 'UnaryExpression':
-            return isPureExpression(node.argument);
+            return isPureExpression(node.argument, fileName);
         case 'UpdateExpression':
             return false; // ++x, x-- punya side effect
         case 'BinaryExpression':
         case 'LogicalExpression':
-            return isPureExpression(node.left) && isPureExpression(node.right);
+            return isPureExpression(node.left, fileName) && isPureExpression(node.right, fileName);
         case 'ConditionalExpression':
-            return isPureExpression(node.test) && isPureExpression(node.consequent) && isPureExpression(node.alternate);
+            return isPureExpression(node.test, fileName) && isPureExpression(node.consequent, fileName) && isPureExpression(node.alternate, fileName);
         case 'ArrayExpression':
-            return node.elements.every(elem => !elem || isPureExpression(elem));
+            return node.elements.every(elem => !elem || isPureExpression(elem, fileName));
         case 'ObjectExpression':
             return node.properties.every(prop => {
-                if (prop.type === 'SpreadElement') return isPureExpression(prop.argument);
-                return isPureExpression(prop.key) && isPureExpression(prop.value);
+                if (prop.type === 'SpreadElement') return isPureExpression(prop.argument, fileName);
+                return isPureExpression(prop.key, fileName) && isPureExpression(prop.value, fileName);
             });
         case 'MemberExpression':
-            return !node.computed ? isPureExpression(node.object) : (isPureExpression(node.object) && isPureExpression(node.property));
+            return !node.computed ? isPureExpression(node.object, fileName) : (isPureExpression(node.object, fileName) && isPureExpression(node.property, fileName));
         case 'CallExpression': {
             let callName = '';
             if (node.callee.type === 'Identifier') {
@@ -71,7 +71,14 @@ function isPureExpression(node) {
             ]);
 
             if (pureWhitelist.has(callName)) {
-                return node.arguments.every(arg => !arg || isPureExpression(arg));
+                if (callName === 'require' && fileName) {
+                    const isTestOrBench = /[\\/](test|tests|__tests__|__mocks__|mocks|bench|benchmark|benchmarks|fixtures|e2e|cypress|sandbox|examples?)[\\/]/i.test(fileName) ||
+                        /\.(test|spec|bench|benchmark|e2e|mock|fixture)\.[a-zA-Z0-9]+$/i.test(fileName);
+                    if (isTestOrBench) {
+                        return false;
+                    }
+                }
+                return node.arguments.every(arg => !arg || isPureExpression(arg, fileName));
             }
             return false;
         }
@@ -84,7 +91,7 @@ function isPureExpression(node) {
  * Smart Background Analysis 3 Lapis: Mengecek apakah variabel yang berawalan ignore
  * (seperti _req, _e, atau __dirname) sebenarnya adalah 100% Dead Code mandiri tanpa side effect.
  */
-function is100PercentDeadIgnoredVariable(info) {
+function is100PercentDeadIgnoredVariable(info, fileName = null) {
     if (!info || !info.node) return false;
 
     // Lapis 1 & 2: Bukan parameter, bukan catch parameter, bukan import, bukan class/function
@@ -103,7 +110,7 @@ function is100PercentDeadIgnoredVariable(info) {
             return false; // Terikat sintaks destructuring (misal: const { pwd: _pwd, ...rest } = obj)
         }
         // Lapis 3: Evaluasi side effect pada inisialisasinya
-        return isPureExpression(info.node.init);
+        return isPureExpression(info.node.init, fileName);
     }
 
     return false;
@@ -456,21 +463,21 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
             // Melacak owner untuk Fixed-Point Iterative Elimination
             if (node.type === 'VariableDeclarator') {
                 const identifiers = extractIdentifiers(node.id);
-                
+
                 const arrayPatternGroups = new Map();
 
                 const declInfos = identifiers
                     .map(({ node: removalNode, bindingNode, isArrayDestructuring, arrayIndex, arrayLength, arrayPattern }) => {
                         const declInfo = declarationByBindingNode.get(bindingNode || removalNode);
                         if (declInfo && isArrayDestructuring) {
-                             declInfo.isArrayDestructuring = true;
-                             declInfo.arrayIndex = arrayIndex;
-                             declInfo.arrayLength = arrayLength;
-                             
-                             if (!arrayPatternGroups.has(arrayPattern)) {
-                                 arrayPatternGroups.set(arrayPattern, []);
-                             }
-                             arrayPatternGroups.get(arrayPattern).push(declInfo);
+                            declInfo.isArrayDestructuring = true;
+                            declInfo.arrayIndex = arrayIndex;
+                            declInfo.arrayLength = arrayLength;
+
+                            if (!arrayPatternGroups.has(arrayPattern)) {
+                                arrayPatternGroups.set(arrayPattern, []);
+                            }
+                            arrayPatternGroups.get(arrayPattern).push(declInfo);
                         }
                         return declInfo;
                     })
@@ -647,7 +654,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
         }
 
         const isIgnored = ruleEngine && ruleEngine.isIgnoredVariable(info.name, fileName);
-        return Boolean(isIgnored && !is100PercentDeadIgnoredVariable(info));
+        return Boolean(isIgnored && !is100PercentDeadIgnoredVariable(info, fileName));
     };
 
     const exportedLocals = globalRegistry?.fileExportedLocals?.get(fileName) || null;
@@ -684,7 +691,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                         if (arrayGuard.shouldBeRisky) isRiskyType = true;
                     }
                 }
-                
+
                 if (!isRiskyType) {
                     deadDeclarations.add(info);
                     newlyDead.push(info);
@@ -722,7 +729,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                                     if (arrayGuard.shouldBeRisky) isRiskyType = true;
                                 }
                             }
-                            
+
                             if (!isRiskyType) {
                                 deadDeclarations.add(ref.targetDecl);
                                 nextDead.push(ref.targetDecl);
@@ -770,8 +777,8 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                 if (info.type === 'CatchParameter') {
                     const guardResult = evaluateCatchParameter(info, globalRegistry, ruleEngine);
                     if (guardResult.isCodeSmell) {
-                        
-deadCode.push({
+
+                        deadCode.push({
                             name: info.name,
                             type: guardResult.codeSmellType,
                             line: info.line,
@@ -850,20 +857,20 @@ deadCode.push({
                     info.node &&
                     info.node.type === 'VariableDeclarator' &&
                     info.node.init &&
-                    !isPureExpression(info.node.init)
+                    !isPureExpression(info.node.init, fileName)
                 ) {
                     isImpureInitializer = true;
                 }
                 if (effectiveType === 'WriteOnly') {
                     // Evaluasi inisialisasi: let x = db.save()
-                    if (info.node && info.node.type === 'VariableDeclarator' && info.node.init && !isPureExpression(info.node.init)) {
+                    if (info.node && info.node.type === 'VariableDeclarator' && info.node.init && !isPureExpression(info.node.init, fileName)) {
                         isImpureWrite = true;
                     }
                     // Evaluasi setiap assignment: x = db.save() atau x++
                     if (!isImpureWrite && info.writeNodes && info.writeNodes.length > 0) {
                         for (const wn of info.writeNodes) {
                             if (!wn) continue;
-                            if (wn.type === 'AssignmentExpression' && !isPureExpression(wn.right)) {
+                            if (wn.type === 'AssignmentExpression' && !isPureExpression(wn.right, fileName)) {
                                 isImpureWrite = true;
                                 break;
                             }

@@ -245,8 +245,8 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
 
     try {
         const depReport = await analyzeProjectDependencies(absolutePath, graph, ruleEngine);
-        unusedDeps = [...(depReport.unused || [])];
-        uncertainDeps = [...(depReport.uncertain || [])];
+        unusedDeps = [...(depReport.unused || []), ...(depReport.deadDevDeps || [])];
+        uncertainDeps = [...(depReport.uncertain || []), ...(depReport.uncertainDevDeps || [])];
         dependencyDiagnostics = [...(depReport.diagnostics || [])]
             .map(item => typeof item === 'string' ? item : item.message || JSON.stringify(item))
             .filter(Boolean);
@@ -279,7 +279,7 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
     const cache = new ParseCache();
     let originalLoc = 0, originalSize = 0, newLoc = 0, newSize = 0;
 
-    const filesToAnalyze = new Set([...graph.liveFiles, ...preservedFiles]);
+    const filesToAnalyze = new Set([...graph.liveFiles, ...deadFiles, ...preservedFiles]);
     for (const file of filesToAnalyze) {
         // Skip file yang bukan JavaScript/TypeScript (tidak bisa di-parse)
         const ext = path.extname(file).toLowerCase();
@@ -485,10 +485,29 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
         selectedDepsToRemove = depsToRemove;
     }
 
+    // 1b. Checkbox files (opsional)
+    let selectedFilesToRemove = [];
+    if (removableDeadFiles.length > 0) {
+        if (level === 3 || autoConfirm) {
+            selectedFilesToRemove = removableDeadFiles;
+        } else {
+            const { filesToRemove } = await inquirer.prompt([{
+                type: 'checkbox', name: 'filesToRemove',
+                message: 'Pilih file tak terjangkau (Unconnected) yang sudah direview untuk dihapus:',
+                choices: removableDeadFiles.map(f => ({
+                    name: `${path.relative(absolutePath, f)} [REVIEW]`,
+                    value: f,
+                    checked: false
+                }))
+            }]);
+            selectedFilesToRemove = filesToRemove;
+        }
+    }
+
     // 2. Satu konfirmasi akhir
     const parts = [
         deadCodeReport.length > 0 && `bersihkan dead code di ${deadCodeReport.length} file`,
-        removableDeadFiles.length > 0 && `hapus ${removableDeadFiles.length} file mati`,
+        selectedFilesToRemove.length > 0 && `hapus ${selectedFilesToRemove.length} file mati`,
         selectedDepsToRemove.length > 0 && `hapus ${selectedDepsToRemove.length} dependensi`,
     ].filter(Boolean);
 
@@ -507,7 +526,7 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
     // ---- Eksekusi ----
     console.log(chalk.cyan('\n[>>] Menerapkan...'));
 
-    const filesToBackup = [...removableDeadFiles, ...deadCodeReport.map(r => r.file)];
+    const filesToBackup = [...selectedFilesToRemove, ...deadCodeReport.map(r => r.file)];
     let backupDir;
     try {
         filesToBackup.forEach(file => (
@@ -527,12 +546,13 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
     try {
         // Package manager selalu menjadi langkah terakhir sehingga tidak ada
         // mutasi source lain yang dapat gagal setelah uninstall berhasil.
-        for (const f of removableDeadFiles) {
+        for (const f of selectedFilesToRemove) {
             assertExistingPathInsideRoot(absolutePath, f, 'menghapus');
             await fs.remove(f);
             console.log(chalk.green(`   [ok] Dihapus: ${path.relative(absolutePath, f)}`));
         }
         for (const { file, newCode } of deadCodeReport) {
+            if (selectedFilesToRemove.includes(file)) continue; // File sudah terhapus utuh
             assertExistingPathInsideRoot(absolutePath, file, 'menulis');
             await fs.writeFile(file, newCode);
             console.log(chalk.green(`   [ok] Dibersihkan: ${path.relative(absolutePath, file)}`));
