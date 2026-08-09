@@ -46,6 +46,35 @@ function normalizeConfigName(name) {
     return `eslint-config-${packageName}`;
 }
 
+/**
+ * Registry statis: plugin yang diketahui secara implisit memuat eslint-config tambahan
+ * ketika dipanggil via shorthand "plugin:X/recommended" di field "extends".
+ * Tambahkan entri baru di sini untuk memperluas cakupan tanpa mengubah logika lain.
+ */
+const PLUGIN_IMPLICIT_CONFIGS = new Map([
+    ['eslint-plugin-prettier',            ['eslint-config-prettier']],
+    ['eslint-plugin-react',               []],
+    ['eslint-plugin-react-hooks',         []],
+    ['eslint-plugin-next',                ['eslint-config-next']],
+    ['eslint-plugin-vue',                 []],
+    ['eslint-plugin-nuxt',                []],
+    ['@typescript-eslint/eslint-plugin',  []],
+    ['eslint-plugin-import',              []],
+    ['eslint-plugin-node',                []],
+    ['eslint-plugin-jest',                []],
+    ['eslint-plugin-testing-library',     []],
+]);
+
+/**
+ * Mengembalikan daftar paket yang diperlukan secara implisit oleh sebuah plugin
+ * saat digunakan via shorthand "plugin:X/Y".
+ * @param {string} pluginPackageName - Nama paket plugin (sudah ternormalisasi)
+ * @returns {string[]}
+ */
+function getImplicitConfigsForPlugin(pluginPackageName) {
+    return PLUGIN_IMPLICIT_CONFIGS.get(pluginPackageName) || [];
+}
+
 function addEslintObjectPackages(config, packages) {
     if (!config || typeof config !== 'object') return;
 
@@ -73,7 +102,22 @@ function addEslintObjectPackages(config, packages) {
         : [];
     for (const extension of extensions) {
         const normalized = normalizeConfigName(extension);
-        if (normalized) packages.add(normalized);
+        if (normalized) {
+            packages.add(normalized);
+            // Jika extends adalah shorthand plugin ("plugin:X/Y"), tambahkan
+            // config yang dimuat secara implisit oleh plugin tersebut.
+            if (extension.startsWith('plugin:')) {
+                const pluginPath = extension.slice('plugin:'.length);
+                const parts = pluginPath.split('/');
+                const pluginName = pluginPath.startsWith('@')
+                    ? parts.slice(0, 2).join('/')
+                    : parts[0];
+                const pluginPkg = normalizePluginName(pluginName);
+                if (pluginPkg) {
+                    getImplicitConfigsForPlugin(pluginPkg).forEach(cfg => packages.add(cfg));
+                }
+            }
+        }
     }
 
     if (Array.isArray(config.overrides)) {

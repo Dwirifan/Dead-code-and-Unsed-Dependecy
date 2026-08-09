@@ -540,28 +540,73 @@ function evidenceFor(dependency, sourceUsed, usedViaCli, configUsed, implicitPro
 async function analyzeShellScripts(projectRoot) {
     const usedPackages = new Set();
     const diagnostics = [];
-    
+
+    // Set perintah sistem yang tidak boleh dianggap sebagai npm package
+    const SHELL_SYSTEM_COMMANDS = new Set([
+        ...SYSTEM_SCRIPT_COMMANDS,
+        'source', 'export', 'local', 'read', 'exec', 'eval', 'trap',
+        'cat', 'ls', 'grep', 'sed', 'awk', 'cut', 'sort', 'head', 'tail', 'wc',
+        'chmod', 'chown', 'ln', 'touch', 'find', 'xargs', 'tee', 'kill', 'ps',
+        'if', 'then', 'else', 'fi', 'for', 'do', 'done', 'while', 'case', 'esac',
+        'return', 'continue', 'break', 'function', 'type', 'which', 'dirname',
+    ]);
+
     try {
-        const shellFiles = await glob(['**/*.sh', '**/*.bash'], {
+        // DIPERLUAS: sertakan folder .husky/ di samping file .sh/.bash
+        // Catatan: .git/hooks/* dikecualikan karena berisi file *.sample teks prosa
+        const shellFiles = await glob([
+            '**/*.sh',
+            '**/*.bash',
+            '.husky/*',
+            '.githooks/*',
+        ], {
             cwd: projectRoot,
             ignore: ['**/node_modules/**'],
-            absolute: true
+            absolute: true,
         });
 
-        const regex = /(?:^|\s)(?:-r|--require|--import|--loader|--plugin|--preset|--extends|--template|--parser|--compiler)(?:=|\s+)(['"]?)([a-zA-Z0-9_.-@/]+)\1/g;
+        // Regex lama: flags seperti --require, --plugin, dll.
+        const flagRegex = /(?:^|\\s)(?:-r|--require|--import|--loader|--plugin|--preset|--extends|--template|--parser|--compiler)(?:=|\\s+)(['"]?)([a-zA-Z0-9_.-@/]+)\\1/g;
+
+        // Regex bare command yang AMAN:
+        // Cocok dengan perintah yang memiliki tanda hubung (pola npm package)
+        // atau diawali dengan @ (scoped package), seperti: lint-staged, release-it, @scope/tool
+        // Juga menangani: yarn lint-staged, npx lint-staged, pnpm lint-staged
+        // Regex ini TIDAK cocok dengan kata-kata Inggris biasa (tidak punya tanda hubung)
+        const bareNpmCommandRegex = /(?:^|[;|&]|then\s|do\s)\s*(?:npx\s+|bunx\s+|yarn\s+(?:exec\s+|dlx\s+)?|pnpm\s+(?:exec\s+|dlx\s+)?)?(@[a-zA-Z][\w-]*\/[\w-]+|[a-zA-Z][\w]*-[\w-]+)(?:\s|$)/gm;
 
         for (const file of shellFiles) {
             try {
                 const content = await fs.readFile(file, 'utf-8');
+
+                // Hanya proses bare command pada file yang memiliki shebang shell
+                // atau berasal dari folder .husky / .githooks (pasti script)
+                const isShellScript = content.trimStart().startsWith('#!') ||
+                    file.includes('/.husky/') ||
+                    file.includes('\\.husky\\') ||
+                    file.includes('/.githooks/') ||
+                    file.includes('\\.githooks\\');
+
+                // Proses regex flag lama (untuk semua file)
                 let match;
-                while ((match = regex.exec(content)) !== null) {
+                flagRegex.lastIndex = 0;
+                while ((match = flagRegex.exec(content)) !== null) {
                     const dep = match[2];
                     if (dep && !dep.startsWith('.') && !dep.startsWith('/') && !dep.includes('\\')) {
                         usedPackages.add(dep);
                     }
                 }
-            } catch (err) {
-                // Ignore read errors for individual shell scripts
+
+                // Proses bare npm command — HANYA untuk file shell yang teridentifikasi
+                if (isShellScript) {
+                    for (const bareMatch of content.matchAll(bareNpmCommandRegex)) {
+                        const cmd = bareMatch[1].trim();
+                        if (!cmd || SHELL_SYSTEM_COMMANDS.has(cmd)) continue;
+                        usedPackages.add(cmd);
+                    }
+                }
+            } catch (_err) {
+                // Abaikan file individual yang gagal dibaca
             }
         }
     } catch (err) {
@@ -575,6 +620,46 @@ async function analyzeShellScripts(projectRoot) {
     }
 
     return { usedPackages, diagnostics };
+}
+
+
+
+
+/**
+ * Memeriksa peerDependencies dari setiap paket yang sudah dideklarasikan.
+ * Paket yang menjadi peer dependency dan SUDAH ADA di root package.json
+ * akan ditambahkan ke implicitProtected agar tidak dilabeli dead/unused.
+ *
+ * Bersifat konservatif: hanya melindungi, tidak pernah menambahkan paket baru.
+ *
+ * @param {string} projectRoot
+ * @param {Set<string>} allDeclared - Semua paket yang dideklarasikan di root package.json
+ * @returns {Promise<Set<string>>}
+ */
+async function analyzePeerDependencies(projectRoot, allDeclared) {
+    const peerProtected = new Set();
+    const PEER_SCAN_LIMIT = 300; // batas jumlah paket yang diperiksa agar tidak lambat
+    let scanned = 0;
+
+    for (const pkg of allDeclared) {
+        if (scanned++ >= PEER_SCAN_LIMIT) break;
+        const pkgJsonPath = path.join(projectRoot, 'node_modules', pkg, 'package.json');
+        if (!fs.existsSync(pkgJsonPath)) continue;
+
+        try {
+            const pkgData = fs.readJsonSync(pkgJsonPath);
+            const peers = Object.keys(pkgData.peerDependencies || {});
+            for (const peer of peers) {
+                const peerRoot = peer.startsWith('@') ? peer.split('/').slice(0, 2).join('/') : peer.split('/')[0];
+                // Hanya lindungi jika memang sudah dideklarasikan oleh pengguna
+                if (allDeclared.has(peerRoot)) {
+                    peerProtected.add(peerRoot);
+                }
+            }
+        } catch (_e) { /* abaikan */ }
+    }
+
+    return peerProtected;
 }
 
 /**
@@ -639,6 +724,13 @@ export async function findUnusedDependencies(projectRoot, usedPackages, ruleEngi
                 implicitProtected.add(dependency);
             }
         }
+    }
+
+    // Safeguard: lindungi paket yang menjadi peer dependency dari paket lain
+    // yang sudah dideklarasikan. Hanya melindungi, tidak pernah menambahkan paket baru.
+    const peerProtected = await analyzePeerDependencies(projectRoot, allDeclared);
+    for (const dep of peerProtected) {
+        implicitProtected.add(dep);
     }
 
     const findings = [];
@@ -723,8 +815,31 @@ export async function findUnusedDependencies(projectRoot, usedPackages, ruleEngi
 
     const missing = [];
     const phantomDeps = [];
+    const nestedDeps = [];
     const selfReferences = new Set();
+    const nestedDeclaredDepsSet = new Set();
+    
     if (workspaceAnalysisComplete) {
+        // Safeguard: Collect dependencies declared in any nested package.json
+        const nestedPackageJsonPaths = await glob('**/package.json', { 
+            cwd: projectRoot, 
+            ignore: ['**/node_modules/**', 'package.json'] 
+        });
+        
+        for (const nestedPath of nestedPackageJsonPaths) {
+            const fullPath = path.join(projectRoot, nestedPath);
+            try {
+                const nestedPkg = await fs.readJson(fullPath);
+                const deps = [
+                    ...Object.keys(nestedPkg.dependencies || {}),
+                    ...Object.keys(nestedPkg.devDependencies || {}),
+                    ...Object.keys(nestedPkg.peerDependencies || {}),
+                    ...Object.keys(nestedPkg.optionalDependencies || {})
+                ];
+                deps.forEach(d => nestedDeclaredDepsSet.add(d));
+            } catch(e) {}
+        }
+
         for (const dependency of effectiveUsedPackages) {
             if (dependency.startsWith('.') || dependency.startsWith('/') || path.isAbsolute(dependency)) continue;
             if (dependency.startsWith('@/') || dependency.startsWith('~/') || dependency.startsWith('#') || dependency.startsWith('$')) continue;
@@ -741,6 +856,8 @@ export async function findUnusedDependencies(projectRoot, usedPackages, ruleEngi
             const depNodeModulesPath = path.join(projectRoot, 'node_modules', dependency);
             if (fs.existsSync(depNodeModulesPath)) {
                 phantomDeps.push(dependency);
+            } else if (nestedDeclaredDepsSet.has(dependency)) {
+                nestedDeps.push(dependency);
             } else {
                 missing.push(dependency);
             }
@@ -828,6 +945,7 @@ export async function findUnusedDependencies(projectRoot, usedPackages, ruleEngi
         unused: unusedRuntime,
         missing,
         phantomDeps,
+        nestedDeps,
         selfReferences,
         missingBinaries: scriptReport.missingBinaries,
         deadDevDeps,

@@ -125,6 +125,22 @@ function applySingleNodeRemoval(ms, codeString, dead, ruleEngine, eliminationLev
             const fullLineEnd = consumeNewline(codeString, lineEnd);
             ms.remove(lineStart, fullLineEnd);
         } else {
+            if (dead.type === 'CatchParameter') {
+                const beforeParen = codeString.lastIndexOf('(', removeStart);
+                const afterParen = codeString.indexOf(')', removeEnd);
+                if (beforeParen !== -1 && afterParen !== -1) {
+                    if (codeString.substring(beforeParen + 1, removeStart).trim() === '' &&
+                        codeString.substring(removeEnd, afterParen).trim() === '') {
+                        removeStart = beforeParen;
+                        removeEnd = afterParen + 1;
+
+                        // Hapus spasi ekstra sebelum kurung buka jika ada
+                        if (removeStart > 0 && codeString[removeStart - 1] === ' ') {
+                            removeStart--;
+                        }
+                    }
+                }
+            }
             ms.remove(removeStart, removeEnd);
         }
     }
@@ -177,7 +193,10 @@ export function removeDeadCode(codeString, deadNodes, ruleEngine = null, elimina
 
     // Validasi parse ulang AST pasca-transformasi
     if (isValidSyntax(fastResult)) {
+        if (process.env.DEBUG) console.log('[CodeCleaner] fastResult was valid:\n', fastResult);
         return fastResult;
+    } else {
+        if (process.env.DEBUG) console.log('[CodeCleaner] fastResult was INVALID:\n', fastResult);
     }
 
     // 2. Fallback Path (Safe Incremental Elimination): Uji satu per satu jika batch removal merusak sintaks
@@ -250,5 +269,3 @@ function consumeNewline(code, pos) {
     if (pos < code.length && code[pos] === '\n') pos++;
     return pos;
 }
-
-// PXP: Pengembangan Modul Eksekusi dan Modifikasi (Eliminator)

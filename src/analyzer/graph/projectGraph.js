@@ -208,6 +208,14 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
                                 unsafeFiles.add(currentFile);
                                 dynamicDependencyFiles.add(currentFile);
                             }
+                        } else if (isRequireCall && node.arguments.length > 0 && 
+                                   node.arguments[0].type === 'CallExpression' && 
+                                   node.arguments[0].callee?.type === 'MemberExpression' &&
+                                   node.arguments[0].callee.object?.name === 'require' &&
+                                   node.arguments[0].callee.property?.name === 'resolve') {
+                            // Cerdas: Pola require(require.resolve('...')) dapat diselesaikan secara statis.
+                            // AST walker akan memproses ekspresi require.resolve di kedalaman yang lebih dalam,
+                            // sehingga tidak perlu di-flag sebagai dependensi dinamis yang tidak terpecahkan.
                         } else {
                             unsafeFiles.add(currentFile);
                             dynamicDependencyFiles.add(currentFile);

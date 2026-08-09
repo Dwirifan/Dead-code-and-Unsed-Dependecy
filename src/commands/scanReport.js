@@ -171,6 +171,7 @@ function dependencyData(dependencyReport, dependencyAnalysisError) {
     const uncertainDependencies = sortedStrings(report.uncertain || []);
     const missingDependencies = sortedStrings(report.missing || []);
     const missingBinaries = sortedStrings(report.missingBinaries || []);
+    const nestedDependencies = sortedStrings(report.nestedDeps || []);
     const deadDevDependencies = sortedStrings(report.deadDevDeps || []);
     const uncertainDevDependencies = sortedStrings(report.uncertainDevDeps || []);
 
@@ -179,6 +180,7 @@ function dependencyData(dependencyReport, dependencyAnalysisError) {
         uncertainDependencies,
         missingDependencies,
         missingBinaries,
+        nestedDependencies,
         deadDevDependencies,
         uncertainDevDependencies,
         dependencyAnalysis: {

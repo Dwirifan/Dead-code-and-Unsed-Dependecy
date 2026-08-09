@@ -354,16 +354,6 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
         }
     }
 
-    for (const f of deadFiles) {
-        try { 
-            const c = await fs.readFile(f, 'utf-8'); 
-            originalLoc += c.split('\n').length; 
-            originalSize += Buffer.byteLength(c); 
-        } catch (err) { 
-            if (process.env.DEBUG) console.warn(`[Warning] Gagal menghitung baris file mati ${f}:`, err.message);
-        }
-    }
-
     spinner.stop();
 
     // ---- Laporan ----

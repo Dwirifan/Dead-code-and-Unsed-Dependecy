@@ -194,27 +194,15 @@ export function registerScanCommand(program) {
             spinner?.succeed(`Graf terbentuk: ${graph.liveFiles.size} File Aktif dipetakan.`);
 
             if (graph.completeness?.complete === false && !jsonMode) {
-                console.log(chalk.yellow(`\n[!] MODULE GRAPH ${graph.completeness.status.toUpperCase()} — keputusan lintas file memakai fail-closed.`));
-                graph.completeness.reasons.forEach(reason => (
-                    console.log(chalk.gray(`   - ${reason}`))
-                ));
-                console.log(chalk.gray('   Export yang tidak memiliki bukti penggunaan diturunkan ke REVIEW, bukan SAFE.'));
+                console.log(chalk.yellow(`\n[!] MODULE GRAPH ${graph.completeness.status.toUpperCase()} (${graph.completeness.reasons.length} issue)`));
             }
 
             // Peringatan file dengan pola dinamis (eval, computed property, dynamic import)
             if (graph.unsafeFiles && graph.unsafeFiles.size > 0) {
-                console.log(chalk.yellow(`\n================================================================================`));
-                console.log(chalk.yellow(`[!] CONSERVATIVE SAFETY FALLBACK: Dynamic Code Detected (${graph.unsafeFiles.size} file)`));
-                console.log(chalk.yellow(`================================================================================`));
-                console.log(chalk.gray(`Peringatan: File berikut mengandung pola dinamis (eval, with, computed property,`));
-                console.log(chalk.gray(`dynamic require/import) yang membatasi akurasi analisis statis.`));
-                console.log(chalk.gray(`Untuk mencegah False Positive (salah hapus), DeadKiller mengaktifkan mode`));
-                console.log(chalk.gray(`Conservative Safety Fallback: seluruh ekspor dari file ini DISELAMATKAN.`));
-                console.log(chalk.gray(`--------------------------------------------------------------------------------`));
+                console.log(chalk.yellow(`\n[!] Dynamic Code Detected (${graph.unsafeFiles.size} file)`));
                 for (const uf of graph.unsafeFiles) {
-                    console.log(chalk.gray(` - ${path.relative(absolutePath, uf)}`));
+                    console.log(chalk.gray(`   - ${path.relative(absolutePath, uf)}`));
                 }
-                console.log(chalk.yellow(`================================================================================\n`));
             }
 
             // Satu laporan dependency dipakai ulang oleh output manusia dan JSON
@@ -247,7 +235,13 @@ export function registerScanCommand(program) {
                     depReport.missing.forEach(d => console.log(`   - ${chalk.red(d)}`));
                 }
 
-                // (2.1) Phantom Dependencies (Dipakai di kode, tidak ada di package.json, tapi ADA di node_modules)
+                // (2.1) Nested Dependencies (Dideklarasikan di package.json yang bersarang/nested)
+                if (depReport.nestedDeps && depReport.nestedDeps.length > 0) {
+                    console.log(chalk.yellow(`\n[i] [Nested Dependencies] (${depReport.nestedDeps.length}) — Digunakan di kode dan dideklarasikan di nested package.json (bukan di root):`));
+                    depReport.nestedDeps.forEach(d => console.log(`   - ${chalk.yellow(d)}`));
+                }
+
+                // (2.2) Phantom Dependencies (Dipakai di kode, tidak ada di package.json, tapi ADA di node_modules)
                 if (depReport.phantomDeps && depReport.phantomDeps.length > 0) {
                     console.log(chalk.red(`\n[!] [Phantom Dependencies] (${depReport.phantomDeps.length}) — Dipakai di kode tapi tidak dideklarasikan di package.json:`));
                     console.log(chalk.gray('    Paket ini ter-install otomatis via dependensi lain (Phantom), tapi berisiko rusak jika dependensi induk berubah. Harap daftarkan eksplisit.'));
@@ -482,10 +476,7 @@ export function registerScanCommand(program) {
             const printGroup = (title, description, items) => {
                 if (items.length === 0) return false;
 
-                console.log(`\n================================================`);
-                console.log(chalk.bold(title));
-                console.log(chalk.gray(description));
-                console.log(`================================================`);
+                console.log(`\n${chalk.bold.underline(title)}`);
 
                 // Kelompokkan berdasarkan tipe
                 const itemsByType = {};

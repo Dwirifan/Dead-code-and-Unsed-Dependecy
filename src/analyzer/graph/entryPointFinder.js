@@ -6,6 +6,7 @@ import { SCRIPT_GLOB } from '../../parser/supportedExtensions.js';
 import { matchesOrderedPatterns } from '../globMatcher.js';
 import { isExistingPathInsideRoot, isPathInsideRoot } from '../pathContainment.js';
 import { NEXT_ENTRY_GLOBS } from '../frameworkConventions.js';
+import { traceBuildSources } from './buildSourceTracer.js';
 
 const ENTRY_GLOB_IGNORE = [
     '**/node_modules/**',
@@ -519,6 +520,15 @@ export async function findEntryPoints(projectRoot, ruleEngine = null) {
 
     // 2. Manifest root: main/module/exports/bin dan runtime scripts.
     collectPackageManifestEntries(entrySet, pkg, projectRoot);
+
+    // 2a. [SAFEGUARD] Build Artifact Source Tracing
+    // Jika manifest mengarah ke folder build artifact, selalu lacak file sumber
+    // aslinya agar source files tidak dilabeli sebagai Unconnected/Dead.
+    const { sources: buildSources, layer: buildLayer } = await traceBuildSources(projectRoot, pkg);
+    buildSources.forEach(src => entrySet.add(src));
+    if (process.env.DEBUG && buildSources.length > 0) {
+        console.log(`[entryPointFinder] Build sources traced via ${buildLayer}: ${buildSources.map(s => path.relative(projectRoot, s)).join(', ')}`);
+    }
 
     // 3. Framework Auto-Detection Heuristics
     const allDeps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
