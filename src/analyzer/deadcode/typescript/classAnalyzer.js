@@ -107,10 +107,16 @@ export function findUnusedClassMethods(ast, globalRegistry = null, publicApiClas
             // Dukungan PropertyDefinition (class field / arrow method / private field)
             if (node.type === 'PropertyDefinition' && currentClassName && classMap.has(currentClassName)) {
                 const isDeclare = !!node.declare;
-                
+
                 const rawName = node.key ? (node.key.type === 'Identifier' ? node.key.name : (node.key.type === 'PrivateIdentifier' ? `#${node.key.name}` : null)) : null;
-                if (rawName && (isDeclare || (node.value &&
-                    (node.value.type === 'ArrowFunctionExpression' || node.value.type === 'FunctionExpression')))) {
+                
+                // Filter asli user: Menangkap Arrow Function / Method
+                const isMethodOrDeclare = isDeclare || (node.value && (node.value.type === 'ArrowFunctionExpression' || node.value.type === 'FunctionExpression'));
+                
+                // Safe guard validasi: Mengecek properti kelas biasa sebelum diabaikan
+                const isRegularProperty = !isMethodOrDeclare && node.key && !node.computed;
+
+                if (rawName && (isMethodOrDeclare || isRegularProperty)) {
                     const isPrivate = node.accessibility === 'private' || (node.key && node.key.type === 'PrivateIdentifier') || rawName.startsWith('#');
                     const isProtected = node.accessibility === 'protected';
                     const accessibility = isPrivate ? 'private' : (isProtected ? 'protected' : 'public');
@@ -125,7 +131,8 @@ export function findUnusedClassMethods(ast, globalRegistry = null, publicApiClas
                         isPrivate,
                         isProtected,
                         hasDecorator,
-                        isDeclare
+                        isDeclare,
+                        isField: true
                     });
                 }
             }
@@ -188,7 +195,7 @@ export function findUnusedClassMethods(ast, globalRegistry = null, publicApiClas
             if (node.type === 'VariableDeclarator' && node.init &&
                 node.init.type === 'NewExpression' && node.init.callee &&
                 node.init.callee.type === 'Identifier') {
-                
+
                 const className = node.init.callee.name;
                 if (classMap.has(className)) {
                     if (node.id && node.id.type === 'Identifier') {
@@ -217,7 +224,7 @@ export function findUnusedClassMethods(ast, globalRegistry = null, publicApiClas
             if (node.type === 'VariableDeclarator' && node.id && node.id.type === 'ObjectPattern' && node.init) {
                 let targetClass = null;
                 const insideClassName = insideClassStack[insideClassStack.length - 1] || null;
-                
+
                 if (node.init.type === 'ThisExpression' || (node.init.type === 'Identifier' && thisAliases.has(node.init.name))) {
                     targetClass = insideClassName;
                 } else if (node.init.type === 'Identifier' && instanceMap.has(node.init.name)) {
@@ -235,7 +242,10 @@ export function findUnusedClassMethods(ast, globalRegistry = null, publicApiClas
 
             // --- Deteksi Pemanggilan Method: x.methodName() atau (new ClassName()).methodName() ---
             const staticMemberName = getStaticMemberName(node);
-            if (node.type === 'MemberExpression' && staticMemberName && node.object) {
+
+            const isWrite = parent && parent.type === 'AssignmentExpression' && parent.left === node && parent.operator === '=';
+
+            if (!isWrite && node.type === 'MemberExpression' && staticMemberName && node.object) {
                 const methodName = staticMemberName;
 
                 // 1. Pemanggilan via instance identifier (x.method)
@@ -247,7 +257,7 @@ export function findUnusedClassMethods(ast, globalRegistry = null, publicApiClas
                         // Pemanggilan via static: ClassName.staticMethod()
                         markMethodUsedInHierarchy(objName, methodName);
                     }
-                } 
+                }
                 // 2. Pemanggilan via Direct Instantiation: (new ClassName()).method()
                 else if (node.object.type === 'NewExpression' && node.object.callee && node.object.callee.type === 'Identifier') {
                     const className = node.object.callee.name;
@@ -259,9 +269,9 @@ export function findUnusedClassMethods(ast, globalRegistry = null, publicApiClas
 
             // --- Deteksi this.methodName(), super.methodName(), atau self.methodName() ---
             const insideClassName = insideClassStack[insideClassStack.length - 1] || null;
-            if (node.type === 'MemberExpression' && staticMemberName && node.object &&
-                (node.object.type === 'ThisExpression' || node.object.type === 'Super' || 
-                (node.object.type === 'Identifier' && thisAliases.has(node.object.name))) &&
+            if (!isWrite && node.type === 'MemberExpression' && staticMemberName && node.object &&
+                (node.object.type === 'ThisExpression' || node.object.type === 'Super' ||
+                    (node.object.type === 'Identifier' && thisAliases.has(node.object.name))) &&
                 node.property) {
 
                 const methodName = staticMemberName;
@@ -272,8 +282,8 @@ export function findUnusedClassMethods(ast, globalRegistry = null, publicApiClas
 
             // Nama computed yang tidak dapat ditentukan hanya memengaruhi kelas receiver.
             if (node.type === 'MemberExpression' && node.computed && !staticMemberName &&
-                node.object && (node.object.type === 'ThisExpression' || node.object.type === 'Super' || 
-                (node.object.type === 'Identifier' && thisAliases.has(node.object.name))) &&
+                node.object && (node.object.type === 'ThisExpression' || node.object.type === 'Super' ||
+                    (node.object.type === 'Identifier' && thisAliases.has(node.object.name))) &&
                 insideClassName && classMap.has(insideClassName)) {
                 classMap.get(insideClassName).dynamicAccesses.push({
                     line: node.loc ? node.loc.start.line : 0,
@@ -310,11 +320,11 @@ export function findUnusedClassMethods(ast, globalRegistry = null, publicApiClas
             // Cek Public API: Jika class di-export / reachable dan project ini me-preserve export
             const isPublicApi = publicApiClasses.has(className) && !methodInfo.isPrivate;
             let shouldPreserve = false;
-            
+
             if (isPublicApi && ruleEngine && fileName) {
-                const effectiveRules = (typeof ruleEngine.effectiveRulesFor === 'function' ? ruleEngine.effectiveRulesFor(fileName) : 
-                                      (typeof ruleEngine._resolveConfigForFile === 'function' ? ruleEngine._resolveConfigForFile(fileName) : 
-                                      (ruleEngine.rules || {})));
+                const effectiveRules = (typeof ruleEngine.effectiveRulesFor === 'function' ? ruleEngine.effectiveRulesFor(fileName) :
+                    (typeof ruleEngine._resolveConfigForFile === 'function' ? ruleEngine._resolveConfigForFile(fileName) :
+                        (ruleEngine.rules || {})));
                 if (effectiveRules && effectiveRules.preserveExports === true) {
                     shouldPreserve = true;
                 }

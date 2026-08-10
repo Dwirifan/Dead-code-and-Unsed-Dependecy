@@ -107,10 +107,15 @@ export function classifyConfidence(type, info = {}) {
                 : '_parameter';
 
             if (info.isPositional) {
+                const isAlreadyPrefixed = parameterName && parameterName.startsWith('_');
+                const reasonText = isAlreadyPrefixed
+                    ? `Parameter '${parameterName}' adalah parameter posisional. Meskipun sudah ditandai dengan '_' (sengaja tidak dipakai), kehadirannya wajib dipertahankan karena parameter setelahnya masih digunakan (bersifat struktural).`
+                    : `Parameter '${parameterName || 'ini'}' tidak digunakan, tetapi posisinya wajib dipertahankan karena parameter setelahnya masih digunakan. Jangan hapus; gunakan nama '${suggestedName}' bila ingin menandainya sebagai sengaja tidak digunakan.`;
+                
                 return {
                     confidence: 'high',
                     status: 'risky',
-                    reason: `Parameter '${parameterName || 'ini'}' tidak digunakan, tetapi posisinya wajib dipertahankan karena parameter setelahnya masih digunakan. Jangan hapus; gunakan nama '${suggestedName}' bila ingin menandainya sebagai sengaja tidak digunakan.`
+                    reason: reasonText
                 };
             }
 

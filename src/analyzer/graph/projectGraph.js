@@ -131,9 +131,12 @@ export async function buildProjectGraph(projectRoot, ruleEngine = null) {
                     }
 
                     // --- 2. Call Graph ---
-                    // Mengumpulkan SEMUA nama method yang pernah dipanggil di seluruh proyek
+                    // Mengumpulkan SEMUA nama method yang pernah dipanggil di seluruh proyek (Kecuali Write-Only)
                     if (node.type === 'MemberExpression' && !node.computed && node.property && node.property.type === 'Identifier') {
-                        globalRegistry.calledMethods.add(node.property.name);
+                        const isWrite = parent && parent.type === 'AssignmentExpression' && parent.left === node && parent.operator === '=';
+                        if (!isWrite) {
+                            globalRegistry.calledMethods.add(node.property.name);
+                        }
                     }
 
                     // Mendata Pendeklarasian Ekspor untuk dilacak (Legacy/Penyokong)

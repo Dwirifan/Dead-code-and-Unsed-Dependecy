@@ -120,21 +120,63 @@ async function validateHeuristicExclusion(dependency, projectRoot, allDeclared, 
             }
         } catch (_e) {}
 
-        // Fallback: jika TypeScript ada dan @types ini mungkin dibutuhkan oleh compiler
-        if (effectiveUsedPackages.has('typescript')) return true;
-
+        // Removed weak fallback for @types based on typescript presence
         return false;
     }
 
-    // 2. Test Frameworks
-    const isTestTool = ['jest', 'vitest', 'mocha', 'chai', 'cypress', 'playwright', '@playwright/test'].includes(dependency) 
-        || dependency.startsWith('@vitest/') || dependency.startsWith('jest-') || dependency.startsWith('@testing-library/');
-    if (isTestTool) {
-        const testFiles = await glob(['**/*.test.*', '**/*.spec.*', '**/__tests__/**', '**/test/**'], { 
-            cwd: projectRoot, 
-            ignore: ['**/node_modules/**'] 
-        });
-        return testFiles.length > 0;
+    // 2. Test Frameworks (Strong Evidence)
+    const testFrameworkConfigs = {
+        'vitest': ['vitest.config.*', 'vitest.workspace.*'],
+        'jest': ['jest.config.*'],
+        'cypress': ['cypress.config.*', 'cypress/'],
+        'playwright': ['playwright.config.*'],
+        '@playwright/test': ['playwright.config.*'],
+        'mocha': ['.mocharc.*']
+    };
+
+    const isTestEcosystem = dependency.startsWith('@vitest/') || dependency.startsWith('jest-') || dependency.startsWith('@testing-library/') || ['vitest', 'jest', 'cypress', 'playwright', '@playwright/test', 'mocha', 'chai'].includes(dependency);
+
+    if (isTestEcosystem) {
+        let baseFramework = null;
+        if (dependency.includes('vitest')) baseFramework = 'vitest';
+        else if (dependency.includes('jest')) baseFramework = 'jest';
+        else if (dependency.includes('cypress')) baseFramework = 'cypress';
+        else if (dependency.includes('playwright')) baseFramework = 'playwright';
+        else if (dependency.includes('mocha') || dependency.includes('chai')) baseFramework = 'mocha';
+
+        if (baseFramework) {
+            // Cek keberadaan file config
+            const configs = testFrameworkConfigs[baseFramework];
+            if (configs) {
+                const foundConfigs = await glob(configs, { cwd: projectRoot, ignore: ['**/node_modules/**']});
+                if (foundConfigs.length > 0) return true;
+            }
+
+            // Cek import/penggunaan framework di dalam file test
+            const testFiles = await glob(['**/*.test.*', '**/*.spec.*', '**/__tests__/**', '**/test/**'], { 
+                cwd: projectRoot, 
+                ignore: ['**/node_modules/**'],
+                limit: 20
+            });
+            
+            if (testFiles.length > 0) {
+                const signals = {
+                    'vitest': ['vitest', 'vi.'],
+                    'jest': ['jest', '@jest/globals'],
+                    'mocha': ['mocha', 'chai'],
+                    'cypress': ['cy.'],
+                    'playwright': ['@playwright/test']
+                }[baseFramework] || [baseFramework];
+
+                for (const file of testFiles) {
+                    try {
+                        const content = fs.readFileSync(path.join(projectRoot, file), 'utf8');
+                        if (signals.some(s => content.includes(s))) return true;
+                    } catch (_e) {}
+                }
+            }
+        }
+        return false;
     }
 
     // 3. TypeScript
@@ -761,12 +803,11 @@ export async function findUnusedDependencies(projectRoot, usedPackages, ruleEngi
             continue;
         }
         if (implicitProtected.has(dependency)) {
-            uncertainRuntime.push(dependency);
             findings.push(finding(
                 dependency,
                 'dependencies',
-                'unknown',
-                'Relasi framework melindungi dependency, tetapi bukan bukti penggunaan langsung.',
+                'ignored',
+                'Bukti kuat dari Framework Guard melindungi dependency ini secara otomatis.',
                 ['framework-implicit'],
             ));
             continue;
@@ -888,12 +929,11 @@ export async function findUnusedDependencies(projectRoot, usedPackages, ruleEngi
             continue;
         }
         if (implicitProtected.has(dependency)) {
-            uncertainDevDeps.push(dependency);
             findings.push(finding(
                 dependency,
                 'devDependencies',
-                'unknown',
-                'Relasi framework melindungi dev dependency, tetapi bukan bukti penggunaan langsung.',
+                'ignored',
+                'Bukti kuat dari Framework Guard melindungi dev dependency ini secara otomatis.',
                 ['framework-implicit'],
             ));
             continue;
