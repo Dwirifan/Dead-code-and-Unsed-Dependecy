@@ -189,7 +189,7 @@ async function _fixSingleFile(absolutePath, startTime, inquirer, level = 3, auto
         const maxBackups = eliminatorConfig.maxBackups !== undefined ? eliminatorConfig.maxBackups : 20;
         backupDir = await createBackup(projectRoot, [absolutePath], false, maxBackups);
         console.log(chalk.gray(`   [ok] Checkpoint backup dibuat di ${path.relative(projectRoot, backupDir)}`));
-    } catch (err) { 
+    } catch (err) {
         console.error(chalk.red(`\n[ERROR] Gagal membuat checkpoint backup: ${err.message}`));
         console.error(chalk.red(`[ABORTED] Proses eliminasi dibatalkan demi keamanan data (Backup wajib berhasil sebelum perubahan diterapkan).\n`));
         return;
@@ -203,6 +203,7 @@ async function _fixSingleFile(absolutePath, startTime, inquirer, level = 3, auto
         console.log(chalk.yellow(`[ROLLBACK] Melakukan pemulihan data dari checkpoint backup...`));
         try {
             await rollbackBackup(projectRoot, backupDir);
+            await fs.remove(backupDir).catch(() => { });
             console.log(chalk.green(`[ROLLBACK BERHASIL] Proyek telah dikembalikan ke kondisi semula.`));
         } catch (rollbackErr) {
             console.error(chalk.red(`[ROLLBACK GAGAL] Gagal memulihkan dari backup: ${rollbackErr.message}`));
@@ -236,8 +237,6 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
         [...(graph.unsafeFiles || [])].map(normalizeFileKey),
     );
 
-    // Dependensi tidak terpakai dianalisis secara konservatif. Jika graph tidak
-    // lengkap, kandidat dipindahkan ke UNKNOWN dan tidak boleh di-uninstall.
     let unusedDeps = [];
     let uncertainDeps = [];
     let dependencyDiagnostics = [];
@@ -557,6 +556,7 @@ async function _fixDirectory(absolutePath, startTime, inquirer, level = 3, autoC
         console.log(chalk.yellow(`[ROLLBACK] Melakukan pemulihan data dari checkpoint backup...`));
         try {
             await rollbackBackup(absolutePath, backupDir);
+            await fs.remove(backupDir).catch(() => { });
             console.log(chalk.green('[ROLLBACK BERHASIL] Source, manifest, dan lockfile dikembalikan ke checkpoint.'));
             if (dependencyCommandStarted) {
                 console.log(chalk.yellow(

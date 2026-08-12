@@ -803,6 +803,7 @@ export async function findUnusedDependencies(projectRoot, usedPackages, ruleEngi
             continue;
         }
         if (implicitProtected.has(dependency)) {
+            uncertainRuntime.push(dependency);
             findings.push(finding(
                 dependency,
                 'dependencies',
@@ -813,6 +814,7 @@ export async function findUnusedDependencies(projectRoot, usedPackages, ruleEngi
             continue;
         }
         if (await validateHeuristicExclusion(dependency, projectRoot, allDeclared, effectiveUsedPackages)) {
+            uncertainRuntime.push(dependency);
             findings.push(finding(
                 dependency,
                 'dependencies',
@@ -929,6 +931,7 @@ export async function findUnusedDependencies(projectRoot, usedPackages, ruleEngi
             continue;
         }
         if (implicitProtected.has(dependency)) {
+            uncertainDevDeps.push(dependency);
             findings.push(finding(
                 dependency,
                 'devDependencies',
@@ -939,6 +942,7 @@ export async function findUnusedDependencies(projectRoot, usedPackages, ruleEngi
             continue;
         }
         if (await validateHeuristicExclusion(dependency, projectRoot, allDeclared, effectiveUsedPackages)) {
+            uncertainDevDeps.push(dependency);
             findings.push(finding(
                 dependency,
                 'devDependencies',
