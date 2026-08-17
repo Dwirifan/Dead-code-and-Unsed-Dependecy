@@ -38,6 +38,7 @@ export class Scope {
             isDeclare: metadata.isDeclare === true,
             isFakeThisContext: metadata.isFakeThisContext === true,
             classNode: metadata.classNode || null,
+            catchClauseNode: metadata.catchClauseNode || null,
             used: false,
             readCount: 0,
             writeCount: 0,

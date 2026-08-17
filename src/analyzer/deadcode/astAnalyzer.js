@@ -373,7 +373,8 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                 identifiers.forEach(({ name, node: removalNode, bindingNode }) => {
                     registerDeclaration(currentScope, name, 'CatchParameter', node.loc.start.line, removalNode, null, {
                         bindingNode: bindingNode || removalNode,
-                        namespace: 'value'
+                        namespace: 'value',
+                        catchClauseNode: node
                     });
                 });
             }
@@ -787,6 +788,7 @@ export function analyzeAstCode(ast, fileName = null, globalRegistry = null, rule
                             status: 'review',
                             reason: guardResult.codeSmellMessage
                         });
+                        return; // Membatalkan pelabelan SAFE, memaksa pengguna memperbaiki blok kosong
                     }
 
                     if (guardResult.isValidLegacy) {

@@ -7,7 +7,7 @@ export function evaluateClassContract(methodNode, classNode) {
     if (methodNode.override) {
         return {
             shouldBeRisky: true,
-            reason: 'Metode ini memiliki keyword \override\. Menghapusnya dapat merusak rantai polimorfisme kelas induk.'
+            reason: "Metode ini memiliki keyword 'override'. Menghapusnya dapat merusak rantai polimorfisme kelas induk."
         };
     }
 

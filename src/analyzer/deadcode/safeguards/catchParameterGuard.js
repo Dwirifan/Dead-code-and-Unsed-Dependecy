@@ -47,11 +47,11 @@ function supportsES2019Catch(projectRoot) {
  * @returns {Object} Hasil evaluasi (action, status, dll)
  */
 export function evaluateCatchParameter(info, globalRegistry, ruleEngine) {
-    const isBlockEmpty = info.bindingNode &&
-        info.bindingNode.body &&
-        info.bindingNode.body.type === 'BlockStatement' &&
-        info.bindingNode.body.body &&
-        info.bindingNode.body.body.length === 0;
+    const isBlockEmpty = info.catchClauseNode &&
+        info.catchClauseNode.body &&
+        info.catchClauseNode.body.type === 'BlockStatement' &&
+        info.catchClauseNode.body.body &&
+        info.catchClauseNode.body.body.length === 0;
 
     const projectRoot = globalRegistry ? globalRegistry.projectRoot : process.cwd();
 
